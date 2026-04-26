@@ -24,6 +24,7 @@ import {
   Save, Wifi, Hash, Shield, Clock, Mail, Key, LogOut,
   Copy, Upload, FileAudio, Trash2, Send, ChevronRight, Inbox,
   Bell, Activity, BarChart3, Headphones, ArrowRightLeft, Minus,
+  Sparkles, MessageCircle, Smile, Frown, Meh, AlertTriangle,
   type LucideIcon,
 } from "lucide-react";
 
@@ -31,9 +32,10 @@ import { C, LOGO_URL } from "@/styles/tokens";
 import { useAuth } from "@/auth/AuthContext";
 import { type Me } from "@/api/me";
 import {
-  useTranscripts, useUploadTranscript,
+  useTranscripts, useTranscript, useUploadTranscript,
   useDeleteTranscript, useRetryTranscript,
-  type Transcript, type TranscriptStatus,
+  useTranscriptAnalytics, useAudioBlob, downloadTxt, fetchTxt,
+  type Transcript, type TranscriptStatus, type TranscriptSegment,
 } from "@/api/transcripts";
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -868,11 +870,30 @@ function VcsPage({ users }: { users: MockUser[] }) {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
-// TRANSCRIPTION (E7) — реальный API, polling статусов, viewer сегментов
+// TRANSCRIPTION (E7) — viewer с плеером, диалог-бабблами, аналитикой и AI
 // ──────────────────────────────────────────────────────────────────────────
 
 const ALLOWED_AUDIO = [".wav", ".ogg", ".mp3", ".m4a", ".mp4", ".wma", ".flac", ".aac"];
 const MAX_UPLOAD_MB = 500;
+
+// Палитра для каналов / спикеров (8 цветов, повтор по hash).
+const SPEAKER_PALETTE = ["#1E5AA8", "#10b981", "#f59e0b", "#a855f7", "#ef4444", "#0ea5e9", "#14b8a6", "#f43f5e"];
+
+function speakerColor(ref: string): string {
+  let h = 0;
+  for (let i = 0; i < ref.length; i++) h = (h * 31 + ref.charCodeAt(i)) | 0;
+  const idx = Math.abs(h) % SPEAKER_PALETTE.length;
+  return SPEAKER_PALETTE[idx]!;
+}
+
+function speakerLabel(ref: string): string {
+  if (ref.startsWith("channel:")) return "Канал " + ref.slice(8);
+  if (ref === "side:internal") return "Внутр.";
+  if (ref === "side:external") return "Внешн.";
+  if (ref.startsWith("external:")) return ref.slice(9);
+  if (ref.startsWith("user:")) return "Сотрудник";
+  return ref;
+}
 
 function fmtBytes(b: number): string {
   const mb = b / 1_048_576;
@@ -919,8 +940,6 @@ function TranscriptionPage() {
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   const items: Transcript[] = list.data?.items ?? [];
-  const sel = items.find((t) => t.id === selId) ?? null;
-
   const showErr = (m: string) => { setErr(m); setTimeout(() => setErr(""), 5000); };
 
   const handleFile = (file: File | undefined) => {
@@ -940,32 +959,10 @@ function TranscriptionPage() {
     });
   };
 
-  const onDelete = () => {
-    if (!sel) return;
-    if (!window.confirm(`Удалить «${sel.filename}»? Файл и расшифровка будут удалены безвозвратно.`)) return;
-    const idx = items.findIndex((t) => t.id === sel.id);
-    del.mutate(sel.id, {
-      onSuccess: () => {
-        const next = items.filter((t) => t.id !== sel.id);
-        setSelId(next.length > 0 ? (next[Math.min(idx, next.length - 1)]?.id ?? null) : null);
-      },
-      onError: (e) => { showErr(e instanceof Error ? e.message : "Ошибка удаления"); },
-    });
-  };
-
-  const onRetry = () => {
-    if (!sel) return;
-    retry.mutate(sel.id, {
-      onError: (e) => { showErr(e instanceof Error ? e.message : "Не удалось перезапустить"); },
-    });
-  };
-
-  const isBusy = sel && (sel.status === "queued" || sel.status === "processing" || sel.status === "pending");
-
   return (
     <div style={{ height: "100%", background: C.bg2, display: "flex", flexDirection: "column" }}>
       <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
-      <PgHdr title="Транскрибация" sub="GigaAM ASR · загрузка файлов и расшифровка" />
+      <PgHdr title="Транскрибация" sub="GigaAM ASR · диалог по каналам, аналитика, экспорт" />
       {err && (
         <div style={{ background: C.errBg, borderBottom: `1px solid ${C.errBrd}`, padding: "10px 22px", color: C.errTx, fontSize: 13, display: "flex", alignItems: "center", gap: 10 }}>
           <X size={15} /><span style={{ flex: 1 }}>{err}</span>
@@ -973,6 +970,7 @@ function TranscriptionPage() {
         </div>
       )}
       <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
+        {/* LEFT: список */}
         <div style={{ width: 320, background: C.card, borderRight: `1px solid ${C.border}`, overflowY: "auto", flexShrink: 0 }}>
           <div style={{ padding: "14px 14px 12px", borderBottom: `1px solid ${C.border}` }}>
             <div onClick={() => { if (!upload.isPending) fileRef.current?.click(); }}
@@ -1018,88 +1016,468 @@ function TranscriptionPage() {
           ))}
         </div>
 
+        {/* RIGHT: viewer */}
         <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-          {!sel ? (
+          {!selId ? (
             <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <Empty Icon={FileAudio} title="Выберите запись или загрузите файл" sub="Все транскрибированные звонки, встречи и загруженные файлы будут появляться здесь." />
+              <Empty Icon={FileAudio} title="Выберите запись или загрузите файл" sub="Транскрибированные звонки и загруженные файлы появляются здесь." />
             </div>
           ) : (
-            <>
-              <div style={{ padding: "14px 22px", background: C.card, borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
-                <div style={{ minWidth: 0, flex: 1 }}>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{sel.filename}</div>
-                  <div style={{ fontSize: 12, color: C.text2, marginTop: 2 }}>
-                    {fmtUploadedAt(sel.uploaded_at)} · {fmtBytes(sel.size_bytes)} · {sel.mime_type || "audio"}
-                    {sel.execution_time_ms ? ` · обработка ${(sel.execution_time_ms / 1000).toFixed(1)}с` : ""}
-                  </div>
-                </div>
-                <div style={{ display: "flex", gap: 8, flexShrink: 0, alignItems: "center" }}>
-                  {statusBadge(sel.status)}
-                  {(sel.status === "failed" || sel.status === "partial") && (
-                    <button onClick={onRetry} disabled={retry.isPending}
-                      style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 13, color: C.text, fontWeight: 500, background: C.card, cursor: retry.isPending ? "default" : "pointer", fontFamily: "inherit" }}>
-                      <RefreshCw size={13} />Повторить
-                    </button>
-                  )}
-                  <button onClick={onDelete} disabled={del.isPending}
-                    style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 13, color: C.text2, fontWeight: 500, background: C.card, cursor: del.isPending ? "default" : "pointer", fontFamily: "inherit" }}>
-                    <Trash2 size={13} />Удалить
-                  </button>
-                </div>
-              </div>
-
-              {isBusy ? (
-                <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: C.bg2, padding: 24 }}>
-                  <div style={{ textAlign: "center", maxWidth: 380 }}>
-                    <div style={{ width: 54, height: 54, margin: "0 auto 18px", borderRadius: "50%", border: `3px solid ${C.border}`, borderTopColor: C.acc, animation: "spin .9s linear infinite" }} />
-                    <div style={{ fontSize: 15, fontWeight: 600, color: C.text, marginBottom: 6 }}>
-                      {sel.status === "queued" ? "В очереди" : "Обработка в GigaAM"}
-                    </div>
-                    <div style={{ fontSize: 13, color: C.text2, lineHeight: 1.6 }}>
-                      {sel.gigaam_task_id
-                        ? `Опрашиваем GigaAM (task ${sel.gigaam_task_id.slice(0, 8)}…). Можно закрыть страницу — результат появится в списке.`
-                        : "Файл загружен, ждём обработки. Worker отправит запрос в GigaAM в ближайшую секунду."}
-                    </div>
-                  </div>
-                </div>
-              ) : sel.status === "failed" ? (
-                <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: C.bg2, padding: 24 }}>
-                  <div style={{ textAlign: "center", maxWidth: 480 }}>
-                    <div style={{ width: 56, height: 56, borderRadius: 14, background: C.errBg, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}>
-                      <X size={26} color={C.err} />
-                    </div>
-                    <div style={{ fontSize: 15, fontWeight: 600, color: C.text, marginBottom: 6 }}>Ошибка транскрибации</div>
-                    {sel.error_message && (
-                      <div style={{ fontSize: 12.5, color: C.text2, lineHeight: 1.55, fontFamily: "'DM Mono', monospace", background: C.bg3, padding: "10px 14px", borderRadius: 8, marginTop: 12, textAlign: "left", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-                        {sel.error_message}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ) : sel.segments && sel.segments.length > 0 ? (
-                <div style={{ flex: 1, overflowY: "auto", padding: "20px 24px", background: C.bg2 }}>
-                  {sel.segments.map((s) => (
-                    <div key={s.id} style={{ display: "flex", gap: 14, marginBottom: 12, padding: "12px 14px", background: C.card, border: `1px solid ${C.border}`, borderRadius: 10 }}>
-                      <div style={{ flexShrink: 0, fontSize: 11, color: C.text3, fontFamily: "'DM Mono', monospace", marginTop: 2, minWidth: 70 }}>
-                        {fmtSeg(s.start_ms)}<br />
-                        <span style={{ color: C.text3 }}>→ {fmtSeg(s.end_ms)}</span>
-                      </div>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 11, color: C.text3, marginBottom: 4 }}>{s.speaker_ref}</div>
-                        <div style={{ fontSize: 14, color: C.text, lineHeight: 1.55 }}>{s.text || <span style={{ color: C.text3, fontStyle: "italic" }}>(пусто)</span>}</div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: C.bg2 }}>
-                  <Empty Icon={FileText} title="Транскрипт пуст" sub="GigaAM не вернул сегментов. Возможно, в аудио нет распознаваемой речи." />
-                </div>
-              )}
-            </>
+            <TranscriptViewer
+              key={selId}
+              transcriptId={selId}
+              onDeleteOk={() => {
+                const idx = items.findIndex((t) => t.id === selId);
+                const next = items.filter((t) => t.id !== selId);
+                setSelId(next.length > 0 ? (next[Math.min(idx, next.length - 1)]?.id ?? null) : null);
+              }}
+              onRetry={(id, cb) => retry.mutate(id, cb)}
+              onDelete={(id, cb) => del.mutate(id, cb)}
+              showErr={showErr}
+            />
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// TranscriptViewer — правая панель с плеером, табами, диалогом, аналитикой, AI
+// ──────────────────────────────────────────────────────────────────────────
+
+type ViewerTab = "dialog" | "analytics" | "ai";
+
+function TranscriptViewer({
+  transcriptId, onDeleteOk, onRetry, onDelete, showErr,
+}: {
+  transcriptId: string;
+  onDeleteOk: () => void;
+  onRetry: (id: string, cb: { onError?: (e: unknown) => void }) => void;
+  onDelete: (id: string, cb: { onSuccess?: () => void; onError?: (e: unknown) => void }) => void;
+  showErr: (m: string) => void;
+}) {
+  const tQ = useTranscript(transcriptId);
+  const t = tQ.data ?? null;
+
+  const [tab, setTab] = useState<ViewerTab>("dialog");
+  const [currentSec, setCurrentSec] = useState(0);
+  const [copied, setCopied] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  const audio = useAudioBlob(t && (t.status === "completed" || t.status === "partial") ? transcriptId : null);
+
+  const seekTo = (ms: number) => {
+    const a = audioRef.current;
+    if (!a) return;
+    a.currentTime = ms / 1000;
+    void a.play().catch(() => {/* autoplay blocked */});
+  };
+
+  if (tQ.isLoading || !t) {
+    return <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: C.text3 }}>Загрузка…</div>;
+  }
+
+  const isBusy = t.status === "queued" || t.status === "processing" || t.status === "pending";
+
+  const handleCopy = async () => {
+    try {
+      const txt = await fetchTxt(t.id);
+      await navigator.clipboard.writeText(txt);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (e) {
+      showErr(e instanceof Error ? e.message : "Не удалось скопировать");
+    }
+  };
+
+  const handleDownloadTxt = async () => {
+    try {
+      await downloadTxt(t.id, t.filename);
+    } catch (e) {
+      showErr(e instanceof Error ? e.message : "Не удалось скачать TXT");
+    }
+  };
+
+  return (
+    <>
+      {/* Header */}
+      <div style={{ padding: "14px 22px", background: C.card, borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexShrink: 0 }}>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{t.filename}</div>
+          <div style={{ fontSize: 12, color: C.text2, marginTop: 2 }}>
+            {fmtUploadedAt(t.uploaded_at)} · {fmtBytes(t.size_bytes)} · {t.mime_type || "audio"}
+            {t.execution_time_ms ? ` · обработка ${(t.execution_time_ms / 1000).toFixed(1)}с` : ""}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexShrink: 0, alignItems: "center" }}>
+          {statusBadge(t.status)}
+          {(t.status === "completed" || t.status === "partial") && (
+            <>
+              <button onClick={handleCopy} title="Скопировать текст"
+                style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 13, color: copied ? C.acc : C.text2, fontWeight: 500, background: copied ? C.accBg : C.card, cursor: "pointer", fontFamily: "inherit" }}>
+                {copied ? <Check size={13} /> : <Copy size={13} />}{copied ? "Скопировано" : "Копировать"}
+              </button>
+              <button onClick={handleDownloadTxt} title="Скачать TXT"
+                style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 13, color: C.text2, fontWeight: 500, background: C.card, cursor: "pointer", fontFamily: "inherit" }}>
+                <FileText size={13} />TXT
+              </button>
+            </>
+          )}
+          {(t.status === "failed" || t.status === "partial") && (
+            <button onClick={() => onRetry(t.id, { onError: (e) => showErr(e instanceof Error ? e.message : "Не удалось перезапустить") })}
+              style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 13, color: C.text, fontWeight: 500, background: C.card, cursor: "pointer", fontFamily: "inherit" }}>
+              <RefreshCw size={13} />Повторить
+            </button>
+          )}
+          <button onClick={() => {
+            if (!window.confirm(`Удалить «${t.filename}»? Файл и расшифровка будут удалены безвозвратно.`)) return;
+            onDelete(t.id, {
+              onSuccess: onDeleteOk,
+              onError: (e) => showErr(e instanceof Error ? e.message : "Ошибка удаления"),
+            });
+          }}
+            style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 13, color: C.text2, fontWeight: 500, background: C.card, cursor: "pointer", fontFamily: "inherit" }}>
+            <Trash2 size={13} />Удалить
+          </button>
+        </div>
+      </div>
+
+      {/* Audio player */}
+      {(t.status === "completed" || t.status === "partial") && (
+        <div style={{ padding: "12px 22px", background: C.bg2, borderBottom: `1px solid ${C.border}`, flexShrink: 0 }}>
+          {audio.loading ? (
+            <div style={{ padding: "10px 0", color: C.text3, fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
+              <div style={{ width: 14, height: 14, borderRadius: "50%", border: `2px solid ${C.border}`, borderTopColor: C.acc, animation: "spin .9s linear infinite" }} />
+              Загружаем аудио…
+            </div>
+          ) : audio.error ? (
+            <div style={{ padding: "10px 0", color: C.err, fontSize: 13 }}>Ошибка загрузки аудио: {audio.error}</div>
+          ) : audio.url ? (
+            <audio ref={audioRef} src={audio.url} controls style={{ width: "100%", height: 40 }}
+              onTimeUpdate={(e) => setCurrentSec(e.currentTarget.currentTime)}
+            />
+          ) : null}
+        </div>
+      )}
+
+      {/* Body content */}
+      {isBusy ? (
+        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: C.bg2, padding: 24 }}>
+          <div style={{ textAlign: "center", maxWidth: 380 }}>
+            <div style={{ width: 54, height: 54, margin: "0 auto 18px", borderRadius: "50%", border: `3px solid ${C.border}`, borderTopColor: C.acc, animation: "spin .9s linear infinite" }} />
+            <div style={{ fontSize: 15, fontWeight: 600, color: C.text, marginBottom: 6 }}>
+              {t.status === "queued" ? "В очереди" : "Обработка в GigaAM"}
+            </div>
+            <div style={{ fontSize: 13, color: C.text2, lineHeight: 1.6 }}>
+              {t.gigaam_task_id
+                ? `Опрашиваем GigaAM (task ${t.gigaam_task_id.slice(0, 8)}…). Можно закрыть страницу — результат появится в списке.`
+                : "Файл загружен, ждём обработки. Worker отправит запрос в GigaAM в ближайшую секунду."}
+            </div>
+          </div>
+        </div>
+      ) : t.status === "failed" ? (
+        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: C.bg2, padding: 24 }}>
+          <div style={{ textAlign: "center", maxWidth: 480 }}>
+            <div style={{ width: 56, height: 56, borderRadius: 14, background: C.errBg, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}>
+              <X size={26} color={C.err} />
+            </div>
+            <div style={{ fontSize: 15, fontWeight: 600, color: C.text, marginBottom: 6 }}>Ошибка транскрибации</div>
+            {t.error_message && (
+              <div style={{ fontSize: 12.5, color: C.text2, lineHeight: 1.55, fontFamily: "'DM Mono', monospace", background: C.bg3, padding: "10px 14px", borderRadius: 8, marginTop: 12, textAlign: "left", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                {t.error_message}
+              </div>
+            )}
+          </div>
+        </div>
+      ) : (
+        <>
+          {/* Tabs */}
+          <div style={{ padding: "0 22px", background: C.card, borderBottom: `1px solid ${C.border}`, display: "flex", gap: 4, flexShrink: 0 }}>
+            {([
+              { id: "dialog" as const,    label: "Диалог по каналам", Icon: MessageCircle },
+              { id: "analytics" as const, label: "Аналитика",         Icon: BarChart3 },
+              { id: "ai" as const,        label: "AI-анализ",         Icon: Sparkles },
+            ]).map((x) => (
+              <button key={x.id} onClick={() => setTab(x.id)}
+                style={{ padding: "12px 14px", background: "transparent", border: "none", borderBottom: `2px solid ${tab === x.id ? C.acc : "transparent"}`, color: tab === x.id ? C.text : C.text2, fontSize: 13.5, fontWeight: tab === x.id ? 600 : 500, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 7, marginBottom: -1 }}>
+                <x.Icon size={15} />{x.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Tab content */}
+          {tab === "dialog" && <DialogTab segments={t.segments ?? []} currentSec={currentSec} onSeek={seekTo} />}
+          {tab === "analytics" && <AnalyticsTab transcriptId={t.id} />}
+          {tab === "ai" && <AITab />}
+        </>
+      )}
+    </>
+  );
+}
+
+// ── Диалог-бабблы по каналам ─────────────────────────────────────────────
+
+function DialogTab({ segments, currentSec, onSeek }: {
+  segments: TranscriptSegment[];
+  currentSec: number;
+  onSeek: (ms: number) => void;
+}) {
+  if (segments.length === 0) {
+    return (
+      <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: C.bg2 }}>
+        <Empty Icon={FileText} title="Транскрипт пуст" sub="GigaAM не вернул сегментов. Возможно, в аудио нет речи." />
+      </div>
+    );
+  }
+
+  // Стабильный порядок каналов для left/right (первый канал — слева).
+  const speakerOrder: string[] = [];
+  for (const s of segments) {
+    if (!speakerOrder.includes(s.speaker_ref)) speakerOrder.push(s.speaker_ref);
+  }
+  const sideOf = (ref: string): "left" | "right" => speakerOrder.indexOf(ref) % 2 === 0 ? "left" : "right";
+
+  return (
+    <div style={{ flex: 1, overflowY: "auto", padding: "18px 24px", background: C.bg2 }}>
+      {segments.map((s) => {
+        const side = sideOf(s.speaker_ref);
+        const col = speakerColor(s.speaker_ref);
+        const isActive = currentSec * 1000 >= s.start_ms && currentSec * 1000 <= s.end_ms;
+        return (
+          <div key={s.id} style={{
+            display: "flex", justifyContent: side === "left" ? "flex-start" : "flex-end",
+            marginBottom: 10,
+          }}>
+            <div onClick={() => onSeek(s.start_ms)} style={{
+              maxWidth: "75%", display: "flex", flexDirection: "column",
+              alignItems: side === "left" ? "flex-start" : "flex-end",
+            }}>
+              <div style={{
+                display: "flex", alignItems: "center", gap: 6, marginBottom: 4,
+                flexDirection: side === "left" ? "row" : "row-reverse",
+              }}>
+                <span style={{
+                  display: "inline-flex", alignItems: "center", gap: 6,
+                  fontSize: 11, fontWeight: 600, color: col,
+                }}>
+                  <span style={{ width: 8, height: 8, borderRadius: "50%", background: col }} />
+                  {speakerLabel(s.speaker_ref)}
+                </span>
+                <span style={{ fontSize: 10.5, color: C.text3, fontFamily: "'DM Mono', monospace" }}>
+                  {fmtSeg(s.start_ms)} → {fmtSeg(s.end_ms)}
+                </span>
+              </div>
+              <div style={{
+                background: isActive ? `${col}1A` : C.card,
+                border: `1px solid ${isActive ? col : C.border}`,
+                borderRadius: 12,
+                padding: "10px 14px",
+                fontSize: 14, color: C.text, lineHeight: 1.55,
+                cursor: "pointer",
+                transition: "background .15s, border-color .15s",
+                whiteSpace: "pre-wrap", wordBreak: "break-word",
+              }}>
+                {s.text || <span style={{ color: C.text3, fontStyle: "italic" }}>(пусто)</span>}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── Аналитика ─────────────────────────────────────────────────────────────
+
+function AnalyticsTab({ transcriptId }: { transcriptId: string }) {
+  const a = useTranscriptAnalytics(transcriptId);
+
+  if (a.isLoading) return <div style={{ padding: 24, color: C.text3, fontSize: 13 }}>Считаем статистику…</div>;
+  if (a.isError || !a.data) return <div style={{ padding: 24, color: C.err, fontSize: 13 }}>Ошибка: {String(a.error)}</div>;
+
+  const data = a.data;
+
+  return (
+    <div style={{ flex: 1, overflowY: "auto", padding: "20px 24px", background: C.bg2 }}>
+      {/* KPI row */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12, marginBottom: 20 }}>
+        <KpiCard Icon={Clock}        label="Длительность"  value={fmtSeg(data.total_duration_ms)}   color={C.acc} />
+        <KpiCard Icon={MessageCircle} label="Сегментов"    value={data.segment_count}                color={C.purp} />
+        <KpiCard Icon={FileText}     label="Слов"          value={data.word_count.toLocaleString("ru-RU")} color={C.ok} />
+        <KpiCard Icon={AlertTriangle} label="Перебиваний"  value={data.interruptions}                color={data.interruptions > 5 ? C.warn : C.text2} />
+      </div>
+
+      {/* Speakers */}
+      <Section title="Говорящие" sub={`${data.speakers.length} канал(а/ов) · по talk time`}>
+        {data.speakers.length === 0
+          ? <div style={{ color: C.text3, fontSize: 13 }}>Нет данных</div>
+          : data.speakers.map((s) => (
+            <div key={s.speaker} style={{ display: "flex", alignItems: "center", gap: 14, padding: "10px 0", borderBottom: `1px dashed ${C.border}` }}>
+              <span style={{ width: 10, height: 10, borderRadius: "50%", background: speakerColor(s.speaker), flexShrink: 0 }} />
+              <div style={{ minWidth: 110, flexShrink: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{s.label}</div>
+                <div style={{ fontSize: 11, color: C.text3 }}>{s.segments} сегм. · {s.words} слов</div>
+              </div>
+              <div style={{ flex: 1, minWidth: 100 }}>
+                <div style={{ height: 8, background: C.bg3, borderRadius: 4, overflow: "hidden" }}>
+                  <div style={{ width: `${s.talk_ratio_pct}%`, height: "100%", background: speakerColor(s.speaker) }} />
+                </div>
+              </div>
+              <div style={{ minWidth: 80, textAlign: "right", fontSize: 13, color: C.text, fontFamily: "'DM Mono', monospace" }}>
+                {fmtSeg(s.talk_time_ms)} <span style={{ color: C.text3 }}>· {s.talk_ratio_pct.toFixed(1)}%</span>
+              </div>
+            </div>
+          ))}
+      </Section>
+
+      {/* Silence */}
+      <Section title="Тишина" sub={`Паузы длиннее ${data.silence_threshold_ms / 1000}с между сегментами`}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+          <div>
+            <div style={{ fontSize: 11, color: C.text3, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Суммарно</div>
+            <div style={{ fontSize: 18, fontWeight: 600, color: C.text, marginTop: 4, fontFamily: "'DM Mono', monospace" }}>{fmtSeg(data.silence_total_ms)}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: C.text3, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Самая длинная</div>
+            <div style={{ fontSize: 18, fontWeight: 600, color: C.text, marginTop: 4, fontFamily: "'DM Mono', monospace" }}>{fmtSeg(data.longest_silence_ms)}</div>
+          </div>
+        </div>
+      </Section>
+
+      {/* Top words */}
+      {data.top_words.length > 0 && (
+        <Section title="Часто звучали" sub="После фильтра стоп-слов и нормализации">
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {data.top_words.map((w) => {
+              const max = data.top_words[0]!.count;
+              const intensity = 0.4 + 0.6 * (w.count / max);
+              return (
+                <span key={w.word} style={{
+                  display: "inline-flex", alignItems: "center", gap: 6,
+                  padding: "5px 11px", borderRadius: 999,
+                  background: `rgba(30, 90, 168, ${intensity * 0.18})`,
+                  color: C.text, fontSize: 13, fontWeight: 500,
+                  border: `1px solid ${C.border}`,
+                }}>
+                  {w.word}
+                  <span style={{ color: C.text3, fontSize: 11, fontFamily: "'DM Mono', monospace" }}>{w.count}</span>
+                </span>
+              );
+            })}
+          </div>
+        </Section>
+      )}
+
+      {/* Emotions */}
+      <Section title="Эмоции" sub={data.emotions ? "GigaAM emotion model" : "Не доступны (EMO модель выключена на инстансе GigaAM)"}>
+        {!data.emotions ? (
+          <div style={{ color: C.text3, fontSize: 13 }}>—</div>
+        ) : data.emotions.overall ? (
+          <EmotionBars emo={data.emotions.overall} label="Общий тон" />
+        ) : data.emotions.channels && data.emotions.channels.length > 0 ? (
+          data.emotions.channels.map((ch) => (
+            <div key={ch.channel} style={{ marginBottom: 14 }}>
+              <EmotionBars emo={ch.emotions} label={`Канал ${ch.channel}`} colorRef={`channel:${ch.channel}`} />
+            </div>
+          ))
+        ) : null}
+      </Section>
+    </div>
+  );
+}
+
+function Section({ title, sub, children }: { title: string; sub?: string; children: ReactNode }) {
+  return (
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, marginBottom: 16, overflow: "hidden" }}>
+      <div style={{ padding: "12px 18px", borderBottom: `1px solid ${C.border}` }}>
+        <div style={{ fontSize: 13.5, fontWeight: 600, color: C.text }}>{title}</div>
+        {sub && <div style={{ fontSize: 11.5, color: C.text2, marginTop: 2 }}>{sub}</div>}
+      </div>
+      <div style={{ padding: "14px 18px" }}>{children}</div>
+    </div>
+  );
+}
+
+function EmotionBars({ emo, label, colorRef }: {
+  emo: { angry: number; sad: number; neutral: number; positive: number };
+  label?: string;
+  colorRef?: string;
+}) {
+  const items = [
+    { key: "positive", label: "Позитив",  Icon: Smile, val: emo.positive, col: C.ok },
+    { key: "neutral",  label: "Нейтрал.", Icon: Meh,   val: emo.neutral,  col: C.text2 },
+    { key: "sad",      label: "Грусть",   Icon: Frown, val: emo.sad,      col: C.acc },
+    { key: "angry",    label: "Злость",   Icon: AlertTriangle, val: emo.angry, col: C.err },
+  ];
+  return (
+    <div>
+      {label && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+          {colorRef && <span style={{ width: 8, height: 8, borderRadius: "50%", background: speakerColor(colorRef) }} />}
+          <div style={{ fontSize: 12, fontWeight: 600, color: C.text2 }}>{label}</div>
+        </div>
+      )}
+      {items.map((it) => (
+        <div key={it.key} style={{ display: "flex", alignItems: "center", gap: 10, padding: "5px 0" }}>
+          <it.Icon size={13} color={it.col} />
+          <div style={{ minWidth: 75, fontSize: 12, color: C.text2 }}>{it.label}</div>
+          <div style={{ flex: 1, height: 6, background: C.bg3, borderRadius: 3, overflow: "hidden" }}>
+            <div style={{ width: `${it.val * 100}%`, height: "100%", background: it.col }} />
+          </div>
+          <div style={{ minWidth: 50, textAlign: "right", fontSize: 12, color: C.text, fontFamily: "'DM Mono', monospace" }}>
+            {(it.val * 100).toFixed(1)}%
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── AI-раздел (стаб для v1.4 LLM-суммаризации) ────────────────────────────
+
+function AITab() {
+  return (
+    <div style={{ flex: 1, overflowY: "auto", padding: "24px", background: C.bg2 }}>
+      <div style={{ background: `linear-gradient(135deg, ${C.purpBg} 0%, ${C.accBg} 100%)`, border: `1px solid ${C.accBrd}`, borderRadius: 14, padding: "22px 24px", marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+          <Sparkles size={20} color={C.purp} />
+          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: C.text }}>AI-анализ</h3>
+          <Bdg v="warn">v1.4 · в разработке</Bdg>
+        </div>
+        <p style={{ margin: "4px 0 0", fontSize: 13.5, color: C.text2, lineHeight: 1.55 }}>
+          После подключения LLM-суммаризации (роадмап v1.4) в этом разделе появится:
+        </p>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12 }}>
+        <AIFeatureCard Icon={FileText} title="Краткое резюме"
+          desc="Что обсуждалось, кто что сказал, к чему пришли — за 3-5 предложений." />
+        <AIFeatureCard Icon={Hash} title="Ключевые темы"
+          desc="Автовыделение тем разговора, упомянутых продуктов, имён, дат." />
+        <AIFeatureCard Icon={Check} title="Action items"
+          desc="Договорённости и задачи, явно проговорённые сторонами, с возможной отправкой в Bitrix24." />
+        <AIFeatureCard Icon={Users} title="Резюме клиента"
+          desc="Профиль контрагента: тон, лояльность, проблемы — для следующего звонка." />
+        <AIFeatureCard Icon={Shield} title="Compliance"
+          desc="Сигналы о нарушениях скрипта, упоминаниях запрещённых тем, рисках." />
+        <AIFeatureCard Icon={MessageSquare} title="Q&A по транскрипту"
+          desc="Чат с моделью: «о чём говорили на 5-й минуте?», «что обещал клиент?»" />
+      </div>
+    </div>
+  );
+}
+
+function AIFeatureCard({ Icon, title, desc }: { Icon: LucideIcon; title: string; desc: string }) {
+  return (
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "16px 18px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+        <div style={{ width: 32, height: 32, borderRadius: 9, background: C.purpBg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+          <Icon size={16} color={C.purp} />
+        </div>
+        <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{title}</div>
+      </div>
+      <div style={{ fontSize: 12.5, color: C.text2, lineHeight: 1.5 }}>{desc}</div>
     </div>
   );
 }

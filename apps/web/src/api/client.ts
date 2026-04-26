@@ -89,3 +89,36 @@ export async function api<T = unknown>(
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }
+
+/**
+ * apiFetch — низкоуровневый: возвращает raw Response. Использовать когда нужен
+ * blob / stream / другой формат, не JSON. Авторизация добавляется так же как в api().
+ */
+export async function apiFetch(path: string, opts: RequestOptions = {}): Promise<Response> {
+  const headers: Record<string, string> = { ...opts.headers };
+  const token = getAccessToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  let body: BodyInit | undefined;
+  if (opts.body !== undefined) {
+    if (opts.body instanceof FormData) {
+      body = opts.body;
+    } else {
+      headers["Content-Type"] = "application/json";
+      body = JSON.stringify(opts.body);
+    }
+  }
+
+  const res = await fetch(path, {
+    method: opts.method ?? "GET",
+    headers,
+    body,
+    signal: opts.signal,
+    credentials: "include",
+  });
+  if (res.status === 401) {
+    onUnauthorized();
+    throw new ApiError(401, "Unauthorized", "session expired");
+  }
+  return res;
+}

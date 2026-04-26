@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"time"
@@ -74,6 +75,42 @@ type Service struct {
 // New собирает сервис.
 func New(pool *pgxpool.Pool, store *storage.Client, q *queue.Queue, log *slog.Logger) *Service {
 	return &Service{pool: pool, storage: store, jobs: q, log: log}
+}
+
+// Logger возвращает logger сервиса (для handlers).
+func (s *Service) Logger() *slog.Logger { return s.log }
+
+// StreamAudio пишет содержимое объекта из MinIO в w с поддержкой Range.
+// Использует minio.Object (ReadSeeker) + http.ServeContent.
+func (s *Service) StreamAudio(ctx context.Context, w http.ResponseWriter, r *http.Request, v *View) error {
+	if v.S3Key == "" {
+		return errors.New("transcription: empty s3_key")
+	}
+	rc, err := s.storage.GetRecording(ctx, v.S3Key)
+	if err != nil {
+		http.Error(w, "audio not available", http.StatusNotFound)
+		return fmt.Errorf("get from storage: %w", err)
+	}
+	defer rc.Close()
+
+	// minio.Object реализует io.ReadSeeker — http.ServeContent умеет с ним.
+	rs, ok := rc.(io.ReadSeeker)
+	if !ok {
+		// fallback: прочитаем весь объект и отдадим без Range support.
+		data, rerr := io.ReadAll(rc)
+		if rerr != nil {
+			return fmt.Errorf("read all: %w", rerr)
+		}
+		w.Header().Set("Content-Type", v.MimeType)
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
+		_, _ = w.Write(data)
+		return nil
+	}
+
+	w.Header().Set("Content-Type", v.MimeType)
+	w.Header().Set("Cache-Control", "private, max-age=300")
+	http.ServeContent(w, r, v.Filename, v.UploadedAt, rs)
+	return nil
 }
 
 // Upload принимает файл, валидирует, кладёт в MinIO, создаёт recording +
@@ -160,22 +197,25 @@ func (s *Service) Upload(ctx context.Context, in UploadInput) (*UploadResult, er
 
 // View — данные для UI (один транскрипт).
 type View struct {
-	ID               uuid.UUID  `json:"id"`
-	RecordingID      uuid.UUID  `json:"recording_id"`
-	Filename         string     `json:"filename"`
-	SizeBytes        int64      `json:"size_bytes"`
-	MimeType         string     `json:"mime_type"`
-	UploadedBy       uuid.UUID  `json:"uploaded_by"`
-	UploadedAt       time.Time  `json:"uploaded_at"`
-	Status           Status     `json:"status"`
-	Engine           string     `json:"engine"`
-	EngineVersion    string     `json:"engine_version,omitempty"`
-	GigaAMTaskID     string     `json:"gigaam_task_id,omitempty"`
-	ExecutionTimeMs  int        `json:"execution_time_ms,omitempty"`
-	ErrorMessage     string     `json:"error_message,omitempty"`
-	Attempts         int        `json:"attempts"`
-	CompletedAt      *time.Time `json:"completed_at,omitempty"`
-	Segments         []SegmentDTO `json:"segments,omitempty"`
+	ID               uuid.UUID       `json:"id"`
+	RecordingID      uuid.UUID       `json:"recording_id"`
+	Filename         string          `json:"filename"`
+	SizeBytes        int64           `json:"size_bytes"`
+	MimeType         string          `json:"mime_type"`
+	UploadedBy       uuid.UUID       `json:"uploaded_by"`
+	UploadedAt       time.Time       `json:"uploaded_at"`
+	Status           Status          `json:"status"`
+	Engine           string          `json:"engine"`
+	EngineVersion    string          `json:"engine_version,omitempty"`
+	GigaAMTaskID     string          `json:"gigaam_task_id,omitempty"`
+	ExecutionTimeMs  int             `json:"execution_time_ms,omitempty"`
+	ErrorMessage     string          `json:"error_message,omitempty"`
+	Attempts         int             `json:"attempts"`
+	CompletedAt      *time.Time      `json:"completed_at,omitempty"`
+	Segments         []SegmentDTO    `json:"segments,omitempty"`
+	EngineMetadata   json.RawMessage `json:"-"` // не отдаём в /me list, читаем для analytics
+	S3Bucket         string          `json:"-"` // для StreamAudio
+	S3Key            string          `json:"-"`
 }
 
 // SegmentDTO — один сегмент для UI.
@@ -239,12 +279,14 @@ func (s *Service) Get(ctx context.Context, id uuid.UUID) (*View, error) {
 		       COALESCE(r.uploaded_by, '00000000-0000-0000-0000-000000000000'::uuid), r.created_at,
 		       t.status, t.engine, COALESCE(t.engine_version, ''),
 		       COALESCE(t.gigaam_task_id, ''), COALESCE(t.execution_time_ms, 0),
-		       COALESCE(t.error_message, ''), t.attempts, t.completed_at
+		       COALESCE(t.error_message, ''), t.attempts, t.completed_at,
+		       t.engine_metadata, r.s3_bucket, r.s3_key
 		FROM transcript t
 		JOIN recording  r ON r.id = t.recording_id
 		WHERE t.id = $1
 	`
 	v := &View{}
+	var engineMeta []byte
 	if err := s.pool.QueryRow(ctx, headerQ, id).Scan(
 		&v.ID, &v.RecordingID,
 		&v.Filename, &v.SizeBytes, &v.MimeType,
@@ -252,12 +294,14 @@ func (s *Service) Get(ctx context.Context, id uuid.UUID) (*View, error) {
 		&v.Status, &v.Engine, &v.EngineVersion,
 		&v.GigaAMTaskID, &v.ExecutionTimeMs,
 		&v.ErrorMessage, &v.Attempts, &v.CompletedAt,
+		&engineMeta, &v.S3Bucket, &v.S3Key,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
 		}
 		return nil, err
 	}
+	v.EngineMetadata = engineMeta
 
 	const segQ = `
 		SELECT id, segment_no, speaker_ref, start_ms, end_ms, text, is_edited, version

@@ -26,6 +26,9 @@ func (h *Handlers) Routes() http.Handler {
 	r.Get("/{id}",    h.get)
 	r.Post("/{id}/retry", h.retry)
 	r.Delete("/{id}", h.delete)
+	r.Get("/{id}/audio",      h.audio)
+	r.Get("/{id}/export.txt", h.exportTxt)
+	r.Get("/{id}/analytics",  h.analytics)
 	return r
 }
 
@@ -151,6 +154,87 @@ func (h *Handlers) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// audio — стримит исходное аудио из MinIO с поддержкой Range
+// (нужно для <audio> seek в браузере).
+func (h *Handlers) audio(w http.ResponseWriter, r *http.Request) {
+	subj := auth.MustSubject(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_id", "invalid uuid")
+		return
+	}
+	view, err := h.svc.Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "not_found", "")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "lookup", err.Error())
+		return
+	}
+	if !subj.IsAdmin() && view.UploadedBy != subj.UserID {
+		writeErr(w, http.StatusForbidden, "forbidden", "")
+		return
+	}
+
+	if err := h.svc.StreamAudio(r.Context(), w, r, view); err != nil {
+		h.svc.Logger().Warn("audio stream failed", "err", err, "transcript_id", id)
+	}
+}
+
+// exportTxt — текст расшифровки в плоском txt.
+func (h *Handlers) exportTxt(w http.ResponseWriter, r *http.Request) {
+	subj := auth.MustSubject(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_id", "invalid uuid")
+		return
+	}
+	view, err := h.svc.Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "not_found", "")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "lookup", err.Error())
+		return
+	}
+	if !subj.IsAdmin() && view.UploadedBy != subj.UserID {
+		writeErr(w, http.StatusForbidden, "forbidden", "")
+		return
+	}
+
+	body := buildTextExport(view)
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+sanitizeFilename(view.Filename)+`.txt"`)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(body))
+}
+
+// analytics — статистика по сегментам (talk time per channel, ratio, silence, top words).
+func (h *Handlers) analytics(w http.ResponseWriter, r *http.Request) {
+	subj := auth.MustSubject(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_id", "invalid uuid")
+		return
+	}
+	view, err := h.svc.Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "not_found", "")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "lookup", err.Error())
+		return
+	}
+	if !subj.IsAdmin() && view.UploadedBy != subj.UserID {
+		writeErr(w, http.StatusForbidden, "forbidden", "")
+		return
+	}
+	writeJSON(w, http.StatusOK, computeAnalytics(view))
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
