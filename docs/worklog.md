@@ -137,3 +137,19 @@
   `https://portal.softservice.by/oauth/authorize/` с callback
   `https://toolkit.softservice.by/oauth/callback`.
 - `POST /oauth/refresh` без cookie возвращает ожидаемый `401`.
+
+## 2026-04-26 — Фикс Bitrix callback на корень приложения
+
+**Задача:** после авторизации Bitrix24 возвращал пользователя на
+`https://toolkit.softservice.by/?code=...&state=...`, а не на
+`/oauth/callback`; SPA открывалась без refresh-cookie и снова показывала login.
+
+**Сделано:**
+- В nginx-конфиги добавлен exact `location = /`, который при наличии query
+  `code` делает `302` на `/oauth/callback?$args`.
+- Это сохраняет обычный SPA fallback для `/`, но позволяет обработать callback
+  локального приложения Bitrix24, если портал использует путь обработчика как
+  корневой URL.
+
+**Проверка:**
+- По логам `web` подтверждено, что Bitrix реально возвращал `GET /?code=...`.
