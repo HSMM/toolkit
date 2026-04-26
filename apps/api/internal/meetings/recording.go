@@ -219,7 +219,8 @@ func (s *Service) OnEgressEnded(ctx context.Context, info *livekit.EgressInfo) e
 		return fmt.Errorf("can't derive S3 key from filename=%q location=%q", fr.Filename, fr.Location)
 	}
 
-	durationMs := fr.Duration / 1_000_000
+	sizeBytes := fr.SizeBytes()
+	durationMs := fr.DurationNs() / 1_000_000
 	var (
 		kind, mime, retentionKind string
 	)
@@ -239,7 +240,7 @@ func (s *Service) OnEgressEnded(ctx context.Context, info *livekit.EgressInfo) e
 		RETURNING id
 	`
 	var recordingID uuid.UUID
-	if err := tx.QueryRow(ctx, insRec, kind, meetingID, bucket, key, mime, fr.Size, durationMs, retentionKind).Scan(&recordingID); err != nil {
+	if err := tx.QueryRow(ctx, insRec, kind, meetingID, bucket, key, mime, sizeBytes, durationMs, retentionKind).Scan(&recordingID); err != nil {
 		return fmt.Errorf("insert recording: %w", err)
 	}
 
@@ -248,7 +249,7 @@ func (s *Service) OnEgressEnded(ctx context.Context, info *livekit.EgressInfo) e
 		rawMeta, _ := json.Marshal(map[string]any{
 			"egress_id":  info.EgressID,
 			"meeting_id": meetingID,
-			"size":       fr.Size, "duration_ns": fr.Duration,
+			"size":       sizeBytes, "duration_ns": fr.DurationNs(),
 		})
 		var transcriptID uuid.UUID
 		const insTx = `

@@ -31,7 +31,10 @@ type WebhookEvent struct {
 	Room        *RoomInfo   `json:"room,omitempty"`
 	Participant *PartInfo   `json:"participant,omitempty"`
 	EgressInfo  *EgressInfo `json:"egressInfo,omitempty"`
-	CreatedAt   int64       `json:"createdAt,omitempty"`
+	// LiveKit отдаёт createdAt в JSON как строку (protobuf int64 → string),
+	// поэтому используем json.Number для безопасного парсинга. Полем сейчас
+	// не пользуемся, но строгая типизация ломала весь Unmarshal.
+	CreatedAt json.Number `json:"createdAt,omitempty"`
 }
 
 type RoomInfo struct {
@@ -48,27 +51,43 @@ type PartInfo struct {
 
 // EgressInfo — статус и результаты записи. На egress_ended нас интересуют
 // FileResults: каждый объект содержит итоговое имя файла + (опционально) location.
+// LiveKit сериализует все int64-поля как строки (protobuf JSON convention),
+// поэтому числовые поля принимаем через json.Number и конвертируем по месту.
 type EgressInfo struct {
-	EgressID    string         `json:"egressId,omitempty"`
-	RoomID      string         `json:"roomId,omitempty"`
-	RoomName    string         `json:"roomName,omitempty"`
-	Status      string         `json:"status,omitempty"` // EGRESS_ACTIVE/COMPLETE/FAILED/...
-	StartedAt   int64          `json:"startedAt,omitempty"`
-	EndedAt     int64          `json:"endedAt,omitempty"`
-	UpdatedAt   int64          `json:"updatedAt,omitempty"`
-	Error       string         `json:"error,omitempty"`
-	FileResults []*FileResult  `json:"fileResults,omitempty"`
+	EgressID    string        `json:"egressId,omitempty"`
+	RoomID      string        `json:"roomId,omitempty"`
+	RoomName    string        `json:"roomName,omitempty"`
+	Status      string        `json:"status,omitempty"` // EGRESS_ACTIVE/COMPLETE/FAILED/...
+	StartedAt   json.Number   `json:"startedAt,omitempty"`
+	EndedAt     json.Number   `json:"endedAt,omitempty"`
+	UpdatedAt   json.Number   `json:"updatedAt,omitempty"`
+	Error       string        `json:"error,omitempty"`
+	FileResults []*FileResult `json:"fileResults,omitempty"`
 	// Из ParticipantEgressRequest (если был — здесь придёт identity).
 	ParticipantRequest *ParticipantRequest `json:"participant,omitempty"`
 }
 
 type FileResult struct {
-	Filename string `json:"filename,omitempty"` // имя в S3 после {template} substitution
-	Location string `json:"location,omitempty"` // S3 URL (s3://bucket/key или https://endpoint/bucket/key)
-	Size     int64  `json:"size,omitempty"`     // байты
-	Duration int64  `json:"duration,omitempty"` // наносекунды
-	StartedAt int64 `json:"startedAt,omitempty"`
-	EndedAt   int64 `json:"endedAt,omitempty"`
+	Filename  string      `json:"filename,omitempty"` // имя в S3 после {template} substitution
+	Location  string      `json:"location,omitempty"` // S3 URL (s3://bucket/key или https://endpoint/bucket/key)
+	Size      json.Number `json:"size,omitempty"`     // байты
+	Duration  json.Number `json:"duration,omitempty"` // наносекунды
+	StartedAt json.Number `json:"startedAt,omitempty"`
+	EndedAt   json.Number `json:"endedAt,omitempty"`
+}
+
+// SizeBytes — вытаскивает int64 из Size; 0 если не парсится.
+func (fr *FileResult) SizeBytes() int64 { return parseNum(fr.Size) }
+
+// DurationNs — длительность в наносекундах.
+func (fr *FileResult) DurationNs() int64 { return parseNum(fr.Duration) }
+
+func parseNum(n json.Number) int64 {
+	if n == "" {
+		return 0
+	}
+	v, _ := n.Int64()
+	return v
 }
 
 type ParticipantRequest struct {
