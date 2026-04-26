@@ -182,6 +182,14 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 				r.Mount("/meetings", meetingsHandlers.Routes())
 			}
 
+			// Admin-only endpoints, доступные через /api/v1/admin/* (NPM
+			// проксирует /api/v1 → api). Старая /admin/* группа (внизу)
+			// тоже остаётся — для прямых запросов к api без NPM-проксирования.
+			r.Group(func(r chi.Router) {
+				r.Use(middleware.RequireRole(auth.RoleAdmin))
+				r.Mount("/admin/users", admin.NewUsersHandlers(pool).Routes())
+			})
+
 			// Domain modules — added as their handler packages land.
 			// r.Mount("/calls", calls.Routes(...))
 			// r.Mount("/contacts", contacts.Routes(...))

@@ -22,7 +22,7 @@ export function useAdminUsers() {
   return useQuery({
     queryKey: ["admin-users"],
     queryFn: ({ signal }) =>
-      api<{ items: AdminUser[] }>("/admin/users", { signal }).then((r) => r.items),
+      api<{ items: AdminUser[] }>("/api/v1/admin/users", { signal }).then((r) => r.items),
     staleTime: 30_000,
   });
 }
