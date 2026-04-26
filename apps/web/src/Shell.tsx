@@ -37,6 +37,7 @@ import {
   type Meeting as ApiMeeting, type RecordingFile,
 } from "@/api/meetings";
 import { MeetingRoom } from "@/MeetingRoom";
+import { useAdminUsers } from "@/api/admin";
 import {
   useTranscripts, useTranscript, useUploadTranscript,
   useDeleteTranscript, useRetryTranscript,
@@ -1844,73 +1845,89 @@ function AnalyticsPage() {
 // USERS, PHONE SETTINGS, SMTP SETTINGS — admin pages
 // ──────────────────────────────────────────────────────────────────────────
 
-function UsersPage({ users: initial, hideHeader }: { users: MockUser[]; hideHeader?: boolean }) {
-  const [users, setUsers] = useState<MockUser[]>(initial);
+function UsersPage({ hideHeader }: { hideHeader?: boolean }) {
+  const list = useAdminUsers();
   const [q, setQ] = useState("");
-  const flip = (id: number, field: "role" | "st") => setUsers((u) => u.map((x) => x.id === id
-    ? { ...x, [field]: field === "role"
-        ? (x.role === "admin" ? "user" : "admin")
-        : (x.st === "active" ? "blocked" : "active") } as MockUser
-    : x));
-  const filt = users.filter((u) => u.name.toLowerCase().includes(q.toLowerCase()) || u.email.toLowerCase().includes(q.toLowerCase()));
+  const all = list.data ?? [];
+  const filt = all.filter((u) => {
+    const s = q.toLowerCase();
+    return !s ||
+      u.full_name.toLowerCase().includes(s) ||
+      u.email.toLowerCase().includes(s) ||
+      (u.department || "").toLowerCase().includes(s) ||
+      (u.extension || "").toLowerCase().includes(s);
+  });
+  const fmtLogin = (iso?: string) => {
+    if (!iso) return "—";
+    const d = new Date(iso);
+    const ago = Date.now() - d.getTime();
+    if (ago < 60_000) return "только что";
+    if (ago < 3_600_000) return `${Math.floor(ago / 60_000)} мин. назад`;
+    if (ago < 86_400_000) return `${Math.floor(ago / 3_600_000)} ч. назад`;
+    return d.toLocaleDateString("ru-RU");
+  };
 
   return (
     <div style={{ minHeight: "100%", background: C.bg2 }}>
       {!hideHeader && (
-        <PgHdr title="Управление пользователями" sub={`${users.length} ${users.length === 1 ? "сотрудник" : "сотрудников"} · синхронизация с Bitrix24`}
-          action={<button style={{ display: "flex", alignItems: "center", gap: 6, padding: "9px 14px", borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 13.5, color: C.text, fontWeight: 500, background: C.card, cursor: "pointer", fontFamily: "inherit" }}><RefreshCw size={13} />Синхронизировать</button>}
-        />
+        <PgHdr title="Пользователи"
+          sub={list.isLoading ? "Загрузка…" : `${all.length} ${all.length === 1 ? "сотрудник" : "сотрудников"}`} />
       )}
       <div style={{ padding: 24 }}>
         <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
           <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 8 }}>
             <Search size={14} color={C.text3} />
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Поиск по имени или email…"
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Поиск по имени, email, отделу или внутреннему номеру…"
               style={{ flex: 1, border: "none", outline: "none", fontSize: 14, color: C.text, background: "transparent", fontFamily: "inherit" }} />
           </div>
-          {filt.length === 0 ? (
-            <Empty Icon={Users} title={q ? "Никого не найдено" : "Пользователей пока нет"} sub={q ? "Попробуйте изменить запрос" : "Синхронизируйте пользователей из Bitrix24 или добавьте вручную."} />
+          {list.isError ? (
+            <Empty Icon={Users} title="Не удалось загрузить" sub={String(list.error)} />
+          ) : list.isLoading ? (
+            <div style={{ padding: 40, textAlign: "center", color: C.text3, fontSize: 13 }}>Загрузка…</div>
+          ) : filt.length === 0 ? (
+            <Empty Icon={Users} title={q ? "Никого не найдено" : "Пользователей ещё нет"}
+              sub={q ? "Попробуйте изменить запрос" : "Сотрудники появятся здесь после первого входа в Toolkit через Bitrix24."} />
           ) : (
             <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 640 }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 720 }}>
                 <thead>
                   <tr style={{ background: C.bg2 }}>
-                    {["Сотрудник", "Отдел", "Номер", "Роль", "Статус", "Последний вход", ""].map((h) => (
+                    {["Сотрудник", "Email", "Отдел", "Должность", "Номер", "Роль", "Статус", "Последний вход"].map((h) => (
                       <th key={h} style={{ padding: "9px 16px", textAlign: "left", fontSize: 11, fontWeight: 600, color: C.text2, textTransform: "uppercase", letterSpacing: "0.06em", whiteSpace: "nowrap" }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {filt.map((u) => (
-                    <tr key={u.id} style={{ borderTop: `1px solid ${C.border}` }}>
-                      <td style={{ padding: "11px 16px" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-                          <Av i={u.av} c={u.col} sz={32} />
-                          <div>
-                            <div style={{ fontSize: 13.5, fontWeight: 500, color: C.text }}>{u.name}</div>
-                            <div style={{ fontSize: 11, color: C.text3 }}>{u.email}</div>
+                  {filt.map((u) => {
+                    const initials = (u.full_name || u.email).split(/\s+/).map((p) => p[0] || "").slice(0, 2).join("").toUpperCase();
+                    return (
+                      <tr key={u.id} style={{ borderTop: `1px solid ${C.border}` }}>
+                        <td style={{ padding: "11px 16px" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                            <Av i={initials} sz={32} src={u.avatar_url} />
+                            <div>
+                              <div style={{ fontSize: 13.5, fontWeight: 500, color: C.text }}>{u.full_name || "—"}</div>
+                              <div style={{ fontSize: 11, color: C.text3, fontFamily: "'DM Mono', monospace" }}>Bitrix #{u.bitrix_id}</div>
+                            </div>
                           </div>
-                        </div>
-                      </td>
-                      <td style={{ padding: "11px 16px", fontSize: 13, color: C.text2 }}>{u.dept}</td>
-                      <td style={{ padding: "11px 16px" }}>
-                        {u.ext ? <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 13, fontWeight: 600, color: C.text }}>#{u.ext}</span>
-                          : <span style={{ fontSize: 12, color: C.text3, fontStyle: "italic" }}>не назначен</span>}
-                      </td>
-                      <td style={{ padding: "11px 16px" }}>
-                        <button onClick={() => flip(u.id, "role")} style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}>
-                          <Bdg v={u.role === "admin" ? "adm" : "def"}>{u.role === "admin" ? "Администратор" : "Пользователь"}</Bdg>
-                        </button>
-                      </td>
-                      <td style={{ padding: "11px 16px" }}><Bdg v={u.st === "active" ? "ok" : "err"}>{u.st === "active" ? "Активен" : "Заблокирован"}</Bdg></td>
-                      <td style={{ padding: "11px 16px", fontSize: 12, color: C.text3 }}>{u.login}</td>
-                      <td style={{ padding: "11px 16px" }}>
-                        <button onClick={() => flip(u.id, "st")} style={{ padding: "5px 10px", borderRadius: 6, border: `1px solid ${C.border}`, fontSize: 12, color: C.text2, fontWeight: 500, background: C.card, cursor: "pointer", fontFamily: "inherit" }}>
-                          {u.st === "active" ? "Заблокировать" : "Разблокировать"}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                        </td>
+                        <td style={{ padding: "11px 16px", fontSize: 13, color: C.text }}>{u.email}</td>
+                        <td style={{ padding: "11px 16px", fontSize: 13, color: C.text2 }}>{u.department || "—"}</td>
+                        <td style={{ padding: "11px 16px", fontSize: 13, color: C.text2 }}>{u.position || "—"}</td>
+                        <td style={{ padding: "11px 16px" }}>
+                          {u.extension ? <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 13, fontWeight: 600, color: C.text }}>#{u.extension}</span>
+                            : <span style={{ fontSize: 12, color: C.text3, fontStyle: "italic" }}>не назначен</span>}
+                        </td>
+                        <td style={{ padding: "11px 16px" }}>
+                          <Bdg v={u.is_admin ? "adm" : "def"}>{u.is_admin ? "Администратор" : "Пользователь"}</Bdg>
+                        </td>
+                        <td style={{ padding: "11px 16px" }}>
+                          <Bdg v={u.status === "active" ? "ok" : "err"}>{u.status === "active" ? "Активен" : "Заблокирован"}</Bdg>
+                        </td>
+                        <td style={{ padding: "11px 16px", fontSize: 12, color: C.text3 }}>{fmtLogin(u.last_login_at)}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -2034,7 +2051,7 @@ function PhoneSettingsPage({ hideHeader }: { hideHeader?: boolean } = {}) {
 
 type SettingsTab = "users" | "phone" | "smtp" | "ai";
 
-function SystemSettingsPage({ users }: { users: MockUser[] }) {
+function SystemSettingsPage(_: { users?: MockUser[] }) {
   const [tab, setTab] = useState<SettingsTab>("users");
 
   const tabs: { id: SettingsTab; label: string; Icon: LucideIcon }[] = [
@@ -2063,7 +2080,7 @@ function SystemSettingsPage({ users }: { users: MockUser[] }) {
         ))}
       </div>
       <div style={{ flex: 1, overflowY: "auto" }}>
-        {tab === "users" && <UsersPage users={users} hideHeader />}
+        {tab === "users" && <UsersPage hideHeader />}
         {tab === "phone" && <PhoneSettingsPage hideHeader />}
         {tab === "smtp"  && <SmtpSettingsPage hideHeader />}
         {tab === "ai"    && <AISettingsPage hideHeader />}
@@ -2487,9 +2504,6 @@ function ShellInner({ me }: { me: Me }) {
   const curStatus = STATUSES[status];
 
   const meAsMock = meAsMockUser(me);
-  // Список «всех пользователей» — пока есть только текущий из API. Когда появится
-  // /api/v1/users (E2.4 Bitrix24 sync), заменить на реальный list.
-  const users: MockUser[] = [meAsMock];
   const isAdmin = me.role === "admin";
 
   const onEnter = () => { if (hoverTimer.current) clearTimeout(hoverTimer.current); setExpanded(true); };
@@ -2566,7 +2580,7 @@ function ShellInner({ me }: { me: Me }) {
         {page === "vcs"            && <VcsPage me={me} onOpenTranscriptions={goToTranscriptions} />}
         {page === "analytics"      && <AnalyticsPage />}
         {page === "transcription"  && <TranscriptionPage meetingFilter={transcriptMeetingFilter} />}
-        {isAdmin && page === "settings" && <SystemSettingsPage users={users} />}
+        {isAdmin && page === "settings" && <SystemSettingsPage />}
         {(["messengers", "contacts", "helpdesk"] as const).includes(page as any) && <StubPage page={page as "messengers" | "contacts" | "helpdesk"} />}
       </main>
 

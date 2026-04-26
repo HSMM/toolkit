@@ -25,6 +25,7 @@ import (
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/HSMM/toolkit/internal/admin"
 	"github.com/HSMM/toolkit/internal/auth"
 	"github.com/HSMM/toolkit/internal/config"
 	"github.com/HSMM/toolkit/internal/db"
@@ -194,7 +195,7 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 		r.Use(middleware.RateLimitByUser(cfg.RateLimitUserPerMin, time.Minute))
 
 		r.Get("/queue/stats", stubHandler("E3.4 admin: queue stats — added later"))
-		// r.Mount("/users", admin.UsersRoutes(...))
+		r.Mount("/users", admin.NewUsersHandlers(pool).Routes())
 		// r.Mount("/policies", admin.PolicyRoutes(...))
 		// r.Mount("/gdpr", admin.GDPRRoutes(...))
 		// r.Mount("/audit", admin.AuditRoutes(...))
