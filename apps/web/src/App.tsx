@@ -1,46 +1,32 @@
-import { Routes, Route, Navigate } from "react-router-dom";
+// Корневой роутер приложения.
+//
+// Логика:
+//  - state.loading      → Loading (восстанавливаем сессию)
+//  - state.anonymous    → LoginPage (CTA на /oauth/login)
+//  - state.authenticated→ Shell (полный UI портала)
+//
+// Внутренняя навигация портала — на state в Shell.tsx (как в исходном
+// прототипе). React Router используется только для login-flow и для будущих
+// прямых ссылок на отдельные модули (например, /phone в закреплённой вкладке).
 
 import { useAuth } from "@/auth/AuthContext";
 import { LoginPage } from "@/auth/Login";
-import { Loading } from "@/components/states";
-
-import { AppLayout } from "@/layouts/AppLayout";
-import { PhonePage } from "@/modules/phone/PhonePage";
-import { MeetPage } from "@/modules/meet/MeetPage";
-import { TranscriptsPage } from "@/modules/transcripts/TranscriptsPage";
-import { AdminPage } from "@/modules/admin/AdminPage";
-import {
-  MessengersStub, ContactsStub, HelpdeskStub,
-} from "@/modules/stubs";
+import { Loading, ErrorBox } from "@/components/states";
+import { useMe } from "@/api/me";
+import { Shell } from "@/Shell";
 
 export function App() {
   const { state } = useAuth();
 
-  if (state.status === "loading") return <Loading label="Восстанавливаем сессию…" />;
+  if (state.status === "loading")   return <Loading label="Восстанавливаем сессию…" />;
+  if (state.status === "anonymous") return <LoginPage />;
+  return <AuthenticatedShell />;
+}
 
-  if (state.status === "anonymous") {
-    return (
-      <Routes>
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="*" element={<Navigate to="/login" replace />} />
-      </Routes>
-    );
-  }
-
-  return (
-    <Routes>
-      <Route path="/login" element={<Navigate to="/" replace />} />
-      <Route path="/" element={<AppLayout />}>
-        <Route index element={<Navigate to="/phone" replace />} />
-        <Route path="phone"        element={<PhonePage />} />
-        <Route path="meet"         element={<MeetPage />} />
-        <Route path="transcripts"  element={<TranscriptsPage />} />
-        <Route path="messengers"   element={<MessengersStub />} />
-        <Route path="contacts"     element={<ContactsStub />} />
-        <Route path="helpdesk"     element={<HelpdeskStub />} />
-        <Route path="admin/*"      element={<AdminPage />} />
-        <Route path="*"            element={<Navigate to="/phone" replace />} />
-      </Route>
-    </Routes>
-  );
+function AuthenticatedShell() {
+  const me = useMe();
+  if (me.isLoading) return <Loading />;
+  if (me.isError)   return <ErrorBox message={String(me.error)} onRetry={() => { void me.refetch(); }} />;
+  if (!me.data)     return <Loading />;
+  return <Shell me={me.data} />;
 }
