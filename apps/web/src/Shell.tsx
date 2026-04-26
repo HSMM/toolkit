@@ -32,7 +32,7 @@ import { C, LOGO_URL } from "@/styles/tokens";
 import { useAuth } from "@/auth/AuthContext";
 import { type Me } from "@/api/me";
 import {
-  useMeetings, useCreateMeeting, useEndMeeting,
+  useMeetings, useCreateMeeting, useEndMeeting, useShareMeeting,
   type Meeting as ApiMeeting,
 } from "@/api/meetings";
 import { MeetingRoom } from "@/MeetingRoom";
@@ -610,14 +610,51 @@ function SoftphoneWidget() {
 // VCS (Видеоконференции) — реальная интеграция с LiveKit через /api/v1/meetings
 // ──────────────────────────────────────────────────────────────────────────
 
+function fmtDuration(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+  return `${m}:${String(sec).padStart(2, "0")}`;
+}
+
+// MeetingDuration — таймер с тиком в 1с пока встреча идёт; для завершённой
+// показывает общую длительность статично.
+function MeetingDuration({ startedAt, endedAt }: { startedAt: string; endedAt?: string }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (endedAt) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [endedAt]);
+  const start = new Date(startedAt).getTime();
+  const end = endedAt ? new Date(endedAt).getTime() : now;
+  return <>{fmtDuration(end - start)}</>;
+}
+
 function VcsPage({ me }: { me: Me }) {
   const { push } = useApp();
   const meetingsQ = useMeetings();
   const create = useCreateMeeting();
   const end = useEndMeeting();
+  const share = useShareMeeting();
 
   const [modal, setModal] = useState(false);
   const [active, setActive] = useState<ApiMeeting | null>(null); // открытая комната
+  const [copiedFor, setCopiedFor] = useState<string | null>(null); // meetingId для checkmark
+  const shareLink = async (m: ApiMeeting) => {
+    try {
+      const { token } = await share.mutateAsync(m.id);
+      const url = `${window.location.origin}/g/${token}`;
+      await navigator.clipboard.writeText(url);
+      setCopiedFor(m.id);
+      setTimeout(() => setCopiedFor((cur) => (cur === m.id ? null : cur)), 2200);
+      push({ type: "meeting", title: "Гостевая ссылка скопирована", desc: url });
+    } catch (e) {
+      push({ type: "system", title: "Не удалось получить ссылку", desc: e instanceof Error ? e.message : String(e) });
+    }
+  };
 
   const [mode, setMode] = useState<"schedule" | "instant">("instant");
   const [title, setTitle] = useState("");
@@ -704,17 +741,32 @@ function VcsPage({ me }: { me: Me }) {
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                         <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{m.title}</div>
-                        {live && <Bdg v="ok">В эфире</Bdg>}
+                        {live && (
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 8px", borderRadius: 999, background: C.accBg, color: C.accTx, fontSize: 11, fontWeight: 600, border: `1px solid ${C.accBrd}` }}>
+                            <span style={{ width: 6, height: 6, borderRadius: "50%", background: C.acc, boxShadow: `0 0 0 2px ${C.acc}33` }} />
+                            В эфире · <span style={{ fontFamily: "'DM Mono', monospace" }}><MeetingDuration startedAt={m.started_at!} /></span>
+                          </span>
+                        )}
                         {m.auto_transcribe && <Bdg v="blue">С транскрибацией</Bdg>}
                         {m.record_enabled && <Bdg v="proc">Запись</Bdg>}
                       </div>
                       <div style={{ fontSize: 12.5, color: C.text2, marginTop: 3 }}>
-                        {fmtMeetingTime(m)} · room <span style={{ fontFamily: "'DM Mono', monospace" }}>{m.livekit_room_id}</span>
+                        {fmtMeetingTime(m)}
+                        {ended && m.started_at && (
+                          <> · длилась <span style={{ fontFamily: "'DM Mono', monospace" }}><MeetingDuration startedAt={m.started_at} endedAt={m.ended_at} /></span></>
+                        )}
+                        {" · room "}<span style={{ fontFamily: "'DM Mono', monospace" }}>{m.livekit_room_id}</span>
                       </div>
                     </div>
-                    <div style={{ flexShrink: 0, display: "flex", gap: 6 }}>
+                    <div style={{ flexShrink: 0, display: "flex", gap: 6, alignItems: "center" }}>
                       {ended ? <Bdg v="def">Завершена</Bdg>
                         : <>
+                          {isHost(m) && (
+                            <button onClick={() => void shareLink(m)} title="Скопировать ссылку для гостя"
+                              style={{ background: C.card, color: copiedFor === m.id ? C.acc : C.text2, padding: "8px 10px", borderRadius: 8, fontSize: 13, border: `1px solid ${C.border}`, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 5 }}>
+                              {copiedFor === m.id ? <><Check size={14} />Скопировано</> : <><Copy size={14} />Гостевая ссылка</>}
+                            </button>
+                          )}
                           <button onClick={() => setActive(m)} style={{ background: C.acc, color: "white", padding: "8px 16px", borderRadius: 8, fontWeight: 500, fontSize: 13, border: "none", cursor: "pointer", fontFamily: "inherit" }}>Войти</button>
                           {isHost(m) && (
                             <button onClick={() => { if (confirm("Завершить встречу?")) end.mutate(m.id); }}

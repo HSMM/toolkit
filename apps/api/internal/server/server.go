@@ -120,6 +120,11 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 		r.Post("/logout", oauthHandlers.Logout)
 	})
 
+	// Публичный гостевой доступ к встречам — без RequireAuth, только token из URL.
+	if meetingsHandlers != nil {
+		r.Mount("/api/v1/guests", meetingsHandlers.GuestRoutes())
+	}
+
 	// --- Authenticated API ---
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(middleware.RequireAuth(jwtIssuer, subjectLoader, logger))

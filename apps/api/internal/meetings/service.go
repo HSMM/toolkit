@@ -10,6 +10,10 @@ package meetings
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -309,6 +313,173 @@ func (s *Service) End(ctx context.Context, subj *auth.Subject, meetingID uuid.UU
 		return fmt.Errorf("livekit end: %w", err)
 	}
 	return nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// guest access (E5.3): публичная ссылка для подключения без сессии Toolkit
+// ─────────────────────────────────────────────────────────────────────────
+
+// GuestMeetingInfo — публичный срез данных встречи для landing-страницы гостя.
+type GuestMeetingInfo struct {
+	MeetingID    uuid.UUID  `json:"meeting_id"`
+	Title        string     `json:"title"`
+	StartedAt    *time.Time `json:"started_at,omitempty"`
+	ScheduledAt  *time.Time `json:"scheduled_at,omitempty"`
+	HostName     string     `json:"host_name,omitempty"`
+}
+
+// EnsureGuestLink — host или admin: возвращает текущий guest_link_token
+// (или генерирует новый, если null). Token — URL-safe ~32 символа, не секретен
+// для админов, но является единственным секретом для входа гостя.
+func (s *Service) EnsureGuestLink(ctx context.Context, subj *auth.Subject, meetingID uuid.UUID) (string, error) {
+	m, err := s.loadMeeting(ctx, meetingID)
+	if err != nil {
+		return "", err
+	}
+	if !(subj.Role == auth.RoleAdmin || subj.UserID == m.CreatedBy) {
+		return "", ErrForbidden
+	}
+	if m.EndedAt != nil {
+		return "", ErrEnded
+	}
+
+	var existing *string
+	if err := s.db.QueryRow(ctx, `SELECT guest_link_token FROM meeting WHERE id = $1`, meetingID).Scan(&existing); err != nil {
+		return "", err
+	}
+	if existing != nil && *existing != "" {
+		return *existing, nil
+	}
+	tok, err := randomURLToken(24) // ~32 символа base64url
+	if err != nil {
+		return "", err
+	}
+	if _, err := s.db.Exec(ctx, `UPDATE meeting SET guest_link_token = $2 WHERE id = $1`, meetingID, tok); err != nil {
+		return "", fmt.Errorf("set guest_link_token: %w", err)
+	}
+	return tok, nil
+}
+
+// GuestLookup — публичный (no auth): по token возвращает мини-инфо встречи
+// для отображения landing-страницы (название, host). Возвращает ErrNotFound
+// если token не найден или встреча уже завершена.
+func (s *Service) GuestLookup(ctx context.Context, token string) (*GuestMeetingInfo, error) {
+	if token == "" {
+		return nil, ErrNotFound
+	}
+	const q = `
+		SELECT m.id, m.title, m.started_at, m.scheduled_at, m.ended_at,
+		       COALESCE(u.full_name, u.email, '')
+		FROM meeting m
+		LEFT JOIN "user" u ON u.id = m.created_by
+		WHERE m.guest_link_token = $1
+	`
+	var (
+		id          uuid.UUID
+		title       string
+		startedAt   *time.Time
+		scheduledAt *time.Time
+		endedAt     *time.Time
+		hostName    string
+	)
+	err := s.db.QueryRow(ctx, q, token).Scan(&id, &title, &startedAt, &scheduledAt, &endedAt, &hostName)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if endedAt != nil {
+		return nil, ErrEnded
+	}
+	return &GuestMeetingInfo{
+		MeetingID:   id,
+		Title:       title,
+		StartedAt:   startedAt,
+		ScheduledAt: scheduledAt,
+		HostName:    hostName,
+	}, nil
+}
+
+// GuestJoin — публичный (no auth): по token + display_name создаёт participant
+// (is_guest=true) и выпускает LiveKit-токен. Каждый /join создаёт нового
+// participant'а (новая identity), чтобы несколько гостей могли использовать
+// одну и ту же ссылку. Стартует встречу (started_at) если та была запланирована.
+func (s *Service) GuestJoin(ctx context.Context, token, displayName string) (*JoinResult, error) {
+	displayName = strings.TrimSpace(displayName)
+	if displayName == "" {
+		displayName = "Гость"
+	}
+	if len(displayName) > 80 {
+		displayName = displayName[:80]
+	}
+
+	info, err := s.GuestLookup(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	m, err := s.loadMeeting(ctx, info.MeetingID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Идентити гостя — уникальная per-join: g_<short uuid>.
+	guestID := uuid.New()
+	identity := "g_" + strings.ReplaceAll(guestID.String()[:12], "-", "")
+	tokHash := sha256.Sum256([]byte(token))
+
+	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	if m.StartedAt == nil {
+		if _, err := tx.Exec(ctx, `UPDATE meeting SET started_at = NOW() WHERE id = $1 AND started_at IS NULL`, m.ID); err != nil {
+			return nil, fmt.Errorf("start meeting: %w", err)
+		}
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO participant (meeting_id, is_guest, external_name, guest_token_hash, livekit_identity, role, joined_at)
+		VALUES ($1, TRUE, $2, $3, $4, 'guest', NOW())
+	`, m.ID, displayName, hex.EncodeToString(tokHash[:]), identity); err != nil {
+		return nil, fmt.Errorf("insert guest participant: %w", err)
+	}
+	// Помечаем встречу как имеющую внешних участников (для алертов СБ — ТЗ 4.1).
+	if _, err := tx.Exec(ctx, `UPDATE meeting SET has_external = TRUE WHERE id = $1 AND has_external = FALSE`, m.ID); err != nil {
+		return nil, fmt.Errorf("set has_external: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+
+	lkTok, err := s.lk.MintJoinToken(livekit.JoinTokenOptions{
+		Room:     m.LiveKitRoomID,
+		Identity: identity,
+		Name:     displayName,
+		CanPub:   true,
+		CanSub:   true,
+		CanData:  true,
+		Admin:    false,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("mint guest token: %w", err)
+	}
+	return &JoinResult{
+		Token:    lkTok,
+		WSURL:    s.publicWS,
+		Room:     m.LiveKitRoomID,
+		Identity: identity,
+		Role:     "guest",
+	}, nil
+}
+
+func randomURLToken(nBytes int) (string, error) {
+	b := make([]byte, nBytes)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
 // ─────────────────────────────────────────────────────────────────────────

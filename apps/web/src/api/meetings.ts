@@ -98,3 +98,10 @@ export function useLeaveMeeting() {
       api<void>(`/api/v1/meetings/${id}/leave`, { method: "POST" }),
   });
 }
+
+export function useShareMeeting() {
+  return useMutation({
+    mutationFn: (id: string) =>
+      api<{ token: string }>(`/api/v1/meetings/${id}/share`, { method: "POST" }),
+  });
+}

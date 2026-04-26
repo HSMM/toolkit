@@ -14,8 +14,19 @@ import { LoginPage } from "@/auth/Login";
 import { Loading, ErrorBox } from "@/components/states";
 import { useMe } from "@/api/me";
 import { Shell } from "@/Shell";
+import { GuestPage } from "@/GuestPage";
+
+// Публичные пути — обходят auth gate. Сейчас только /g/<token> (guest invite).
+function publicRoute(): { kind: "guest"; token: string } | null {
+  const m = window.location.pathname.match(/^\/g\/([A-Za-z0-9_-]+)\/?$/);
+  if (m) return { kind: "guest", token: m[1]! };
+  return null;
+}
 
 export function App() {
+  const pub = publicRoute();
+  if (pub?.kind === "guest") return <GuestPage token={pub.token} />;
+
   const { state } = useAuth();
 
   if (state.status === "loading")   return <Loading label="Восстанавливаем сессию…" />;

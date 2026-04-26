@@ -16,7 +16,7 @@ type Handlers struct{ svc *Service }
 
 func NewHandlers(svc *Service) *Handlers { return &Handlers{svc: svc} }
 
-// Routes монтируются под /api/v1/meetings.
+// Routes монтируются под /api/v1/meetings (RequireAuth).
 func (h *Handlers) Routes() http.Handler {
 	r := chi.NewRouter()
 	r.Get("/", h.list)
@@ -25,6 +25,15 @@ func (h *Handlers) Routes() http.Handler {
 	r.Post("/{id}/join", h.join)
 	r.Post("/{id}/leave", h.leave)
 	r.Post("/{id}/end", h.end)
+	r.Post("/{id}/share", h.share)
+	return r
+}
+
+// GuestRoutes монтируются под /api/v1/guests — публичные, без auth-middleware.
+func (h *Handlers) GuestRoutes() http.Handler {
+	r := chi.NewRouter()
+	r.Get("/{token}", h.guestLookup)
+	r.Post("/{token}/join", h.guestJoin)
 	return r
 }
 
@@ -126,6 +135,52 @@ func (h *Handlers) end(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handlers) share(w http.ResponseWriter, r *http.Request) {
+	subj := auth.MustSubject(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_id", "invalid meeting id")
+		return
+	}
+	tok, err := h.svc.EnsureGuestLink(r.Context(), subj, id)
+	if err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"token": tok})
+}
+
+func (h *Handlers) guestLookup(w http.ResponseWriter, r *http.Request) {
+	tok := chi.URLParam(r, "token")
+	info, err := h.svc.GuestLookup(r.Context(), tok)
+	if err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, info)
+}
+
+type guestJoinReq struct {
+	DisplayName string `json:"display_name"`
+}
+
+func (h *Handlers) guestJoin(w http.ResponseWriter, r *http.Request) {
+	tok := chi.URLParam(r, "token")
+	var req guestJoinReq
+	if r.ContentLength > 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErr(w, http.StatusBadRequest, "bad_json", err.Error())
+			return
+		}
+	}
+	res, err := h.svc.GuestJoin(r.Context(), tok, req.DisplayName)
+	if err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
