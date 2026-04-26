@@ -15,8 +15,12 @@ export const C = {
   card: "#ffffff",
 } as const;
 
-export const LOGO_URL =
-  "https://via.placeholder.com/64x64/1E5AA8/ffffff?text=TK";
+// Логотип в шапке. По умолчанию — placeholder из public/logo-toolkit.svg
+// (нейтральный, чтобы репо оставалось OSS-чистым). На prod-стенде можно:
+//   • положить свой файл в public/logo-toolkit.svg (override при build)
+//   • или пробросить URL через env `VITE_LOGO_URL` (поддерживается ниже)
+export const LOGO_URL: string =
+  (import.meta.env.VITE_LOGO_URL as string | undefined) || "/logo-toolkit.svg";
 
 // Утилиты, идентичные тем что в прототипе — выносим, чтобы не таскать копипасту.
 import type { CSSProperties } from "react";
