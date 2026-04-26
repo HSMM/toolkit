@@ -283,6 +283,20 @@ func (s *Service) Join(ctx context.Context, subj *auth.Subject, meetingID uuid.U
 		return nil, fmt.Errorf("mint token: %w", err)
 	}
 
+	// Если host входит в комнату с record_enabled=true и запись ещё не идёт —
+	// автоматически стартуем (best-effort, асинхронно, чтобы не задержать join).
+	// Сама StartRecording идемпотентна: повторный вызов на active recording
+	// вернёт nil без побочек.
+	if role == "host" && m.RecordEnabled && !m.RecordingActive && s.recDeps != nil {
+		subjCopy := subj
+		mID := m.ID
+		go func() {
+			if err := s.StartRecording(context.Background(), subjCopy, mID); err != nil {
+				s.logf("auto-start recording on host join: %v", err)
+			}
+		}()
+	}
+
 	return &JoinResult{
 		Token:    tok,
 		WSURL:    s.publicWS,
