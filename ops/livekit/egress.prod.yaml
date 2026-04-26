@@ -1,14 +1,15 @@
 # LiveKit Egress prod config (используется из docker-compose.prod.yml).
-# Главное отличие от dev: ws_url указывает на livekit, который в prod
-# работает в network_mode: host. Имя "livekit" из docker-сети не резолвится,
-# поэтому используем host.docker.internal (требует extra_hosts в compose).
+# ws_url ВАЖНО — это публичный URL комнаты, который egress передаёт Chrome
+# headless внутри своего контейнера, чтобы тот подключился как participant
+# через WSS. Internal hostname (host.docker.internal или livekit) НЕ работает,
+# потому что Chrome ходит наружу через DNS / public network.
 
 redis:
   address: redis:6379
 
 api_key: devkey
 api_secret: change-me-at-least-32-chars-long-secret
-ws_url: ws://host.docker.internal:7880
+ws_url: wss://zoom.softservice.by
 
 file_outputs:
   - path: /out
