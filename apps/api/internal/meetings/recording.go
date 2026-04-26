@@ -148,11 +148,6 @@ func (s *Service) StopRecording(ctx context.Context, subj *auth.Subject, meeting
 	return nil
 }
 
-// MaybeStartEgressForParticipant — заглушка (composite не нуждается в фан-ауте).
-func (s *Service) MaybeStartEgressForParticipant(ctx context.Context, meetingID uuid.UUID, identity string) {
-	_ = ctx; _ = meetingID; _ = identity
-}
-
 // OnEgressEnded — webhook handler. Найдём встречу, у которой этот egress
 // записан в video-колонке или в audio-колонке, и создадим recording row
 // нужного типа.

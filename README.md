@@ -29,7 +29,7 @@ Toolkit собирает это в один портал так, чтобы:
 | Модуль | Что делает |
 |---|---|
 | **Софтфон** | Браузерный WebRTC-клиент к корпоративной АТС: исходящие, приём входящих с карточкой контакта, история звонков, переводы, конференции, статусы присутствия |
-| **Видеоконференции** | Разовые и запланированные встречи, приглашения по email с iCal, гостевой доступ по ссылке и PIN, запись и автотранскрибация по решению хоста |
+| **Видеоконференции** | Разовые и запланированные встречи, гостевой доступ по ссылке с lobby (host подтверждает вход), запись композитная (видео MP4 + отдельная аудио-дорожка OGG) с управлением start/stop из комнаты, автоматическая транскрибация аудио-дорожки и скачивание готовых записей |
 | **Транскрибация** | Расшифровка звонков и встреч (русский язык), разделение по говорящим, синхронизация с записью, ручная правка с историей версий |
 | **Поиск** | Полнотекстовый поиск по всем доступным транскриптам с фильтрами по дате, участникам, типу события |
 
@@ -113,7 +113,7 @@ Toolkit собирает это в один портал так, чтобы:
 | **OpenSearch 2.13** | `opensearchproject/opensearch:2.13.0` | Полнотекстовый поиск по транскриптам |
 | **Redis 7** | `redis:7-alpine` | Координация LiveKit Egress (только; приложение использует Postgres) |
 | **LiveKit Server** | `livekit/livekit-server:latest` | WebRTC SFU для видеоконференций |
-| **LiveKit Egress** | `livekit/egress:latest` | Запись встреч (composite + per-track) |
+| **LiveKit Egress** | `livekit/egress:latest` | Запись встреч (composite видео+аудио + отдельная аудио-дорожка для ASR) |
 | **coturn** | `coturn/coturn:latest` | STUN/TURN для прохождения NAT в WebRTC |
 | **Nginx 1.27** | `nginx:1.27-alpine` | Внутренний reverse-proxy: SPA-статика + `/api`, `/oauth`, `/rtc` |
 
@@ -162,9 +162,9 @@ Production-схема предполагает внешний reverse-proxy дл
 | reverse-proxy | `APP_BIND_PORT/TCP` (`18001` по умолчанию) | app-сервер `APP_BIND_ADDRESS:18001` | Внутренний HTTP до контейнера `web`; не публиковать напрямую в Internet |
 | Internet | `3478/UDP` | app-сервер `:3478` | STUN/TURN через coturn |
 | Internet | `3478/TCP` | app-сервер `:3478` | TURN TCP fallback |
-| Internet | `49152-49999/UDP` | app-сервер `:49152-49999` | UDP relay-порты coturn (`--min-port/--max-port`) |
-| Internet | `50000-60000/UDP` | app-сервер `:50000-60000` | LiveKit WebRTC media (`rtc.port_range_start/end`) |
-| Internet | `7881/TCP` | app-сервер `:7881` | LiveKit TCP ICE fallback; желательно открыть для сетей, где UDP режется |
+| Internet | `7881/TCP` | app-сервер `:7881` | LiveKit TCP ICE fallback (работает в сетях, где UDP режется) |
+| Internet | `7882/UDP` | app-сервер `:7882` | LiveKit WebRTC media — single port (`rtc.udp_port`, мультиплекс всех сессий) |
+| Internet | `49152-49999/UDP` | app-сервер `:49152-49999` | UDP relay-порты coturn (`--min-port/--max-port`); диапазон можно сократить — см. конфиг coturn |
 | admin/VPN | `22/TCP` | app-сервер `:22` | SSH-администрирование, только по allowlist |
 
 Не открывать в Internet:
@@ -186,8 +186,9 @@ curl -fsS http://<APP_BIND_ADDRESS>:18001/healthz
 curl -fsS http://<APP_BIND_ADDRESS>:9090/-/healthy
 ```
 
-Для внешней ВКС-проверки дополнительно убедитесь, что UDP `50000-60000` и
-`49152-49999` не блокируются граничным firewall после DNAT.
+Для внешней ВКС-проверки дополнительно убедитесь, что TCP `7881`, UDP `7882`
+и (если используется TURN) UDP `49152-49999` не блокируются граничным
+firewall после DNAT.
 
 ---
 
@@ -205,6 +206,19 @@ curl -fsS http://<APP_BIND_ADDRESS>:9090/-/healthy
 ## Состояние
 
 Версия MVP в активной разработке. Production-релиз — по итогам приёмки заказчика.
+
+| Эпик | Что внутри | Статус |
+|---|---|---|
+| **E0** Инфраструктура | docker-compose стек, Postgres / MinIO / OpenSearch / LiveKit / coturn / Prometheus / Grafana / Loki / бэкапы | Готово (CI и отдельный staging — отложены) |
+| **E1** Авторизация | OAuth Bitrix24, JWT-сессии (HS256, 15 мин) + refresh, RBAC | Готово |
+| **E2.1** Схема БД | 12 миграций (user / contact_cache / call / meeting / participant / recording / transcript / gdpr / softphone) | Готово |
+| **E2.4** Sync пользователей | Периодический pull `user.get` / `department.get` из Bitrix24, актуализация ролей | Запланировано |
+| **E3** Backend-каркас | chi-роутер, RequireAuth/RequireRole, очередь джобов на Postgres+SKIP LOCKED, WebSocket-hub, structured slog | Готово |
+| **E4** Фронт-каркас | Vite + React + TS, авторизация, единый Shell, тёмные/светлые токены, i18n RU | Готово |
+| **E5** Видеоконференции | LiveKit-комнаты, гостевые ссылки, lobby с admit/reject, composite-запись (видео MP4 + audio OGG), скачивание файлов, авто-транскрибация audio-дорожки | Готово (полная русификация UI комнаты — отложена) |
+| **E6** Софтфон | FreePBX WebRTC через JsSIP, входящие/исходящие, история, транскрибация звонков | Запланировано (нужен тестовый extension от АТС) |
+| **E7** Транскрибация | GigaAM ASR через polling, viewer с диалогом по каналам, аналитика, экспорт TXT, ручная загрузка файлов | Готово |
+| **E8** Админ | Список пользователей через `/admin/users`; настройки SMTP/телефонии; политики записи и GDPR-запросы | Частично (users — да; политики/GDPR — запланированы) |
 
 ## Лицензия
 

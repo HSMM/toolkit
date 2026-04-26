@@ -4,6 +4,76 @@
 диагностику прод-инцидентов и важные решения, чтобы история была видна не только
 в чате и `git log`.
 
+## 2026-04-27 — E5: ВКС end-to-end (комнаты, lobby, запись, скачивание)
+
+**Задача:** дотянуть видеоконференции до уровня MVP — реальные LiveKit-комнаты
+вместо демо, гостевой доступ с подтверждением хостом, запись (видео + отдельная
+аудио-дорожка), скачивание файлов и автотранскрибация.
+
+**Сделано — backend (`apps/api`):**
+- `internal/livekit/client.go` — тонкий Twirp-клиент к LiveKit без `server-sdk-go`:
+  `MintJoinToken`, `EndRoom`, `ListParticipants`, `StartRoomCompositeEgress`
+  (MP4 grid), `StartRoomCompositeAudioEgress` (OGG audio_only), `StopEgress`.
+- `internal/livekit/webhook.go` — `VerifyAndParseWebhook`: проверяет JWT
+  + `sha256(body)` подпись от LiveKit и парсит `egress_started/ended/...`.
+- `internal/meetings/` — модуль создания/просмотра/завершения встреч, гостевые
+  ссылки (`/api/v1/guests/{token}/request` + long-poll status), admit/reject
+  pending-гостей хостом, recording start/stop через 2 параллельных egress'а,
+  `OnEgressEnded` → создаёт строки `recording` (kind `meeting_composite` для
+  MP4 и `meeting_audio` для OGG) + ставит job `transcribe_recording` на
+  audio-дорожку, скачивание готовых файлов через `http.ServeContent` с
+  Range-поддержкой и Content-Disposition.
+- `internal/admin/users.go` — `/api/v1/admin/users` с RBAC = admin: список
+  пользователей с email/отделом/должностью/extension/last_login.
+- Webhook-handler `/livekit/webhook` (публичный, проверка через HMAC).
+
+**Сделано — миграции:**
+- `000009 meeting.guest_link_token` — секрет гостевой ссылки.
+- `000010 participant.admit_state` (`pending` / `admitted` / `rejected`) +
+  partial-индекс по pending для поллинга хостом.
+- `000011 meeting.recording_active`, `recording_started_at`, заготовка
+  `participant.current_egress_id` (под будущий per-track).
+- `000012` — composite-pivot: `meeting.current_egress_id` (видео MP4) +
+  `meeting.current_audio_egress_id` (audio OGG); расширен `recording.kind`
+  до `meeting_audio`; добавлена retention policy для `meeting_audio`.
+
+**Сделано — frontend (`apps/web`):**
+- `MeetingRoom.tsx` — обёртка над `<LiveKitRoom>` + `<VideoConference>`,
+  подключение через `/api/v1/meetings/{id}/join`, кнопки «● Начать запись»/
+  «■ Остановить запись» для хоста, панель «Ожидают входа» с Допустить/Отклонить.
+- `GuestPage.tsx` — публичный роут `/g/<token>`: форма имени → POST `/request`
+  → polling `/status/{rid}` каждые 2с → авто-вход в комнату когда host допустил.
+  Stage-machine `form → waiting → admitted/rejected/ended`.
+- `Shell.tsx` — VcsPage переписан с реальным API: список встреч, форма
+  создания (instant/scheduled), live-таймер, бейдж «● Идёт запись», кнопка
+  «Гостевая ссылка» (host копирует в буфер), кнопка «Записи» с dropdown
+  для скачивания MP4/OGG, кнопка «Расшифровки» → переход в TranscriptionPage
+  с фильтром по meeting_id. UsersPage в Настройках системы — реальный
+  `/admin/users`, без mock-flip.
+- `App.tsx` — публичный path-router `/g/<token>` обходит auth gate.
+
+**Инфра-правки:**
+- `.env`/compose: `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `LIVEKIT_URL`
+  (api → livekit, в prod через `host.docker.internal`), `LIVEKIT_PUBLIC_WS_URL`
+  (браузер → wss://...).
+- `livekit.prod.yaml`: `rtc.udp_port: 7882` (single-port мультиплекс вместо
+  диапазона 50000-60000) + `webhook.urls`.
+- `docker-compose.prod.yml`: `extra_hosts: host.docker.internal:host-gateway`
+  для api/worker, чтобы достучаться до LiveKit в host-network.
+
+**Известные ограничения:**
+- WebRTC-медиа требует DNAT на корпоративном файрволе:
+  - TCP 7881 → app-сервер (LiveKit TCP fallback)
+  - UDP 7882 → app-сервер (LiveKit RTP мультиплекс)
+  - hairpin-NAT включить, иначе клиенты внутри LAN не достучатся до своего
+    публичного IP.
+- Coturn — добавлен в инфру и DNAT (3478 TCP/UDP), но для полноценного TURN
+  нужно открыть relay-диапазон портов (по умолчанию 49152-49999); в большинстве
+  сетей direct-path TCP/UDP закрывает кейс без TURN.
+- Per-track запись участников отложена (только composite + микшированное
+  audio для ASR).
+- Полная русификация UI комнаты (LiveKit `<VideoConference>` строки) отложена.
+
 ## 2026-04-26 — Лицензирование публичного репозитория
 
 **Задача:** добавить лицензию продукта с учётом используемого open-source стека и

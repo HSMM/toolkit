@@ -189,10 +189,6 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 				r.Use(middleware.RequireRole(auth.RoleAdmin))
 				r.Mount("/admin/users", admin.NewUsersHandlers(pool).Routes())
 			})
-
-			// Domain modules — added as their handler packages land.
-			// r.Mount("/calls", calls.Routes(...))
-			// r.Mount("/contacts", contacts.Routes(...))
 		})
 	})
 
@@ -204,9 +200,6 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 
 		r.Get("/queue/stats", stubHandler("E3.4 admin: queue stats — added later"))
 		r.Mount("/users", admin.NewUsersHandlers(pool).Routes())
-		// r.Mount("/policies", admin.PolicyRoutes(...))
-		// r.Mount("/gdpr", admin.GDPRRoutes(...))
-		// r.Mount("/audit", admin.AuditRoutes(...))
 	})
 
 	srv := &http.Server{

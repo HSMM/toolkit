@@ -1,11 +1,28 @@
 # Toolkit — runbook развёртывания
 
-Шаблон для DevOps/админа: первичный деплой и эксплуатация Toolkit в корпоративной сети. Адаптируйте плейсхолдеры (`<APP_SERVER>`, `<PROXY_HOST>`, `<TOOLKIT_DOMAIN>`, `<TURN_DOMAIN>`) под свою инфраструктуру.
+Шаблон для DevOps/админа: первичный деплой и эксплуатация Toolkit в корпоративной сети.
 
 Связанные документы (поставляются вне публичного репо):
 - ТЗ MVP — функциональные и нефункциональные требования.
 - Архитектурный документ — компоненты, потоки, модель данных.
 - `README.md` — публичное описание продукта.
+
+---
+
+## Плейсхолдеры
+
+Перед запуском подставьте эти значения по всему документу (`sed -i`, `Find&Replace`
+или вручную). Все примеры написаны через них, чтобы упростить адаптацию.
+
+| Плейсхолдер | Пример | Назначение |
+|---|---|---|
+| `<APP_SERVER>` | `10.0.5.42` | Внутренний IP сервера, где крутится docker compose стек |
+| `<APP_BIND_PORT>` | `18001` | Порт, на котором web-контейнер виден reverse-proxy (`APP_BIND_PORT` в `.env`, не публикуется в Internet) |
+| `<PROXY_HOST>` | `proxy.company.local` | Хост reverse-proxy (Nginx Proxy Manager, HAProxy и т.п.); часто совпадает с edge-сервером |
+| `<TOOLKIT_DOMAIN>` | `toolkit.example.com` | Публичный домен для SPA / REST API / WebSocket-сигналинга LiveKit |
+| `<LIVEKIT_DOMAIN>` | `lk.example.com` | Публичный домен для `wss://` сигналинга LiveKit (отдельный proxy-host с включённым WebSockets Support) |
+| `<TURN_DOMAIN>` | `turn.example.com` | DNS-имя coturn для STUN/TURN; `realm` в conf coturn должен совпадать |
+| `<PUBLIC_IP>` | `198.51.100.20` | Публичный IP для DNAT (часто = WAN-адрес border-router) |
 
 ---
 

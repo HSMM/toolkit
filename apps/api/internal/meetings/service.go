@@ -283,10 +283,6 @@ func (s *Service) Join(ctx context.Context, subj *auth.Subject, meetingID uuid.U
 		return nil, fmt.Errorf("mint token: %w", err)
 	}
 
-	// Если на встрече уже идёт запись — автоматом стартуем egress для этого
-	// пользователя (best-effort, ошибка только в лог).
-	go s.MaybeStartEgressForParticipant(context.Background(), m.ID, identity)
-
 	return &JoinResult{
 		Token:    tok,
 		WSURL:    s.publicWS,
@@ -567,14 +563,6 @@ func (s *Service) AdmitGuest(ctx context.Context, subj *auth.Subject, meetingID,
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return err
-	}
-	// Если admit и идёт запись — стартанём egress для этого гостя.
-	if allow {
-		var identity string
-		_ = s.db.QueryRow(ctx, `SELECT livekit_identity FROM participant WHERE id=$1`, participantID).Scan(&identity)
-		if identity != "" {
-			go s.MaybeStartEgressForParticipant(context.Background(), m.ID, identity)
-		}
 	}
 	return nil
 }
