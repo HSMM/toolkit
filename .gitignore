@@ -1,0 +1,45 @@
+.env
+.env.local
+.env.*.local
+
+# Docker volumes (data)
+data/
+/volumes/
+
+# Build artifacts
+dist/
+build/
+target/
+*.exe
+*.o
+
+# Node
+node_modules/
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+
+# Go
+*.test
+coverage.out
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Backups
+*.bak
+*.backup
+
+# Egress output (локальная разработка)
+/egress-output/
+
+# Миграционные локи
+*.lock

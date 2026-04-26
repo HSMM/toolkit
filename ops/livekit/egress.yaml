@@ -1,0 +1,27 @@
+# LiveKit Egress config.
+# Документация: https://docs.livekit.io/home/egress/deployment/
+
+redis:
+  address: redis:6379
+
+api_key: devkey
+api_secret: change-me-at-least-32-chars-long-secret
+ws_url: ws://livekit:7880
+
+# Локальный файловый вывод (dev). В prod — S3/MinIO via env.
+file_outputs:
+  - path: /out
+
+# insecure_outputs: true   # раскомментировать если egress → MinIO без TLS
+
+logging:
+  level: info
+  json: false
+
+# Ограничения параллельных задач (см. ТЗ 3.2.3):
+template_port: 7980
+cpu_cost:
+  room_composite_cpu_cost: 3.0
+  audio_room_composite_cpu_cost: 1.0
+  track_composite_cpu_cost: 2.0
+  track_cpu_cost: 1.0

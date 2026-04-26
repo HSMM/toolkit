@@ -1,0 +1,113 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "reqps"}},
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 0},
+      "id": 1,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}},
+      "targets": [{
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "expr": "sum by(method, route) (rate(http_requests_total{job=\"api\"}[1m]))",
+        "refId": "A",
+        "legendFormat": "{{method}} {{route}}"
+      }],
+      "title": "Request Rate (api)",
+      "description": "Активируется когда apps/api expose-нёт /metrics с http_requests_total. См. эпик E3.6 декомпозиции.",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "s"}},
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 0},
+      "id": 2,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}},
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "histogram_quantile(0.95, sum by(le, route)(rate(http_request_duration_seconds_bucket{job=\"api\"}[5m])))",
+          "refId": "A",
+          "legendFormat": "p95 {{route}}"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "histogram_quantile(0.50, sum by(le, route)(rate(http_request_duration_seconds_bucket{job=\"api\"}[5m])))",
+          "refId": "B",
+          "legendFormat": "p50 {{route}}"
+        }
+      ],
+      "title": "Request Latency",
+      "description": "ТЗ 5.1: целевой p95 ≤ 300 мс на пользовательских действиях.",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1, "thresholds": {"steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.01}, {"color": "red", "value": 0.05}]}}},
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 0},
+      "id": 3,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [{
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "expr": "sum(rate(http_requests_total{job=\"api\",code=~\"5..\"}[5m])) / sum(rate(http_requests_total{job=\"api\"}[5m]))",
+        "refId": "A",
+        "legendFormat": "5xx ratio"
+      }],
+      "title": "Error Rate (5xx)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "short"}},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "id": 4,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}},
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "job_queue_length{job=\"api\"}",
+          "refId": "A",
+          "legendFormat": "queue: {{queue}}"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "rate(job_processed_total{job=\"api\"}[5m])",
+          "refId": "B",
+          "legendFormat": "processed/s {{queue}}"
+        }
+      ],
+      "title": "Job Queue (E3.4 worker)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"thresholds": {"steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "id": 5,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [{
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "expr": "up{job=\"api\"}",
+        "refId": "A",
+        "legendFormat": "api_up"
+      }],
+      "title": "API Up",
+      "type": "stat"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": ["toolkit", "api", "backend"],
+  "templating": {"list": []},
+  "time": {"from": "now-1h", "to": "now"},
+  "timepicker": {},
+  "timezone": "",
+  "title": "Toolkit / API",
+  "uid": "toolkit-api",
+  "version": 1,
+  "weekStart": ""
+}

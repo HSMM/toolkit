@@ -1,0 +1,18 @@
+# LiveKit prod config (используется из docker-compose.prod.yml при host network).
+
+port: 7880
+
+prometheus_port: 6789
+
+rtc:
+  tcp_port: 7881
+  port_range_start: 50000
+  port_range_end: 60000
+  use_external_ip: true         # prod за NAT — да, чтобы STUN обнаружил публичный IP
+
+redis:
+  address: 127.0.0.1:6379        # host network — redis на том же хосте
+
+logging:
+  level: info
+  json: true                     # машиночитаемые логи для Loki

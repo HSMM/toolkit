@@ -1,0 +1,43 @@
+/* Базовый сброс + типографика. Цвета через JS-токены (см. styles/tokens.ts). */
+
+:root {
+  --tk-bg: #ffffff;
+  --tk-bg2: #fafafa;
+  --tk-text: #09090b;
+  --tk-text2: #71717a;
+  --tk-acc: #1E5AA8;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter",
+               Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 14px;
+  color: var(--tk-text);
+  background: var(--tk-bg2);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body, #root { height: 100%; margin: 0; }
+
+body { margin: 0; }
+
+a { color: inherit; text-decoration: none; }
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+}
+
+code, pre, .mono {
+  font-family: "DM Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+/* Tiny scrollbar in WebKit */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: #d4d4d8; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #a1a1aa; }

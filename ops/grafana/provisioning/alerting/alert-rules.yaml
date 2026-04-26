@@ -1,0 +1,201 @@
+apiVersion: 1
+
+# Алерты Grafana. Источник: Prometheus (uid prometheus).
+# Часть правил активируется только когда apps/api expose-нёт свои метрики
+# (livekit_external_*, freepbx_*, gigaam_*, backup_*) — добавляются в эпиках E2/E5/E6/E7.
+
+groups:
+  - orgId: 1
+    name: toolkit-infra
+    folder: Toolkit Alerts
+    interval: 1m
+    rules:
+
+      # ===== Инфраструктура (работает с E0) =====
+
+      - uid: disk-usage-high
+        title: Disk usage > 80%
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange: {from: 300, to: 0}
+            datasourceUid: prometheus
+            model:
+              expr: max by(instance, mountpoint)(1 - (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs|devtmpfs"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs|devtmpfs"})) > 0.80
+              refId: A
+              instant: true
+        noDataState: NoData
+        execErrState: Alerting
+        for: 10m
+        annotations:
+          summary: 'Disk {{ $labels.mountpoint }} on {{ $labels.instance }} > 80%'
+          description: 'Свободного места меньше 20% на {{ $labels.mountpoint }}. Очисти data/, ротируй бэкапы или расширь диск.'
+        labels:
+          severity: warning
+
+      - uid: postgres-down
+        title: Postgres down
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange: {from: 120, to: 0}
+            datasourceUid: prometheus
+            model:
+              expr: pg_up == 0 or absent(pg_up)
+              refId: A
+              instant: true
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 2m
+        annotations:
+          summary: PostgreSQL недоступен
+          description: 'pg_exporter не получает ответа от postgres > 2 мин. Проверь docker compose ps postgres и логи.'
+        labels:
+          severity: critical
+
+      - uid: livekit-down
+        title: LiveKit down
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange: {from: 120, to: 0}
+            datasourceUid: prometheus
+            model:
+              expr: up{job="livekit"} == 0 or absent(up{job="livekit"})
+              refId: A
+              instant: true
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 2m
+        annotations:
+          summary: LiveKit server недоступен
+          description: 'Prometheus не скрейпит livekit:6789 > 2 мин. Активные ВКС-сессии оборвались.'
+        labels:
+          severity: critical
+
+      - uid: api-down
+        title: API down
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange: {from: 120, to: 0}
+            datasourceUid: prometheus
+            model:
+              expr: up{job="api"} == 0
+              refId: A
+              instant: true
+        noDataState: NoData
+        execErrState: Alerting
+        for: 2m
+        annotations:
+          summary: API недоступен
+          description: 'apps/api не отвечает на /metrics > 2 мин. Активирует когда api поднят.'
+        labels:
+          severity: critical
+
+      - uid: api-error-rate-high
+        title: API 5xx > 5%
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: prometheus
+            model:
+              expr: (sum(rate(http_requests_total{job="api",code=~"5.."}[5m])) / sum(rate(http_requests_total{job="api"}[5m]))) > 0.05
+              refId: A
+              instant: true
+        noDataState: NoData
+        execErrState: Alerting
+        for: 5m
+        annotations:
+          summary: API возвращает > 5% 5xx за последние 5 минут
+          description: 'Активируется когда apps/api expose-нёт метрику http_requests_total с label code (см. эпик E3.6).'
+        labels:
+          severity: warning
+
+      # ===== Внешние интеграции (активируются в E1/E5/E7) =====
+      # Эти алерты предполагают, что apps/api expose-нёт пробы:
+      # - external_service_up{service="bitrix24"} в E1
+      # - external_service_up{service="freepbx"} в E5
+      # - external_service_up{service="gigaam"} в E7
+      # До тех пор алерт состоит в NoData (не алертит, ждёт).
+
+      - uid: bitrix24-down
+        title: Bitrix24 SSO недоступен >5 мин
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: prometheus
+            model:
+              expr: external_service_up{service="bitrix24"} == 0
+              refId: A
+              instant: true
+        noDataState: NoData
+        execErrState: Alerting
+        for: 5m
+        annotations:
+          summary: Bitrix24 OAuth недоступен > 5 мин (ТЗ 5.3)
+          description: 'Новые входы в Toolkit блокируются. Существующие сессии работают до истечения access-токена.'
+        labels:
+          severity: critical
+
+      - uid: freepbx-down
+        title: FreePBX недоступен >2 мин
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange: {from: 300, to: 0}
+            datasourceUid: prometheus
+            model:
+              expr: external_service_up{service="freepbx"} == 0
+              refId: A
+              instant: true
+        noDataState: NoData
+        execErrState: Alerting
+        for: 2m
+        annotations:
+          summary: FreePBX недоступен > 2 мин (ТЗ 5.3)
+          description: 'Софтфон не сможет принимать звонки. Импорт CDR/записей остановится.'
+        labels:
+          severity: critical
+
+      - uid: gigaam-down
+        title: GigaAM недоступен >15 мин
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange: {from: 1200, to: 0}
+            datasourceUid: prometheus
+            model:
+              expr: external_service_up{service="gigaam"} == 0
+              refId: A
+              instant: true
+        noDataState: NoData
+        execErrState: Alerting
+        for: 15m
+        annotations:
+          summary: GigaAM транскрибация недоступна > 15 мин (ТЗ 5.3)
+          description: 'Новые задачи транскрибации застрянут в очереди. Проверь GIGAAM_API_URL и контурный сервис.'
+        labels:
+          severity: warning
+
+      - uid: backup-failures
+        title: Бэкап PostgreSQL > 1 ошибка/сутки
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange: {from: 86400, to: 0}
+            datasourceUid: prometheus
+            model:
+              expr: increase(backup_failures_total[24h]) > 1
+              refId: A
+              instant: true
+        noDataState: NoData
+        execErrState: Alerting
+        for: 5m
+        annotations:
+          summary: Бэкап БД фейлится (ТЗ 5.3)
+          description: 'Активируется когда apps/api или postgres-backup expose-нёт backup_failures_total. Сейчас можно проверить вручную: docker compose logs postgres-backup'
+        labels:
+          severity: critical

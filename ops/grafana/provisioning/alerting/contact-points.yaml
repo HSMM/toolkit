@@ -1,0 +1,15 @@
+apiVersion: 1
+
+# Контактные точки для unified alerting.
+# SMTP-параметры заданы env GF_SMTP_* в docker-compose (см. .env.example).
+contactPoints:
+  - orgId: 1
+    name: ops-email
+    receivers:
+      - uid: ops-email
+        type: email
+        settings:
+          addresses: ${ALERT_EMAIL_TO}
+          singleEmail: false
+          subject: '[Toolkit] {{ .Status | toUpper }}: {{ .CommonLabels.alertname }}'
+        disableResolveMessage: false

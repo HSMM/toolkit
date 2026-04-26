@@ -1,0 +1,32 @@
+# LiveKit server config.
+# Ключи подставляются через env LIVEKIT_KEYS в docker-compose.
+# Документация: https://docs.livekit.io/home/self-hosting/deployment/
+
+port: 7880
+
+prometheus_port: 6789           # /metrics для Prometheus scrape (см. ops/prometheus/prometheus.yml)
+
+rtc:
+  tcp_port: 7881
+  port_range_start: 50000
+  port_range_end: 50050      # dev: 50 портов; prod: 50000-60000 в host network
+  use_external_ip: false      # dev; prod — true если за NAT
+
+redis:
+  address: redis:6379
+
+logging:
+  level: info
+  json: false
+
+# webhook:
+#   api_key: devkey
+#   urls:
+#     - http://api:8080/webhooks/livekit
+
+# В prod этот блок включается как override:
+# turn:
+#   enabled: true
+#   domain: turn.softservice.by
+#   tls_port: 5349
+#   udp_port: 3478

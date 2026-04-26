@@ -1,0 +1,25 @@
+node_modules/
+dist/
+.vite/
+.cache/
+
+# tsc -b artifacts (мы используем noEmit, но composite refs создают .d.ts/.js)
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
+playwright.config.js
+playwright.config.d.ts
+
+# Test artifacts
+coverage/
+test-results/
+playwright-report/
+.playwright/
+
+# Generated API client
+src/api/schema.gen.ts
+
+# IDE
+.vscode/
+.idea/
+*.log

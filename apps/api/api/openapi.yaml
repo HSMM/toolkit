@@ -1,0 +1,201 @@
+openapi: 3.1.0
+info:
+  title: Toolkit API
+  version: 0.0.1
+  description: |
+    Корпоративный портал коммуникаций. Источник истины для контракта между
+    backend (apps/api) и frontend (apps/web).
+
+    Все эндпоинты под `/api/v1` требуют JWT bearer-токен (Authorization: Bearer <jwt>).
+    OAuth и health-эндпоинты — без авторизации.
+
+    Это начальная версия (E3.5). По мере добавления модулей (E5/E6/E7/E8) спецификация
+    будет расширяться.
+servers:
+  - url: https://toolkit.softservice.by
+    description: Production
+  - url: http://localhost:8080
+    description: Local dev
+
+# ──────────────────────────────────────────────────────────────────────────────
+
+paths:
+  /healthz:
+    get:
+      tags: [health]
+      summary: Liveness probe
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HealthResponse" }
+        "503":
+          description: Unhealthy (DB down)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HealthResponse" }
+
+  /readyz:
+    get:
+      tags: [health]
+      summary: Readiness probe
+      responses:
+        "200": { description: OK }
+
+  /version:
+    get:
+      tags: [health]
+      summary: Build version
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version: { type: string }
+                  mode: { type: string }
+
+  /oauth/login:
+    get:
+      tags: [auth]
+      summary: Redirect to Bitrix24 OAuth (E1.2)
+      parameters:
+        - in: query
+          name: return_to
+          schema: { type: string }
+          description: Path on the SPA to redirect to after successful login.
+      responses:
+        "302":
+          description: Redirect to Bitrix24 authorize endpoint with state.
+
+  /oauth/callback:
+    get:
+      tags: [auth]
+      summary: Bitrix24 OAuth callback (E1.2)
+      parameters:
+        - in: query
+          name: code
+          required: true
+          schema: { type: string }
+        - in: query
+          name: state
+          required: true
+          schema: { type: string }
+      responses:
+        "302":
+          description: Sets HttpOnly refresh cookie + access JWT, redirects to SPA.
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+              description: HttpOnly Secure refresh token cookie.
+
+  /oauth/install:
+    post:
+      tags: [auth]
+      summary: Bitrix24 local app installation handler (E1.2)
+      description: |
+        Bitrix24 portal POSTs here when an admin installs the local app on the
+        portal. Toolkit stores the app-scoped token for background sync.
+      responses:
+        "200": { description: OK }
+
+  /oauth/logout:
+    post:
+      tags: [auth]
+      summary: Logout (E1.5)
+      description: Revokes the current session. Optional global=1 also clears Bitrix24 cookie.
+      parameters:
+        - in: query
+          name: global
+          schema: { type: boolean, default: false }
+      responses:
+        "200": { description: OK }
+
+  /api/v1/me:
+    get:
+      tags: [users]
+      summary: Current authenticated user
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MeResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/ws:
+    get:
+      tags: [events]
+      summary: WebSocket events channel (E3.3)
+      description: |
+        Long-lived WS connection scoped to the authenticated user. Server pushes
+        events of type `incoming_call`, `meeting_invited`, `transcript_ready`,
+        `session_revoked`, etc. Client must reconnect with backoff on close.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "101":
+          description: Switching Protocols (WebSocket upgrade)
+
+# ──────────────────────────────────────────────────────────────────────────────
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  responses:
+    Unauthorized:
+      description: Missing/invalid/expired JWT
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Forbidden:
+      description: Authenticated, but insufficient role/permission
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:    { type: string, example: "Forbidden" }
+            message: { type: string, example: "insufficient role" }
+
+    HealthResponse:
+      type: object
+      properties:
+        status: { type: string, enum: ["ok", "unhealthy"] }
+        db:     { type: string, enum: ["up", "down"], nullable: true }
+
+    MeResponse:
+      type: object
+      required: [user_id, email, role, session_id]
+      properties:
+        user_id:    { type: string, format: uuid }
+        email:      { type: string, format: email }
+        role:       { type: string, enum: ["user", "admin"] }
+        supervises: { type: integer, description: "Number of direct reports (for contextual manager role)" }
+        session_id: { type: string, format: uuid }
+
+    WSEvent:
+      type: object
+      required: [type, issued_at]
+      properties:
+        type:      { type: string, example: "incoming_call" }
+        payload:   { type: object, additionalProperties: true }
+        issued_at: { type: string, format: date-time }

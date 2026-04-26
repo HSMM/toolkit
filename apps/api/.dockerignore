@@ -1,0 +1,9 @@
+.git
+.github
+Dockerfile
+.dockerignore
+*.md
+.idea
+.vscode
+**/*.test
+coverage.out

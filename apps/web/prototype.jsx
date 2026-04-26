@@ -1,0 +1,1783 @@
+import { useState, useEffect, useRef, createContext, useContext } from "react";
+import {
+  Phone, Video, MessageSquare, Users, FileText, HelpCircle,
+  Settings, Mic, MicOff, VideoOff, PhoneOff, Monitor, Search,
+  Plus, ExternalLink, Play, Pause, Download, Edit2, X, Check,
+  RefreshCw, User, PhoneIncoming, PhoneOutgoing, PhoneMissed,
+  Save, Volume2, Wifi, Hash, Shield, Clock, Mail, Key, LogOut,
+  Copy, Upload, FileAudio, Trash2, Send, ChevronRight, Inbox,
+  Bell, Activity, BarChart3, Headphones, ArrowRightLeft, Minus
+} from "lucide-react";
+
+// ─── Color palette ───
+const C = {
+  bg: "#ffffff", bg2: "#fafafa", bg3: "#f4f4f5",
+  border: "#e4e4e7", border2: "#d4d4d8",
+  text: "#09090b", text2: "#71717a", text3: "#a1a1aa",
+  acc: "#1E5AA8", accHov: "#164A8F",
+  accBg: "#EFF4FB", accBg2: "#DBE7F5", accBrd: "#A3BEE0", accTx: "#143E73",
+  err: "#ef4444", errBg: "#fef2f2", errBrd: "#fecaca", errTx: "#991b1b",
+  warn: "#f59e0b", warnBg: "#fffbeb", warnBrd: "#fcd34d", warnTx: "#92400e",
+  ok: "#10b981", okBg: "#ecfdf5", okBrd: "#a7f3d0", okTx: "#065f46",
+  purp: "#a855f7", purpBg: "#faf5ff", purpBrd: "#d8b4fe", purpTx: "#7c3aed",
+  card: "#ffffff",
+};
+
+const LOGO_URL = "https://www.softservice.by/upload/CAllcorp3/c07/366fkgru59ox7tvosrxlf386mnawnx73.png";
+
+// Empty by default
+const USERS_INIT = [
+  { id:1, name:"Дмитрий Волков", email:"d.volkov@softservice.by", dept:"ИТ", ext:null, role:"admin", st:"active", login:"Сейчас", av:"ДВ", col:"#6366f1" },
+];
+
+const STATUSES = {
+  available: { label:"Доступен",      col:"#10b981" },
+  busy:      { label:"Занят",         col:"#f59e0b" },
+  dnd:       { label:"Не беспокоить", col:"#ef4444" },
+  lunch:     { label:"На обеде",      col:"#fb923c" },
+  away:      { label:"Отошёл",        col:"#a1a1aa" },
+};
+const STATUS_ORDER = ["available","busy","dnd","lunch","away"];
+
+// ─── App context ───
+const AppCtx = createContext(null);
+const useApp = () => useContext(AppCtx);
+
+function AppProvider({ children }) {
+  const [status, setStatus] = useState("available");
+  const [notifs, setNotifs] = useState([]);
+  const [phoneOpen, setPhoneOpen] = useState(false);
+  const push = (n) => setNotifs(l => [{ id:Date.now()+Math.random(), ts:Date.now(), read:false, ...n }, ...l]);
+  const markAllRead = () => setNotifs(l => l.map(n => ({...n, read:true})));
+  const remove = id => setNotifs(l => l.filter(n => n.id !== id));
+  const clear = () => setNotifs([]);
+  const unread = notifs.filter(n => !n.read).length;
+  return (
+    <AppCtx.Provider value={{ status, setStatus, notifs, push, markAllRead, remove, clear, unread, phoneOpen, setPhoneOpen }}>
+      {children}
+    </AppCtx.Provider>
+  );
+}
+
+function fmtRelTime(ts) {
+  const diff = Date.now() - ts;
+  if (diff < 60000) return "только что";
+  if (diff < 3600000) return `${Math.floor(diff/60000)} мин. назад`;
+  if (diff < 86400000) return `${Math.floor(diff/3600000)} ч. назад`;
+  return new Date(ts).toLocaleDateString("ru-RU");
+}
+
+// ─── Primitives ───
+function Av({ i, c, sz=32 }) {
+  return <div style={{ width:sz, height:sz, borderRadius:"50%", background:c||"#6366f1", display:"flex", alignItems:"center", justifyContent:"center", fontSize:sz>40?15:sz>30?12:10, fontWeight:600, color:"white", flexShrink:0 }}>{i}</div>;
+}
+
+function Bdg({ children, v="def" }) {
+  const S = {
+    def:  { bg:C.bg3,    tx:C.text2,  brd:C.border },
+    adm:  { bg:C.purpBg, tx:C.purpTx, brd:C.purpBrd },
+    ok:   { bg:C.accBg,  tx:C.accTx,  brd:C.accBrd },
+    err:  { bg:C.errBg,  tx:C.errTx,  brd:C.errBrd },
+    warn: { bg:C.warnBg, tx:C.warnTx, brd:C.warnBrd },
+    proc: { bg:C.warnBg, tx:C.warnTx, brd:C.warnBrd },
+    blue: { bg:C.accBg,  tx:C.accTx,  brd:C.accBrd },
+  };
+  const s = S[v]||S.def;
+  return <span style={{ background:s.bg, color:s.tx, border:`1px solid ${s.brd}`, fontSize:11, fontWeight:500, padding:"2px 8px", borderRadius:999, whiteSpace:"nowrap", display:"inline-flex", alignItems:"center", gap:4 }}>{children}</span>;
+}
+
+function Empty({ Icon=Inbox, title, sub, action }) {
+  return (
+    <div style={{ padding:"60px 24px", textAlign:"center", display:"flex", flexDirection:"column", alignItems:"center" }}>
+      <div style={{ width:56, height:56, borderRadius:14, background:C.bg3, display:"flex", alignItems:"center", justifyContent:"center", marginBottom:16 }}>
+        <Icon size={24} color={C.text3}/>
+      </div>
+      <div style={{ fontSize:14, fontWeight:600, color:C.text, marginBottom:6 }}>{title}</div>
+      {sub && <div style={{ fontSize:13, color:C.text2, lineHeight:1.55, maxWidth:340 }}>{sub}</div>}
+      {action && <div style={{ marginTop:16 }}>{action}</div>}
+    </div>
+  );
+}
+
+const inp = () => ({ width:"100%", padding:"9px 12px", border:`1px solid ${C.border}`, borderRadius:8, fontSize:14, color:C.text, outline:"none", boxSizing:"border-box", fontFamily:"inherit", background:C.card, transition:"border-color .12s" });
+function Lbl({ children }) { return <label style={{ display:"block",fontSize:11,fontWeight:600,color:C.text2,marginBottom:6,textTransform:"uppercase",letterSpacing:"0.07em" }}>{children}</label>; }
+function Field({ label, children }) { return <div style={{ marginBottom:14 }}><Lbl>{label}</Lbl>{children}</div>; }
+
+// ─── Notification bell ───
+const NOTIF_META = {
+  meeting:       { Icon: Video,        col: C.acc,   bg: C.accBg },
+  call:          { Icon: Phone,        col: C.acc,   bg: C.accBg },
+  miss:          { Icon: PhoneMissed,  col: C.err,   bg: C.errBg },
+  transcription: { Icon: FileText,     col: C.purp,  bg: C.purpBg },
+  request:       { Icon: Hash,         col: C.warn,  bg: C.warnBg },
+  system:        { Icon: Bell,         col: C.text2, bg: C.bg3 },
+};
+
+function NotificationBell() {
+  const { notifs, markAllRead, remove, clear, unread } = useApp();
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const onClick = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    if (open) document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, [open]);
+
+  return (
+    <div ref={ref} style={{ position:"relative" }}>
+      <button onClick={() => setOpen(o=>!o)} title="Уведомления"
+        style={{ position:"relative", width:36, height:36, borderRadius:8, display:"flex", alignItems:"center", justifyContent:"center", background: open ? C.bg3 : "transparent", color: open ? C.text : C.text2, cursor:"pointer", border:`1px solid ${open?C.border:"transparent"}`, transition:"all .12s" }}
+        onMouseEnter={e=>{ if (!open) { e.currentTarget.style.background=C.bg3; e.currentTarget.style.color=C.text; } }}
+        onMouseLeave={e=>{ if (!open) { e.currentTarget.style.background="transparent"; e.currentTarget.style.color=C.text2; } }}>
+        <Bell size={17} />
+        {unread > 0 && (
+          <span style={{ position:"absolute", top:3, right:3, minWidth:16, height:16, padding:"0 4px", borderRadius:8, background:C.err, color:"white", fontSize:9.5, fontWeight:700, display:"flex", alignItems:"center", justifyContent:"center", border:`1.5px solid ${C.card}`, lineHeight:1 }}>
+            {unread > 9 ? "9+" : unread}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div style={{ position:"absolute", top:"calc(100% + 6px)", right:0, width:360, maxHeight:480, display:"flex", flexDirection:"column", background: C.card, borderRadius:12, border:`1px solid ${C.border}`, boxShadow:"0 14px 40px rgba(0,0,0,0.14)", zIndex:100, overflow:"hidden" }}>
+          <div style={{ padding:"12px 14px", borderBottom:`1px solid ${C.border}`, display:"flex", alignItems:"center", justifyContent:"space-between", gap:10 }}>
+            <div style={{ minWidth:0 }}>
+              <div style={{ fontSize:14, fontWeight:600, color:C.text }}>Уведомления</div>
+              <div style={{ fontSize:11.5, color:C.text3, marginTop:1 }}>
+                {notifs.length === 0 ? "Нет новых" : unread > 0 ? `${unread} непрочитанных · ${notifs.length} всего` : `${notifs.length} прочитано`}
+              </div>
+            </div>
+            <div style={{ display:"flex", gap:4, flexShrink:0 }}>
+              {unread > 0 && (
+                <button onClick={markAllRead} style={{ fontSize:11.5, color:C.accTx, background:"none", border:"none", cursor:"pointer", fontFamily:"inherit", padding:"4px 7px", borderRadius:5, fontWeight:500 }}>
+                  Прочитать всё
+                </button>
+              )}
+              {notifs.length > 0 && (
+                <button onClick={clear} style={{ fontSize:11.5, color:C.text2, background:"none", border:"none", cursor:"pointer", fontFamily:"inherit", padding:"4px 7px", borderRadius:5 }}>
+                  Очистить
+                </button>
+              )}
+            </div>
+          </div>
+          <div style={{ flex:1, overflowY:"auto" }}>
+            {notifs.length === 0 ? (
+              <div style={{ padding:"32px 20px", textAlign:"center" }}>
+                <div style={{ width:48, height:48, borderRadius:12, background:C.bg3, display:"flex", alignItems:"center", justifyContent:"center", margin:"0 auto 12px" }}>
+                  <Bell size={20} color={C.text3} />
+                </div>
+                <div style={{ fontSize:13, color:C.text, fontWeight:500 }}>Новых уведомлений нет</div>
+                <div style={{ fontSize:11.5, color:C.text3, marginTop:4, lineHeight:1.5 }}>Здесь появятся пропущенные звонки,<br/>приглашения и готовые транскрибации</div>
+              </div>
+            ) : notifs.map(n => {
+              const meta = NOTIF_META[n.type] || NOTIF_META.system;
+              const M = meta.Icon;
+              return (
+                <div key={n.id} style={{ padding:"11px 14px", display:"flex", gap:10, background: n.read ? "transparent" : C.accBg, borderLeft: n.read ? "3px solid transparent" : `3px solid ${C.acc}`, borderBottom:`1px solid ${C.border}` }}>
+                  <div style={{ width:32, height:32, borderRadius:9, background:meta.bg, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, marginTop:1 }}>
+                    <M size={15} color={meta.col}/>
+                  </div>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:12.5, fontWeight:600, color:C.text }}>{n.title}</div>
+                    {n.desc && <div style={{ fontSize:11.5, color:C.text2, marginTop:2, lineHeight:1.45 }}>{n.desc}</div>}
+                    <div style={{ fontSize:10.5, color:C.text3, marginTop:4 }}>{fmtRelTime(n.ts)}</div>
+                  </div>
+                  <button onClick={()=>remove(n.id)} title="Удалить"
+                    style={{ width:22, height:22, borderRadius:5, background:"transparent", color:C.text3, cursor:"pointer", border:"none", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, alignSelf:"flex-start", opacity:0.6, padding:0 }}>
+                    <X size={12}/>
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Status selector + Phone toggle (bottom of sidebar) ───
+function StatusSelector({ expanded }) {
+  const { status, setStatus } = useApp();
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  const cur = STATUSES[status];
+
+  useEffect(() => {
+    const onClick = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    if (open) document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, [open]);
+
+  return (
+    <div ref={ref} style={{ position:"relative", flex:1, minWidth:0 }}>
+      <button onClick={() => setOpen(o=>!o)} title={!expanded ? `Статус: ${cur.label} · изменить` : undefined}
+        style={{ width:"100%", padding:"7px 10px", borderRadius:8, background: open ? C.bg3 : "transparent", display:"flex", alignItems:"center", gap:10, border:"none", cursor:"pointer", fontFamily:"inherit", transition:"background .12s", whiteSpace:"nowrap", overflow:"hidden" }}
+        onMouseEnter={e=>{ if (!open) e.currentTarget.style.background=C.bg3; }}
+        onMouseLeave={e=>{ if (!open) e.currentTarget.style.background="transparent"; }}>
+        <div style={{ width:18, height:18, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+          <span style={{ width:9, height:9, borderRadius:"50%", background:cur.col, boxShadow: status==="available" ? `0 0 0 2px ${cur.col}33` : "none" }}/>
+        </div>
+        <span style={{ flex:1, textAlign:"left", fontSize:12.5, fontWeight:500, color:C.text2, opacity:expanded?1:0, transition:"opacity 120ms", transitionDelay:expanded?"80ms":"0ms" }}>{cur.label}</span>
+        {expanded && <ChevronRight size={12} color={C.text3} style={{ transform: open ? "rotate(90deg)" : "rotate(0)", transition:"transform .15s" }}/>}
+      </button>
+      {open && (
+        <div style={{ position:"absolute", bottom:"calc(100% + 4px)", left:0, right:0, background:C.card, border:`1px solid ${C.border}`, borderRadius:10, boxShadow:"0 14px 32px rgba(0,0,0,0.12)", padding:4, zIndex:30, minWidth: expanded ? 0 : 190 }}>
+          {STATUS_ORDER.map(id => {
+            const s = STATUSES[id];
+            const active = id === status;
+            return (
+              <button key={id} onClick={()=>{ setStatus(id); setOpen(false); }}
+                style={{ display:"flex", alignItems:"center", gap:10, width:"100%", padding:"8px 10px", borderRadius:6, background: active ? C.accBg : "transparent", color: active ? C.accTx : C.text, border:"none", cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:active?600:500, textAlign:"left", whiteSpace:"nowrap" }}
+                onMouseEnter={e=>{ if (!active) e.currentTarget.style.background=C.bg3; }}
+                onMouseLeave={e=>{ if (!active) e.currentTarget.style.background="transparent"; }}>
+                <span style={{ width:9, height:9, borderRadius:"50%", background:s.col, flexShrink:0 }}/>
+                <span style={{ flex:1 }}>{s.label}</span>
+                {active && <Check size={13}/>}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PhoneToggle({ expanded }) {
+  const { phoneOpen, setPhoneOpen } = useApp();
+  return (
+    <button onClick={() => setPhoneOpen(o=>!o)} title={phoneOpen ? "Скрыть софтфон" : "Открыть софтфон"}
+      style={{
+        width: expanded ? 34 : "100%",
+        height: 34,
+        borderRadius: 8,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: phoneOpen ? C.acc : "transparent",
+        color: phoneOpen ? "white" : C.text2,
+        cursor: "pointer",
+        border: phoneOpen ? "none" : `1px solid ${C.border}`,
+        flexShrink: 0,
+        transition: "all .12s",
+        fontFamily: "inherit",
+      }}
+      onMouseEnter={e=>{ if (!phoneOpen) { e.currentTarget.style.background = C.bg3; e.currentTarget.style.color = C.text; }}}
+      onMouseLeave={e=>{ if (!phoneOpen) { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = C.text2; }}}>
+      <Phone size={15} strokeWidth={2}/>
+    </button>
+  );
+}
+
+function BottomActions({ expanded }) {
+  return (
+    <div style={{
+      padding: "0 4px 4px",
+      display: "flex",
+      flexDirection: expanded ? "row" : "column",
+      alignItems: "stretch",
+      gap: 4,
+    }}>
+      <StatusSelector expanded={expanded}/>
+      <PhoneToggle expanded={expanded}/>
+    </div>
+  );
+}
+
+function PgHdr({ title, sub, action }) {
+  return (
+    <div style={{ padding:"22px 28px 18px", borderBottom:`1px solid ${C.border}`, background:C.card, display:"flex", alignItems:"center", justifyContent:"space-between", gap:14 }}>
+      <div style={{ minWidth:0 }}>
+        <h1 style={{ margin:0, fontSize:22, fontWeight:600, color:C.text, letterSpacing:"-0.02em", fontFamily:"inherit" }}>{title}</h1>
+        {sub && <p style={{ margin:"3px 0 0", fontSize:13.5, color:C.text2 }}>{sub}</p>}
+      </div>
+      <div style={{ display:"flex", alignItems:"center", gap:10, flexShrink:0 }}>
+        {action}
+        <NotificationBell/>
+      </div>
+    </div>
+  );
+}
+
+function NavItem({ item, active, expanded, onClick }) {
+  const [hov, setHov] = useState(false);
+  const bg = active ? C.bg3 : hov ? C.bg3 : "transparent";
+  const col = active ? C.text : C.text2;
+  return (
+    <button onClick={onClick} onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)}
+      title={!expanded ? item.label : undefined}
+      style={{ display:"flex", alignItems:"center", gap:11, width:"calc(100% - 8px)", margin:"1px 4px", padding:"9px 12px", borderRadius:8, background:bg, color:col, transition:"background 120ms, color 120ms", position:"relative", cursor:"pointer", border:"none", fontFamily:"inherit", overflow:"hidden", whiteSpace:"nowrap" }}>
+      <item.Icon size={18} style={{ flexShrink:0 }} strokeWidth={active?2.1:1.75} />
+      <span style={{ fontSize:13.5, fontWeight:active?600:500, flex:1, textAlign:"left", opacity:expanded?1:0, transition:"opacity 120ms", transitionDelay:expanded?"80ms":"0ms" }}>{item.label}</span>
+      {item.stub && <span style={{ fontSize:10, fontWeight:600, background:C.bg, border:`1px solid ${C.border}`, color:C.text3, padding:"1px 6px", borderRadius:4, opacity:expanded?1:0, transition:"opacity 120ms", transitionDelay:expanded?"80ms":"0ms" }}>скоро</span>}
+      {active && <div style={{ position:"absolute", left:0, top:"50%", transform:"translateY(-50%)", width:3, height:18, background:C.acc, borderRadius:"0 2px 2px 0" }} />}
+    </button>
+  );
+}
+
+// ─── SOFTPHONE WIDGET (floating popup) ───
+function SoftphoneWidget() {
+  const { phoneOpen, setPhoneOpen } = useApp();
+  const [val, setVal] = useState("");
+  const [cs, setCs] = useState("idle");
+  const [sec, setSec] = useState(0);
+  const [muted, setMuted] = useState(false);
+  const [held, setHeld] = useState(false);
+  const [minimized, setMinimized] = useState(false);
+  const tmr = useRef(null); const call = useRef(null);
+
+  const fmt = s => `${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`;
+
+  const startCall = () => {
+    if (!val) return;
+    setCs("calling");
+    call.current = setTimeout(() => {
+      setCs("active"); setSec(0);
+      tmr.current = setInterval(() => setSec(s => s+1), 1000);
+    }, 1600);
+  };
+
+  const hangUp = () => {
+    clearTimeout(call.current); clearInterval(tmr.current);
+    setCs("idle"); setSec(0); setMuted(false); setHeld(false); setVal("");
+  };
+
+  useEffect(() => () => { clearTimeout(call.current); clearInterval(tmr.current); }, []);
+
+  const pad = ["1","2","3","4","5","6","7","8","9","*","0","#"];
+  const inCall = cs !== "idle";
+
+  return (
+    <div style={{
+      position: "fixed",
+      right: 24,
+      bottom: 24,
+      zIndex: 150,
+      width: 320,
+      background: C.card,
+      borderRadius: 16,
+      boxShadow: "0 18px 50px rgba(0,0,0,0.18), 0 4px 12px rgba(0,0,0,0.05)",
+      border: `1px solid ${C.border}`,
+      overflow: "hidden",
+      display: phoneOpen ? "block" : "none",
+    }}>
+      <style>{`@keyframes blink{0%,100%{opacity:.25;transform:scale(.75)}50%{opacity:1;transform:scale(1)}}`}</style>
+
+      {/* Header */}
+      <div style={{
+        padding: "10px 8px 10px 14px",
+        borderBottom: `1px solid ${C.border}`,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        background: C.bg2,
+      }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8, minWidth:0 }}>
+          <div style={{ width:24, height:24, borderRadius:6, background:inCall?C.accBg:C.bg3, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+            <Phone size={12} color={inCall?C.acc:C.text2}/>
+          </div>
+          <span style={{ fontSize:13, fontWeight:600, color:C.text }}>Софтфон</span>
+          {inCall && (
+            <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, color:C.acc, fontWeight:600, marginLeft:4 }}>
+              <span style={{ width:6, height:6, borderRadius:"50%", background:C.acc }}/>
+              {cs === "active" ? fmt(sec) : "вызов…"}
+            </span>
+          )}
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:2 }}>
+          <button onClick={()=>setMinimized(m=>!m)} title={minimized?"Развернуть":"Свернуть"}
+            style={{ width:26, height:26, borderRadius:6, display:"flex", alignItems:"center", justifyContent:"center", background:"transparent", color:C.text2, cursor:"pointer", border:"none" }}
+            onMouseEnter={e=>{e.currentTarget.style.background=C.bg3;}}
+            onMouseLeave={e=>{e.currentTarget.style.background="transparent";}}>
+            <Minus size={14}/>
+          </button>
+          <button onClick={()=>setPhoneOpen(false)} title="Закрыть"
+            style={{ width:26, height:26, borderRadius:6, display:"flex", alignItems:"center", justifyContent:"center", background:"transparent", color:C.text2, cursor:"pointer", border:"none" }}
+            onMouseEnter={e=>{e.currentTarget.style.background=C.bg3;}}
+            onMouseLeave={e=>{e.currentTarget.style.background="transparent";}}>
+            <X size={14}/>
+          </button>
+        </div>
+      </div>
+
+      {!minimized && <>
+        <div style={{ padding:"10px 14px 8px", borderBottom:`1px solid ${C.border}`, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+          <div style={{ display:"flex", alignItems:"center", gap:7 }}>
+            <div style={{ width:7, height:7, borderRadius:"50%", background:C.text3 }} />
+            <span style={{ color:C.text2, fontSize:11.5, fontWeight:500 }}>Номер не назначен</span>
+          </div>
+          <div style={{ display:"flex", alignItems:"center", gap:5, color:C.text3, fontSize:11 }}>
+            <Wifi size={11} /><span>FreePBX</span>
+          </div>
+        </div>
+
+        <div style={{ padding:"22px 18px 12px", textAlign:"center", minHeight:108 }}>
+          {cs==="idle" && (
+            <div>
+              <div style={{ fontFamily:"'DM Mono', monospace", fontSize: val?28:14, fontWeight:500, color: val?C.text:C.text3, letterSpacing:"0.02em", minHeight:40, display:"flex", alignItems:"center", justifyContent:"center" }}>
+                {val || "Введите номер"}
+              </div>
+              {val && <button onClick={()=>setVal(v=>v.slice(0,-1))} style={{ marginTop:4, color:C.text2, fontSize:12, background:"none", border:"none", cursor:"pointer", fontFamily:"inherit" }}>← удалить</button>}
+            </div>
+          )}
+          {cs==="calling" && (
+            <div>
+              <div style={{ fontSize:13, color:C.text2, marginBottom:6 }}>Вызов…</div>
+              <div style={{ fontFamily:"'DM Mono', monospace", fontSize:22, fontWeight:500, color:C.text }}>{val}</div>
+              <div style={{ marginTop:10, display:"flex", justifyContent:"center", gap:5 }}>
+                {[0,1,2].map(i=><div key={i} style={{ width:7,height:7,borderRadius:"50%",background:C.acc,animation:`blink 1.2s ease-in-out ${i*0.22}s infinite` }}/>)}
+              </div>
+            </div>
+          )}
+          {cs==="active" && (
+            <div>
+              <div style={{ fontSize:11.5, color:C.acc, fontWeight:600, marginBottom:4, display:"flex", alignItems:"center", justifyContent:"center", gap:5 }}>
+                <span style={{ width:6,height:6,borderRadius:"50%",background:C.acc }}/>В разговоре
+              </div>
+              <div style={{ fontFamily:"'DM Mono', monospace", fontSize:20, fontWeight:500, color:C.text }}>{val}</div>
+              <div style={{ fontFamily:"'DM Mono', monospace", fontSize:22, color:C.text2, fontWeight:500, marginTop:4 }}>{fmt(sec)}</div>
+            </div>
+          )}
+        </div>
+
+        {cs==="idle" && (
+          <div style={{ padding:"0 18px 14px", display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:8 }}>
+            {pad.map(k=>(
+              <button key={k} onClick={()=>setVal(v=>v+k)}
+                style={{ padding:"12px 0", borderRadius:10, background:C.bg3, color:C.text, fontSize:17, fontWeight:500, border:`1px solid ${C.border}`, cursor:"pointer", fontFamily:"'DM Mono', monospace" }}>
+                {k}
+              </button>
+            ))}
+          </div>
+        )}
+        {cs==="active" && (
+          <div style={{ padding:"0 18px 14px", display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:8 }}>
+            {[
+              { icon: muted?MicOff:Mic, lbl: muted?"Вкл.":"Без звука", on:muted, fn:()=>setMuted(m=>!m) },
+              { icon: Monitor, lbl:"Запись", on:false, fn:()=>{} },
+              { icon: Phone, lbl: held?"Снять":"Удерж.", on:held, fn:()=>setHeld(h=>!h) },
+            ].map((b,i)=>(
+              <button key={i} onClick={b.fn}
+                style={{ padding:"10px 0", borderRadius:10, background:b.on?C.text:C.bg3, color:b.on?"white":C.text2, display:"flex", flexDirection:"column", alignItems:"center", gap:4, border:`1px solid ${b.on?C.text:C.border}`, cursor:"pointer", fontFamily:"inherit", fontSize:10.5, fontWeight:500 }}>
+                <b.icon size={16} /><span>{b.lbl}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        <div style={{ padding:"0 18px 18px", display:"flex", justifyContent:"center" }}>
+          {cs==="idle"
+            ? <button onClick={startCall} disabled={!val} style={{ width:56,height:56,borderRadius:"50%",background:val?C.acc:C.bg3,border:"none",display:"flex",alignItems:"center",justifyContent:"center",cursor:val?"pointer":"default",boxShadow:val?`0 4px 16px ${C.acc}40`:"none" }}>
+                <Phone size={22} color={val?"white":C.text3} />
+              </button>
+            : <button onClick={hangUp} style={{ width:56,height:56,borderRadius:"50%",background:C.err,border:"none",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",boxShadow:`0 4px 16px ${C.err}40` }}>
+                <PhoneOff size={22} color="white" />
+              </button>}
+        </div>
+      </>}
+    </div>
+  );
+}
+
+// ─── VCS ───
+function VcsPage() {
+  const { push } = useApp();
+  const [modal, setModal] = useState(false);
+  const [join, setJoin] = useState(null);
+  const [meetings, setMeetings] = useState([]);
+  const [mic, setMic] = useState(true);
+  const [cam, setCam] = useState(true);
+
+  const [mode, setMode] = useState("schedule");
+  const [title, setTitle] = useState("");
+  const [date, setDate] = useState(() => new Date(Date.now()+86400000).toISOString().slice(0,10));
+  const [time, setTime] = useState("10:00");
+  const [internal, setInternal] = useState([]);
+  const [searchQ, setSearchQ] = useState("");
+  const [searchFocus, setSearchFocus] = useState(false);
+  const [externals, setExternals] = useState([]);
+  const [newEmail, setNewEmail] = useState("");
+  const [emailErr, setEmailErr] = useState(false);
+  const [transcribe, setTranscribe] = useState(true);
+
+  const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const resetForm = () => { setTitle(""); setInternal([]); setSearchQ(""); setExternals([]); setNewEmail(""); setEmailErr(false); setTranscribe(true); };
+  const openModal = m => { resetForm(); setMode(m); setModal(true); };
+  const closeModal = () => setModal(false);
+  const addInternal = u => { if (!internal.includes(u.id)) setInternal(p => [...p, u.id]); setSearchQ(""); setSearchFocus(false); };
+  const removeInternal = id => setInternal(p => p.filter(x => x !== id));
+  const addEmail = () => {
+    const e = newEmail.trim().toLowerCase();
+    if (!e) return;
+    if (!EMAIL_RE.test(e) || externals.includes(e)) { setEmailErr(true); setTimeout(()=>setEmailErr(false), 2500); return; }
+    setExternals(p => [...p, e]); setNewEmail("");
+  };
+  const removeEmail = e => setExternals(p => p.filter(x => x !== e));
+  const fmtDate = iso => { const [y,m,d] = iso.split("-"); return `${d}.${m}.${y}`; };
+  const fmtTime = d => `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
+
+  const createMeeting = () => {
+    if (!title.trim()) return;
+    const m = { id:Date.now(), title:title.trim(), date:mode==="instant"?"Сейчас":fmtDate(date), time:mode==="instant"?fmtTime(new Date()):time, participants:internal, externals, transcribe, done:false };
+    setMeetings(p => [m, ...p]); closeModal();
+    const recipientCount = internal.length + externals.length;
+    push({
+      type:"meeting",
+      title: mode==="schedule" ? "Встреча запланирована" : "Встреча запущена",
+      desc: mode==="schedule"
+        ? `«${m.title}» · ${m.date} ${m.time}${recipientCount>0?` · приглашено ${recipientCount}`:""}`
+        : `«${m.title}»${recipientCount>0?` · приглашено ${recipientCount}`:""}`
+    });
+    if (mode === "instant") setJoin(m);
+  };
+
+  const filtered = USERS_INIT.filter(u => !internal.includes(u.id) && (u.name.toLowerCase().includes(searchQ.toLowerCase()) || u.email.toLowerCase().includes(searchQ.toLowerCase())));
+  const total = m => m.participants.length + m.externals.length;
+  const canCreate = title.trim().length > 0;
+
+  return (
+    <div style={{ minHeight:"100%", background:C.bg2 }}>
+      <PgHdr title="Видеоконференции" sub="WebRTC SFU · собственный контур"
+        action={
+          <div style={{ display:"flex", gap:10 }}>
+            <button onClick={()=>openModal("schedule")} style={{ display:"flex",alignItems:"center",gap:7,background:C.card,color:C.text,padding:"9px 16px",borderRadius:8,fontWeight:500,fontSize:14,border:`1px solid ${C.border}`,cursor:"pointer",fontFamily:"inherit" }}>
+              <Clock size={15}/>Запланировать
+            </button>
+            <button onClick={()=>openModal("instant")} style={{ display:"flex",alignItems:"center",gap:7,background:C.acc,color:"white",padding:"9px 18px",borderRadius:8,fontWeight:500,fontSize:14,border:"none",cursor:"pointer",fontFamily:"inherit" }}>
+              <Video size={15}/>Создать сейчас
+            </button>
+          </div>
+        }
+      />
+      <div style={{ padding:24 }}>
+        {meetings.length === 0 ? (
+          <Empty Icon={Video}
+            title="Нет встреч"
+            sub="Создайте встречу сейчас или запланируйте на будущее — участникам придёт письмо со ссылкой."
+            action={<button onClick={()=>openModal("instant")} style={{ display:"inline-flex",alignItems:"center",gap:7,background:C.acc,color:"white",padding:"9px 18px",borderRadius:8,fontWeight:500,fontSize:14,border:"none",cursor:"pointer",fontFamily:"inherit" }}><Video size={15}/>Создать встречу</button>}
+          />
+        ) : (
+          <div style={{ display:"flex",flexDirection:"column",gap:10 }}>
+            {meetings.map(m => {
+              const pUsers = m.participants.map(id => USERS_INIT.find(u => u.id === id)).filter(Boolean);
+              return (
+                <div key={m.id} style={{ background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"15px 18px" }}>
+                  <div style={{ display:"flex",alignItems:"flex-start",gap:14 }}>
+                    <div style={{ width:40,height:40,borderRadius:10,background:m.done?C.bg3:C.accBg,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0 }}>
+                      <Video size={18} color={m.done?C.text3:C.acc}/>
+                    </div>
+                    <div style={{ flex:1,minWidth:0 }}>
+                      <div style={{ display:"flex",alignItems:"center",gap:8,flexWrap:"wrap" }}>
+                        <div style={{ fontSize:14,fontWeight:600,color:C.text }}>{m.title}</div>
+                        {m.transcribe && <Bdg v="blue">С транскрибацией</Bdg>}
+                      </div>
+                      <div style={{ fontSize:12.5,color:C.text2,marginTop:3 }}>{m.date} · {m.time} · {total(m)} участника</div>
+                      {(pUsers.length > 0 || m.externals.length > 0) && (
+                        <div style={{ display:"flex",alignItems:"center",gap:10,marginTop:10,flexWrap:"wrap" }}>
+                          {pUsers.length > 0 && (
+                            <div style={{ display:"flex",alignItems:"center" }}>
+                              {pUsers.slice(0,4).map((u,i)=>(
+                                <div key={u.id} title={u.name} style={{ marginLeft: i===0?0:-6, borderRadius:"50%", boxShadow:`0 0 0 2px ${C.card}` }}>
+                                  <Av i={u.av} c={u.col} sz={24}/>
+                                </div>
+                              ))}
+                              {pUsers.length > 4 && <div style={{ marginLeft:-6,width:24,height:24,borderRadius:"50%",background:C.bg3,color:C.text2,fontSize:10,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:`0 0 0 2px ${C.card}` }}>+{pUsers.length-4}</div>}
+                            </div>
+                          )}
+                          {m.externals.slice(0,2).map(e=>(
+                            <span key={e} style={{ display:"inline-flex",alignItems:"center",gap:4,padding:"3px 8px",borderRadius:999,background:C.warnBg,color:C.warnTx,fontSize:11,fontWeight:500,border:`1px solid ${C.warnBrd}` }}>
+                              <Mail size={10}/>{e}
+                            </span>
+                          ))}
+                          {m.externals.length > 2 && <span style={{ fontSize:11,color:C.text2 }}>+{m.externals.length-2} email</span>}
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ flexShrink:0 }}>
+                      {m.done ? <Bdg v="def">Завершена</Bdg>
+                        : <button onClick={()=>setJoin(m)} style={{ background:C.acc,color:"white",padding:"8px 16px",borderRadius:8,fontWeight:500,fontSize:13,border:"none",cursor:"pointer",fontFamily:"inherit" }}>Войти</button>}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {modal && (
+        <div onClick={e=>{if(e.target===e.currentTarget) closeModal();}}
+          style={{ position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",zIndex:200,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"40px 20px",overflowY:"auto" }}>
+          <div style={{ background:C.card,borderRadius:12,width:"100%",maxWidth:560,boxShadow:"0 20px 50px rgba(0,0,0,0.15)",maxHeight:"calc(100vh - 80px)",display:"flex",flexDirection:"column",overflow:"hidden",border:`1px solid ${C.border}` }}>
+            <div style={{ padding:"16px 22px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0 }}>
+              <div>
+                <h3 style={{ margin:0,fontSize:16,fontWeight:600,color:C.text }}>{mode==="schedule" ? "Запланировать встречу" : "Новая встреча"}</h3>
+                <p style={{ margin:"3px 0 0",fontSize:12.5,color:C.text2 }}>{mode==="schedule" ? "Выберите дату и пригласите участников" : "Начнётся сразу после создания"}</p>
+              </div>
+              <button onClick={closeModal} style={{ width:32,height:32,borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",background:"transparent",color:C.text2,cursor:"pointer",border:"none" }}><X size={18}/></button>
+            </div>
+            <div style={{ padding:"14px 22px 0",display:"flex",gap:6,flexShrink:0 }}>
+              {[{ v:"schedule", l:"Запланировать", Icon:Clock }, { v:"instant", l:"Начать сейчас", Icon:Video }].map(t=>(
+                <button key={t.v} onClick={()=>setMode(t.v)}
+                  style={{ flex:1,padding:"9px 12px",borderRadius:8,border:`1px solid ${mode===t.v?C.acc:C.border}`,background:mode===t.v?C.accBg:C.card,color:mode===t.v?C.accTx:C.text2,fontSize:13,fontWeight:500,cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",justifyContent:"center",gap:6 }}>
+                  <t.Icon size={14}/>{t.l}
+                </button>
+              ))}
+            </div>
+            <div style={{ overflowY:"auto",padding:"18px 22px" }}>
+              <Field label="Название">
+                <input value={title} onChange={e=>setTitle(e.target.value)} placeholder="Например: Обсуждение релиза" style={inp()}/>
+              </Field>
+              {mode==="schedule" && (
+                <div style={{ display:"grid",gridTemplateColumns:"1fr 140px",gap:10,marginBottom:14 }}>
+                  <Field label="Дата"><input type="date" value={date} onChange={e=>setDate(e.target.value)} style={inp()}/></Field>
+                  <Field label="Время"><input type="time" value={time} onChange={e=>setTime(e.target.value)} style={inp()}/></Field>
+                </div>
+              )}
+              <div style={{ marginBottom:14,position:"relative" }}>
+                <Lbl>Коллеги</Lbl>
+                <div style={{ display:"flex",alignItems:"center",gap:8,padding:"8px 10px",border:`1px solid ${searchFocus?C.acc:C.border}`,borderRadius:8,background:C.card }}>
+                  <Search size={14} color={C.text3}/>
+                  <input value={searchQ} onChange={e=>setSearchQ(e.target.value)} onFocus={()=>setSearchFocus(true)} onBlur={()=>setTimeout(()=>setSearchFocus(false),200)}
+                    placeholder="Поиск сотрудников…"
+                    style={{ flex:1,border:"none",outline:"none",fontSize:13.5,color:C.text,background:"transparent",fontFamily:"inherit" }}/>
+                </div>
+                {searchFocus && filtered.length > 0 && (
+                  <div style={{ position:"absolute",top:"100%",left:0,right:0,marginTop:4,background:C.card,border:`1px solid ${C.border}`,borderRadius:8,boxShadow:"0 8px 20px rgba(0,0,0,0.1)",zIndex:10,maxHeight:210,overflowY:"auto" }}>
+                    {filtered.slice(0,6).map(u=>(
+                      <button key={u.id} onClick={()=>addInternal(u)}
+                        style={{ display:"flex",alignItems:"center",gap:9,width:"100%",padding:"8px 10px",border:"none",background:"transparent",cursor:"pointer",fontFamily:"inherit",textAlign:"left" }}>
+                        <Av i={u.av} c={u.col} sz={26}/>
+                        <div style={{ flex:1,minWidth:0 }}>
+                          <div style={{ fontSize:13,fontWeight:500,color:C.text }}>{u.name}</div>
+                          <div style={{ fontSize:11,color:C.text3 }}>{u.dept}</div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {searchFocus && searchQ && filtered.length === 0 && (
+                  <div style={{ position:"absolute",top:"100%",left:0,right:0,marginTop:4,background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"12px 14px",fontSize:12.5,color:C.text3,zIndex:10 }}>
+                    Никого не найдено
+                  </div>
+                )}
+                {internal.length > 0 && (
+                  <div style={{ display:"flex",flexWrap:"wrap",gap:6,marginTop:8 }}>
+                    {internal.map(id=>{
+                      const u = USERS_INIT.find(x=>x.id===id); if (!u) return null;
+                      return (
+                        <div key={id} style={{ display:"flex",alignItems:"center",gap:6,padding:"3px 3px 3px 4px",background:C.bg3,border:`1px solid ${C.border}`,borderRadius:999 }}>
+                          <Av i={u.av} c={u.col} sz={22}/>
+                          <span style={{ fontSize:12,color:C.text,fontWeight:500,paddingRight:4 }}>{u.name}</span>
+                          <button onClick={()=>removeInternal(id)} style={{ width:20,height:20,borderRadius:"50%",background:"transparent",color:C.text3,cursor:"pointer",border:"none",display:"flex",alignItems:"center",justifyContent:"center" }}><X size={11}/></button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+              <div style={{ marginBottom:14 }}>
+                <Lbl>Внешние участники</Lbl>
+                <div style={{ display:"flex",gap:6 }}>
+                  <input type="email" value={newEmail} onChange={e=>{setNewEmail(e.target.value);setEmailErr(false);}} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();addEmail();}}}
+                    placeholder="email@example.com" style={{ ...inp(), borderColor:emailErr?C.err:C.border }}/>
+                  <button onClick={addEmail} disabled={!newEmail.trim()}
+                    style={{ padding:"0 14px",borderRadius:8,border:"none",background:newEmail.trim()?C.acc:C.bg3,color:newEmail.trim()?"white":C.text3,fontSize:13,fontWeight:500,cursor:newEmail.trim()?"pointer":"default",fontFamily:"inherit",display:"flex",alignItems:"center",gap:5 }}>
+                    <Plus size={14}/>Добавить
+                  </button>
+                </div>
+                {emailErr && <div style={{ fontSize:11,color:C.err,marginTop:4 }}>Неверный email или уже добавлен</div>}
+                {externals.length > 0 && (
+                  <div style={{ display:"flex",flexWrap:"wrap",gap:6,marginTop:8 }}>
+                    {externals.map(e=>(
+                      <div key={e} style={{ display:"flex",alignItems:"center",gap:5,padding:"4px 6px 4px 10px",background:C.warnBg,border:`1px solid ${C.warnBrd}`,borderRadius:999 }}>
+                        <Mail size={11} color={C.warnTx}/>
+                        <span style={{ fontSize:12,color:C.warnTx,fontWeight:500 }}>{e}</span>
+                        <button onClick={()=>removeEmail(e)} style={{ width:20,height:20,borderRadius:"50%",background:"transparent",color:C.warnTx,cursor:"pointer",border:"none",display:"flex",alignItems:"center",justifyContent:"center" }}><X size={11}/></button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div style={{ fontSize:11,color:C.text3,marginTop:6 }}>На указанные адреса придёт письмо со ссылкой на встречу</div>
+              </div>
+              <label style={{ display:"flex",alignItems:"center",gap:12,padding:"12px 14px",border:`1px solid ${transcribe?C.acc:C.border}`,borderRadius:10,cursor:"pointer",background:transcribe?C.accBg:C.card }}>
+                <div style={{ position:"relative",width:36,height:20,background:transcribe?C.acc:C.border2,borderRadius:10,flexShrink:0 }}>
+                  <div style={{ position:"absolute",top:2,left:transcribe?18:2,width:16,height:16,background:"white",borderRadius:"50%",transition:"left .15s",boxShadow:"0 1px 3px rgba(0,0,0,0.15)" }}/>
+                </div>
+                <input type="checkbox" checked={transcribe} onChange={e=>setTranscribe(e.target.checked)} style={{ display:"none" }}/>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:13.5,fontWeight:600,color:C.text }}>Транскрибация встречи</div>
+                  <div style={{ fontSize:12,color:C.text2,marginTop:2,lineHeight:1.4 }}>Запись и расшифровка через GigaAM — результат появится в модуле «Транскрибация»</div>
+                </div>
+              </label>
+            </div>
+            <div style={{ padding:"14px 22px",borderTop:`1px solid ${C.border}`,display:"flex",gap:10,justifyContent:"flex-end",background:C.card,flexShrink:0 }}>
+              <button onClick={closeModal} style={{ padding:"10px 18px",borderRadius:8,border:`1px solid ${C.border}`,background:C.card,color:C.text,fontWeight:500,fontSize:14,cursor:"pointer",fontFamily:"inherit" }}>Отмена</button>
+              <button onClick={createMeeting} disabled={!canCreate} style={{ padding:"10px 20px",borderRadius:8,border:"none",background:canCreate?C.acc:C.bg3,color:canCreate?"white":C.text3,fontWeight:600,fontSize:14,cursor:canCreate?"pointer":"default",fontFamily:"inherit",display:"flex",alignItems:"center",gap:7 }}>
+                {mode === "schedule" ? <><Mail size={14}/>Создать и отправить приглашения</> : <><Video size={14}/>Начать встречу</>}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {join && (
+        <div onClick={e=>{ if(e.target===e.currentTarget) setJoin(null); }}
+          style={{ position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:200 }}>
+          <div style={{ background:C.card,borderRadius:14,width:460,overflow:"hidden",boxShadow:"0 20px 50px rgba(0,0,0,0.18)",border:`1px solid ${C.border}` }}>
+            <div style={{ background:C.bg3,height:180,display:"flex",alignItems:"center",justifyContent:"center" }}>
+              <div style={{ width:72,height:72,borderRadius:"50%",background:C.card,border:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:24,fontWeight:600,color:C.text2 }}>ДВ</div>
+            </div>
+            <div style={{ padding:20 }}>
+              <h3 style={{ margin:"0 0 4px",fontSize:16,fontWeight:600,color:C.text }}>Войти во встречу</h3>
+              <p style={{ margin:"0 0 4px",fontSize:13.5,color:C.text,fontWeight:500 }}>{join.title}</p>
+              <div style={{ fontSize:12,color:C.text3,marginBottom:16,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap" }}>
+                <span>{join.date} · {join.time} · {total(join)} участника</span>
+                {join.transcribe && <Bdg v="blue">транскрибация</Bdg>}
+              </div>
+              <div style={{ display:"flex",gap:10,marginBottom:14 }}>
+                {[{ on:mic, On:Mic, Off:MicOff, lOn:"Микрофон вкл.", lOff:"Микрофон выкл.", fn:()=>setMic(v=>!v) },
+                  { on:cam, On:Video, Off:VideoOff, lOn:"Камера вкл.", lOff:"Камера выкл.", fn:()=>setCam(v=>!v) }].map((b,i)=>(
+                  <button key={i} onClick={b.fn} style={{ flex:1,padding:"10px",borderRadius:10,border:`1px solid ${b.on?C.border:C.errBrd}`,background:b.on?C.card:C.errBg,color:b.on?C.text:C.err,fontWeight:500,fontSize:13,display:"flex",alignItems:"center",justifyContent:"center",gap:7,cursor:"pointer",fontFamily:"inherit" }}>
+                    {b.on ? <b.On size={15}/> : <b.Off size={15}/>}{b.on ? b.lOn : b.lOff}
+                  </button>
+                ))}
+              </div>
+              <div style={{ display:"flex",gap:10 }}>
+                <button onClick={()=>setJoin(null)} style={{ flex:1,padding:"11px",borderRadius:10,border:`1px solid ${C.border}`,background:C.card,color:C.text,fontWeight:500,cursor:"pointer",fontFamily:"inherit" }}>Отмена</button>
+                <button onClick={()=>setJoin(null)} style={{ flex:2,padding:"11px",borderRadius:10,background:C.acc,color:"white",fontWeight:600,fontSize:14,border:"none",cursor:"pointer",fontFamily:"inherit" }}>Войти в конференцию</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── TRANSCRIPTION ───
+function TranscriptionPage() {
+  const { push } = useApp();
+  const [recs, setRecs] = useState([]);
+  const [sel, setSel] = useState(null);
+  const [drag, setDrag] = useState(false);
+  const [err, setErr] = useState("");
+  const [deleted, setDeleted] = useState(null);
+  const fileRef = useRef(null);
+  const delTimerRef = useRef(null);
+
+  const ALLOWED = [".wav", ".ogg", ".mp3", ".m4a", ".mp4", ".wma"];
+  const MAX_MB = 500;
+
+  const fmtSize = b => { const mb = b / 1048576; return mb < 1 ? `${(b/1024).toFixed(0)} КБ` : `${mb.toFixed(1)} МБ`; };
+  const showErr = m => { setErr(m); setTimeout(()=>setErr(""), 4000); };
+
+  const handleFile = file => {
+    if (!file) return;
+    const ext = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
+    if (!ALLOWED.includes(ext)) { showErr(`Формат «${ext || "без расширения"}» не поддерживается. Допустимо: ${ALLOWED.join(", ")}`); return; }
+    if (file.size > MAX_MB * 1048576) { showErr(`Файл ${fmtSize(file.size)} превышает лимит ${MAX_MB} МБ`); return; }
+    const id = `f${Date.now()}`;
+    const now = new Date();
+    const dateStr = now.toLocaleDateString("ru-RU") + " " + now.toLocaleTimeString("ru-RU", {hour:"2-digit", minute:"2-digit"});
+    const rec = { id, kind:"file", title:file.name, sub:`${ext.slice(1).toUpperCase()} · ${fmtSize(file.size)}`, dur:"—", date:dateStr, st:"upl", prog:0 };
+    setRecs(r => [rec, ...r]); setSel(rec);
+    let p = 0;
+    const iv = setInterval(() => {
+      p += 3 + Math.random()*7;
+      if (p >= 100) {
+        clearInterval(iv);
+        setRecs(r => r.map(x => x.id===id ? {...x, st:"proc", prog:100} : x));
+        setTimeout(() => {
+          setRecs(r => r.map(x => x.id===id ? {...x, st:"done", dur:"—"} : x));
+          push({ type:"transcription", title:"Транскрибация готова", desc: `Файл «${file.name}» обработан и доступен в списке` });
+        }, 6000);
+      } else {
+        setRecs(r => r.map(x => x.id===id ? {...x, prog:Math.min(p,99)} : x));
+      }
+    }, 220);
+  };
+
+  useEffect(() => {
+    if (!sel) return;
+    const cur = recs.find(r => r.id === sel.id);
+    if (cur && cur !== sel) setSel(cur);
+    if (!cur && recs.length === 0) setSel(null);
+  }, [recs]);
+
+  const delRec = () => {
+    if (!sel) return;
+    const idx = recs.findIndex(r => r.id === sel.id);
+    if (idx === -1) return;
+    clearTimeout(delTimerRef.current);
+    setDeleted({ rec:sel, idx });
+    const newRecs = recs.filter(x => x.id !== sel.id);
+    setRecs(newRecs);
+    setSel(newRecs.length > 0 ? newRecs[Math.min(idx, newRecs.length-1)] : null);
+    delTimerRef.current = setTimeout(() => setDeleted(null), 5000);
+  };
+
+  const undoDel = () => {
+    if (!deleted) return;
+    clearTimeout(delTimerRef.current);
+    setRecs(r => { const copy = [...r]; copy.splice(deleted.idx, 0, deleted.rec); return copy; });
+    setSel(deleted.rec); setDeleted(null);
+  };
+
+  const busy = sel && (sel.st === "upl" || sel.st === "proc");
+
+  return (
+    <div style={{ height:"100%", background:C.bg2, display:"flex", flexDirection:"column" }}>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+      <PgHdr title="Транскрибация" sub="GigaAM API · self-hosted · post-call и загрузка файлов" />
+      {err && (
+        <div style={{ background:C.errBg, borderBottom:`1px solid ${C.errBrd}`, padding:"10px 22px", color:C.errTx, fontSize:13, display:"flex", alignItems:"center", gap:10 }}>
+          <X size={15}/><span style={{ flex:1 }}>{err}</span>
+          <button onClick={()=>setErr("")} style={{ background:"none", border:"none", cursor:"pointer", color:C.errTx, padding:4 }}><X size={14}/></button>
+        </div>
+      )}
+      <div style={{ flex:1, display:"flex", overflow:"hidden" }}>
+        <div style={{ width:300, background:C.card, borderRight:`1px solid ${C.border}`, overflowY:"auto", flexShrink:0 }}>
+          <div style={{ padding:"14px 14px 12px", borderBottom:`1px solid ${C.border}` }}>
+            <div onClick={()=>fileRef.current?.click()}
+              onDragOver={e=>{ e.preventDefault(); setDrag(true); }}
+              onDragLeave={()=>setDrag(false)}
+              onDrop={e=>{ e.preventDefault(); setDrag(false); handleFile(e.dataTransfer.files[0]); }}
+              style={{ border:`2px dashed ${drag?C.acc:C.border2}`, borderRadius:10, padding:"15px 10px", textAlign:"center", cursor:"pointer", background:drag?C.accBg:C.bg2 }}>
+              <Upload size={19} color={drag?C.acc:C.text2} style={{ marginBottom:7 }}/>
+              <div style={{ fontSize:13, fontWeight:600, color:C.text, marginBottom:3 }}>{drag ? "Отпустите файл" : "Загрузить аудио"}</div>
+              <div style={{ fontSize:10.5, color:C.text3, lineHeight:1.55 }}>WAV, OGG, MP3, M4A, MP4, WMA<br/>до {MAX_MB} МБ · моно / стерео</div>
+            </div>
+            <input ref={fileRef} type="file" accept=".wav,.ogg,.mp3,.m4a,.mp4,.wma,audio/*,video/mp4" style={{ display:"none" }}
+              onChange={e=>{ handleFile(e.target.files[0]); e.target.value=""; }}/>
+          </div>
+          {recs.length === 0 ? (
+            <div style={{ padding:"32px 20px", textAlign:"center" }}>
+              <FileAudio size={22} color={C.text3} style={{ marginBottom:8 }}/>
+              <div style={{ fontSize:12.5, color:C.text2, fontWeight:500 }}>Список пуст</div>
+              <div style={{ fontSize:11.5, color:C.text3, marginTop:3, lineHeight:1.5 }}>Загрузите файл или проведите звонок с записью</div>
+            </div>
+          ) : recs.map(r=>{
+            const bg = r.kind==="vcs" ? C.purpBg : r.kind==="file" ? C.warnBg : C.accBg;
+            const ic = r.kind==="vcs" ? C.purp : r.kind==="file" ? C.warn : C.acc;
+            const Icon = r.kind==="vcs" ? Video : r.kind==="file" ? FileAudio : Phone;
+            return (
+              <div key={r.id} onClick={()=>setSel(r)}
+                style={{ padding:"13px 16px",borderBottom:`1px solid ${C.border}`,cursor:"pointer",background:sel?.id===r.id?C.accBg:"transparent",borderLeft:sel?.id===r.id?`3px solid ${C.acc}`:"3px solid transparent" }}>
+                <div style={{ display:"flex",alignItems:"flex-start",gap:10 }}>
+                  <div style={{ width:30,height:30,borderRadius:8,background:bg,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,marginTop:1 }}>
+                    <Icon size={14} color={ic}/>
+                  </div>
+                  <div style={{ flex:1,overflow:"hidden" }}>
+                    <div style={{ fontSize:13,fontWeight:600,color:C.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{r.title}</div>
+                    <div style={{ fontSize:11,color:C.text3,marginTop:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{r.date} · {r.dur}</div>
+                    {r.st === "upl" ? (
+                      <div style={{ marginTop:6 }}>
+                        <div style={{ height:3,background:C.border,borderRadius:2,overflow:"hidden" }}>
+                          <div style={{ height:"100%",width:`${r.prog}%`,background:C.acc }}/>
+                        </div>
+                        <div style={{ fontSize:10,color:C.acc,fontWeight:600,marginTop:3 }}>Загрузка… {Math.round(r.prog)}%</div>
+                      </div>
+                    ) : (
+                      <div style={{ marginTop:5 }}>
+                        {r.st==="done" && <Bdg v="ok">Готово</Bdg>}
+                        {r.st==="proc" && <Bdg v="proc">Обработка…</Bdg>}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div style={{ flex:1,display:"flex",flexDirection:"column",overflow:"hidden" }}>
+          {!sel ? (
+            <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center" }}>
+              <Empty Icon={FileAudio} title="Выберите запись или загрузите файл" sub="Все транскрибированные звонки, встречи и загруженные файлы будут появляться здесь."/>
+            </div>
+          ) : <>
+            <div style={{ padding:"14px 22px",background:C.card,borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",gap:16 }}>
+              <div style={{ minWidth:0, flex:1 }}>
+                <div style={{ fontSize:14,fontWeight:600,color:C.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{sel.title}</div>
+                <div style={{ fontSize:12,color:C.text2,marginTop:2 }}>{sel.date} · {sel.dur} · {sel.sub}</div>
+              </div>
+              <div style={{ display:"flex",gap:8,flexShrink:0 }}>
+                <button disabled={busy} style={{ display:"flex",alignItems:"center",gap:6,padding:"7px 12px",borderRadius:8,border:`1px solid ${C.border}`,fontSize:13,color:busy?C.text3:C.text2,fontWeight:500,background:C.card,cursor:busy?"default":"pointer",fontFamily:"inherit",opacity:busy?0.55:1 }}>
+                  <Download size={13}/>Скачать
+                </button>
+                <button onClick={delRec} style={{ display:"flex",alignItems:"center",gap:6,padding:"7px 12px",borderRadius:8,border:`1px solid ${C.border}`,fontSize:13,color:C.text2,fontWeight:500,background:C.card,cursor:"pointer",fontFamily:"inherit" }}>
+                  <Trash2 size={13}/>В корзину
+                </button>
+              </div>
+            </div>
+            {busy ? (
+              <div style={{ flex:1,display:"flex",alignItems:"center",justifyContent:"center",background:C.bg2,padding:24 }}>
+                <div style={{ textAlign:"center",maxWidth:380 }}>
+                  <div style={{ width:54,height:54,margin:"0 auto 18px",borderRadius:"50%",border:`3px solid ${C.border}`,borderTopColor:C.acc,animation:"spin .9s linear infinite" }}/>
+                  <div style={{ fontSize:15,fontWeight:600,color:C.text,marginBottom:6 }}>{sel.st==="upl" ? "Загрузка файла" : "Обработка в GigaAM"}</div>
+                  <div style={{ fontSize:13,color:C.text2,lineHeight:1.6 }}>
+                    {sel.st==="upl"
+                      ? `Загружено ${Math.round(sel.prog||0)}% · после загрузки файл автоматически отправится на транскрибацию`
+                      : "Транскрибация занимает примерно 1/10 длительности аудио. Можно закрыть страницу — результат появится в списке."}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center", background:C.bg2 }}>
+                <Empty Icon={FileText} title="Транскрипт недоступен" sub="Для этой записи нет расшифровки. Попробуйте повторно отправить на обработку."/>
+              </div>
+            )}
+          </>}
+        </div>
+      </div>
+      {deleted && (
+        <div style={{ position:"fixed", bottom:22, right:22, background:C.text, color:"white", padding:"11px 12px 11px 16px", borderRadius:10, boxShadow:"0 14px 32px rgba(0,0,0,0.25)", display:"flex", alignItems:"center", gap:14, fontSize:13, zIndex:150, maxWidth:"calc(100vw - 44px)" }}>
+          <Trash2 size={15} color={C.errBrd}/>
+          <span>Перемещено в корзину</span>
+          <button onClick={undoDel} style={{ background:"none", border:"none", color:C.acc, fontSize:13, fontWeight:600, cursor:"pointer", fontFamily:"inherit", padding:"4px 8px", borderRadius:5 }}>Отменить</button>
+          <button onClick={()=>setDeleted(null)} style={{ width:24,height:24,borderRadius:5,background:"transparent",color:C.text3,cursor:"pointer",border:"none",display:"flex",alignItems:"center",justifyContent:"center",padding:0 }}>
+            <X size={13}/>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── ANALYTICS (FOP2-style monitoring + employee metrics) ───
+function KpiCard({ Icon, label, value, color, sub }) {
+  return (
+    <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:12, padding:16, display:"flex", alignItems:"center", gap:14 }}>
+      <div style={{ width:42, height:42, borderRadius:12, background:`${color}1A`, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+        <Icon size={18} color={color}/>
+      </div>
+      <div style={{ minWidth:0, flex:1 }}>
+        <div style={{ fontSize:11, color:C.text3, textTransform:"uppercase", letterSpacing:"0.07em", fontWeight:600 }}>{label}</div>
+        <div style={{ fontSize:22, fontWeight:600, color:C.text, marginTop:2, letterSpacing:"-0.01em" }}>{value}</div>
+        {sub && <div style={{ fontSize:11.5, color:C.text2, marginTop:2, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{sub}</div>}
+      </div>
+    </div>
+  );
+}
+
+function ActionBtn({ Icon, title, danger }) {
+  return (
+    <button title={title}
+      style={{ width:30, height:30, borderRadius:7, display:"flex", alignItems:"center", justifyContent:"center", border:`1px solid ${C.border}`, background:C.card, color:C.text2, cursor:"pointer", transition:"all .12s" }}
+      onMouseEnter={e=>{e.currentTarget.style.background=danger?C.errBg:C.accBg; e.currentTarget.style.color=danger?C.err:C.acc; e.currentTarget.style.borderColor=danger?C.errBrd:C.accBrd;}}
+      onMouseLeave={e=>{e.currentTarget.style.background=C.card; e.currentTarget.style.color=C.text2; e.currentTarget.style.borderColor=C.border;}}>
+      <Icon size={13}/>
+    </button>
+  );
+}
+
+function SlaBadge({ value }) {
+  const col = value >= 90 ? C.ok : value >= 80 ? C.warn : C.err;
+  return (
+    <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+      <span style={{ fontSize:13, color:col, fontWeight:600, fontFamily:"'DM Mono', monospace", minWidth:34 }}>{value}%</span>
+      <div style={{ width:50, height:5, borderRadius:3, background:C.bg3, overflow:"hidden" }}>
+        <div style={{ width:`${value}%`, height:"100%", background:col, borderRadius:3 }}/>
+      </div>
+    </div>
+  );
+}
+
+function AnalyticsPage() {
+  const [tab, setTab] = useState("monitoring");
+  const [range, setRange] = useState("today");
+  const [exts, setExts] = useState([
+    { ext:1001, name:"Дмитрий Волков",       av:"ДВ", col:"#6366f1", state:"idle" },
+    { ext:1002, name:"Анна Смирнова",        av:"АС", col:"#10b981", state:"oncall",  peer:"+7 495 123-45-67",  duration:127,  direction:"in",  queue:"Продажи" },
+    { ext:1003, name:"Иван Петров",          av:"ИП", col:"#f59e0b", state:"ringing", peer:"+375 29 200-78-29", duration:0,    direction:"in" },
+    { ext:1004, name:"Елена Соколова",       av:"ЕС", col:"#8b5cf6", state:"hold",    peer:"+375 44 700-60-15", duration:44 },
+    { ext:1007, name:"Александр Прокопович", av:"АП", col:"#0ea5e9", state:"idle" },
+    { ext:1008, name:"Мария Ковалёва",       av:"МК", col:"#14b8a6", state:"oncall",  peer:"1012",              duration:3502, direction:"out", internal:true },
+    { ext:1009, name:"Павел Семёнов",        av:"ПС", col:"#f43f5e", state:"dnd" },
+    { ext:1010, name:"Ольга Егорова",        av:"ОЕ", col:"#a855f7", state:"offline" },
+  ]);
+
+  useEffect(() => {
+    const iv = setInterval(() => {
+      setExts(es => es.map(e =>
+        (e.state === "oncall" || e.state === "hold") && typeof e.duration === "number"
+          ? {...e, duration: e.duration + 1}
+          : e
+      ));
+    }, 1000);
+    return () => clearInterval(iv);
+  }, []);
+
+  const stateMeta = {
+    idle:    { label:"Онлайн",        col:C.ok,    bdg:"ok"   },
+    ringing: { label:"Входящий",      col:C.warn,  bdg:"warn" },
+    oncall:  { label:"В разговоре",   col:C.err,   bdg:"err"  },
+    hold:    { label:"Удержание",     col:C.warn,  bdg:"warn" },
+    dnd:     { label:"Не беспокоить", col:C.err,   bdg:"err"  },
+    offline: { label:"Офлайн",        col:C.text3, bdg:"def"  },
+  };
+
+  const fmtSec = s => `${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`;
+  const fmtSecLong = s => {
+    const h = Math.floor(s/3600); const m = Math.floor((s%3600)/60); const sec = s%60;
+    return h>0 ? `${h}:${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}` : `${m}:${String(sec).padStart(2,"0")}`;
+  };
+
+  const online  = exts.filter(e => e.state !== "offline").length;
+  const onCall  = exts.filter(e => e.state === "oncall").length;
+  const ringing = exts.filter(e => e.state === "ringing").length;
+  const busy    = exts.filter(e => e.state === "oncall" || e.state === "hold").length;
+  const dnd     = exts.filter(e => e.state === "dnd").length;
+  const load    = online ? Math.round(busy / online * 100) : 0;
+
+  const queues = [
+    { name:"Продажи",     waiting:2, agents:4, answered:47, avgWait:18, sla:92 },
+    { name:"Поддержка",   waiting:0, agents:2, answered:12, avgWait:34, sla:88 },
+    { name:"Бухгалтерия", waiting:1, agents:1, answered:6,  avgWait:52, sla:76 },
+  ];
+
+  const metrics = [
+    { name:"Анна Смирнова",        av:"АС", col:"#10b981", answered:42, outgoing:18, missed:3, avgDur:192, totalTalk:8820, sla:94 },
+    { name:"Иван Петров",          av:"ИП", col:"#f59e0b", answered:38, outgoing:22, missed:5, avgDur:174, totalTalk:7680, sla:87 },
+    { name:"Елена Соколова",       av:"ЕС", col:"#8b5cf6", answered:31, outgoing:9,  missed:2, avgDur:221, totalTalk:6120, sla:96 },
+    { name:"Александр Прокопович", av:"АП", col:"#0ea5e9", answered:55, outgoing:14, missed:7, avgDur:156, totalTalk:9450, sla:85 },
+    { name:"Мария Ковалёва",       av:"МК", col:"#14b8a6", answered:27, outgoing:31, missed:1, avgDur:204, totalTalk:7920, sla:95 },
+    { name:"Павел Семёнов",        av:"ПС", col:"#f43f5e", answered:19, outgoing:8,  missed:4, avgDur:142, totalTalk:3840, sla:82 },
+  ];
+
+  const totals = {
+    answered: metrics.reduce((s,m)=>s+m.answered,0),
+    outgoing: metrics.reduce((s,m)=>s+m.outgoing,0),
+    missed:   metrics.reduce((s,m)=>s+m.missed,0),
+    totalTalk:metrics.reduce((s,m)=>s+m.totalTalk,0),
+  };
+  const totalCalls = totals.answered + totals.outgoing + totals.missed;
+  const answerRate = totalCalls ? Math.round((totals.answered + totals.outgoing) / totalCalls * 100) : 0;
+  const avgSla = Math.round(metrics.reduce((s,m)=>s+m.sla,0) / metrics.length);
+  const avgDur = Math.round(metrics.reduce((s,m)=>s+m.avgDur,0) / metrics.length);
+
+  return (
+    <div style={{ minHeight:"100%", background:C.bg2 }}>
+      <style>{`@keyframes anPulse{0%,100%{box-shadow:0 0 0 0 rgba(245,158,11,.45)}70%{box-shadow:0 0 0 7px rgba(245,158,11,0)}}`}</style>
+      <PgHdr title="Аналитика" sub="Мониторинг FreePBX через AMI · метрики сотрудников"/>
+
+      <div style={{ padding:"0 24px", background:C.card, borderBottom:`1px solid ${C.border}`, display:"flex", alignItems:"center", gap:4 }}>
+        {[
+          { id:"monitoring", label:"Мониторинг",          Icon: Activity   },
+          { id:"metrics",    label:"Метрики сотрудников", Icon: BarChart3  },
+        ].map(t => (
+          <button key={t.id} onClick={()=>setTab(t.id)}
+            style={{ padding:"12px 14px", background:"transparent", border:"none", borderBottom:`2px solid ${tab===t.id?C.acc:"transparent"}`, color:tab===t.id?C.text:C.text2, fontSize:13.5, fontWeight:tab===t.id?600:500, cursor:"pointer", fontFamily:"inherit", display:"flex", alignItems:"center", gap:7, marginBottom:-1 }}>
+            <t.Icon size={15}/>{t.label}
+          </button>
+        ))}
+        <div style={{ flex:1 }}/>
+        {tab === "monitoring" ? (
+          <div style={{ display:"flex", alignItems:"center", gap:7, fontSize:12, color:C.text2 }}>
+            <span style={{ width:7, height:7, borderRadius:"50%", background:C.ok, animation:"anPulse 2s infinite" }}/>
+            Обновление в реальном времени
+          </div>
+        ) : (
+          <select value={range} onChange={e=>setRange(e.target.value)}
+            style={{ padding:"6px 10px", border:`1px solid ${C.border}`, borderRadius:8, fontSize:12.5, color:C.text, background:C.card, cursor:"pointer", fontFamily:"inherit" }}>
+            <option value="today">Сегодня</option>
+            <option value="week">7 дней</option>
+            <option value="month">30 дней</option>
+            <option value="quarter">Квартал</option>
+          </select>
+        )}
+      </div>
+
+      {tab === "monitoring" ? (
+        <div style={{ padding:24 }}>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(200px, 1fr))", gap:12, marginBottom:20 }}>
+            <KpiCard Icon={Phone}    label="Активных звонков"  value={onCall} color={C.err}  sub={ringing>0?`+ ${ringing} входящих`:"все под контролем"} />
+            <KpiCard Icon={Clock}    label="В очереди"          value={queues.reduce((s,q)=>s+q.waiting,0)} color={C.warn} sub="средн. ожидание 23 сек" />
+            <KpiCard Icon={Users}    label="Операторов онлайн"  value={`${online} / ${exts.length}`} color={C.ok}  sub={`${dnd} в DND · ${exts.length-online} офлайн`} />
+            <KpiCard Icon={Activity} label="Загрузка АТС"       value={`${load}%`} color={C.acc}  sub={`${busy} из ${online} на линии`} />
+          </div>
+
+          <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:12, overflow:"hidden", marginBottom:16 }}>
+            <div style={{ padding:"13px 18px", borderBottom:`1px solid ${C.border}` }}>
+              <div style={{ fontSize:14, fontWeight:600, color:C.text }}>Внутренние номера</div>
+              <div style={{ fontSize:12, color:C.text2, marginTop:2 }}>{exts.length} номеров · состояния из AMI</div>
+            </div>
+            <div>
+              {exts.map(e => {
+                const m = stateMeta[e.state];
+                const isBusy = e.state === "oncall" || e.state === "hold";
+                const isRinging = e.state === "ringing";
+                return (
+                  <div key={e.ext}
+                    style={{ padding:"12px 18px", borderBottom:`1px solid ${C.border}`, display:"flex", alignItems:"center", gap:14, flexWrap:"wrap" }}
+                    onMouseEnter={ev=>{ev.currentTarget.style.background=C.bg2; const a = ev.currentTarget.querySelector('.ext-actions'); if(a) a.style.opacity="1";}}
+                    onMouseLeave={ev=>{ev.currentTarget.style.background="transparent"; const a = ev.currentTarget.querySelector('.ext-actions'); if(a) a.style.opacity="0";}}>
+                    <div style={{ position:"relative", flexShrink:0 }}>
+                      <Av i={e.av} c={e.col} sz={34}/>
+                      <span style={{ position:"absolute", bottom:-1, right:-1, width:11, height:11, borderRadius:"50%", background:m.col, border:`2px solid ${C.card}`, boxSizing:"content-box", animation: isRinging ? "anPulse 1.3s infinite" : "none" }}/>
+                    </div>
+                    <div style={{ minWidth:170, flexShrink:0 }}>
+                      <div style={{ fontSize:13.5, fontWeight:500, color:C.text }}>{e.name}</div>
+                      <div style={{ fontSize:11.5, color:C.text3, fontFamily:"'DM Mono', monospace", marginTop:1 }}>#{e.ext}</div>
+                    </div>
+                    <Bdg v={m.bdg}>
+                      <span style={{ width:6, height:6, borderRadius:"50%", background:m.col }}/>
+                      {m.label}
+                    </Bdg>
+                    {isBusy && (
+                      <div style={{ display:"flex", alignItems:"center", gap:8, fontSize:12.5, color:C.text2 }}>
+                        <span style={{ fontFamily:"'DM Mono', monospace", color:C.text, fontWeight:500 }}>{e.peer}</span>
+                        {e.queue && <Bdg>«{e.queue}»</Bdg>}
+                        <span style={{ fontFamily:"'DM Mono', monospace", color:e.state==="hold"?C.warn:C.err, fontWeight:500 }}>{fmtSecLong(e.duration)}</span>
+                      </div>
+                    )}
+                    {isRinging && (
+                      <div style={{ fontSize:12.5, color:C.warnTx, fontWeight:500 }}>
+                        <span style={{ fontFamily:"'DM Mono', monospace" }}>{e.peer}</span>
+                        <span style={{ marginLeft:6, color:C.text3, fontWeight:400 }}>звонит…</span>
+                      </div>
+                    )}
+                    <div style={{ flex:1 }}/>
+                    {(isBusy || isRinging) && (
+                      <div className="ext-actions" style={{ display:"flex", gap:4, opacity:0, transition:"opacity .12s", flexShrink:0 }}>
+                        <ActionBtn Icon={Headphones}      title="Слушать разговор" />
+                        <ActionBtn Icon={Mic}             title="Суфлировать (шёпот)" />
+                        <ActionBtn Icon={ArrowRightLeft}  title="Перехватить вызов" />
+                        <ActionBtn Icon={PhoneOff}        title="Завершить вызов" danger />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:12, overflow:"hidden" }}>
+            <div style={{ padding:"13px 18px", borderBottom:`1px solid ${C.border}` }}>
+              <div style={{ fontSize:14, fontWeight:600, color:C.text }}>Очереди</div>
+              <div style={{ fontSize:12, color:C.text2, marginTop:2 }}>Распределение входящих звонков</div>
+            </div>
+            <div style={{ overflowX:"auto" }}>
+              <table style={{ width:"100%", borderCollapse:"collapse", minWidth:640 }}>
+                <thead>
+                  <tr style={{ background:C.bg2 }}>
+                    {["Очередь","В ожидании","Агентов","Отвечено","Ср. время ожидания","SLA"].map(h=>(
+                      <th key={h} style={{ padding:"9px 18px", textAlign:"left", fontSize:11, fontWeight:600, color:C.text2, textTransform:"uppercase", letterSpacing:"0.06em", whiteSpace:"nowrap" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {queues.map(q => (
+                    <tr key={q.name} style={{ borderTop:`1px solid ${C.border}` }}>
+                      <td style={{ padding:"11px 18px", fontSize:13.5, fontWeight:500, color:C.text }}>{q.name}</td>
+                      <td style={{ padding:"11px 18px" }}>
+                        {q.waiting === 0 ? <span style={{ fontSize:13, color:C.text3 }}>—</span>
+                          : <span style={{ display:"inline-flex", alignItems:"center", gap:6, fontSize:13, fontWeight:600, color:C.warnTx }}>
+                              <span style={{ width:7, height:7, borderRadius:"50%", background:C.warn, animation:"anPulse 1.5s infinite" }}/>
+                              {q.waiting}
+                            </span>}
+                      </td>
+                      <td style={{ padding:"11px 18px", fontSize:13, color:C.text, fontFamily:"'DM Mono', monospace" }}>{q.agents}</td>
+                      <td style={{ padding:"11px 18px", fontSize:13, color:C.text, fontFamily:"'DM Mono', monospace" }}>{q.answered}</td>
+                      <td style={{ padding:"11px 18px", fontSize:13, color:C.text2, fontFamily:"'DM Mono', monospace" }}>{q.avgWait} сек</td>
+                      <td style={{ padding:"11px 18px" }}><SlaBadge value={q.sla}/></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div style={{ padding:24 }}>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(200px, 1fr))", gap:12, marginBottom:20 }}>
+            <KpiCard Icon={Phone}  label="Всего звонков"     value={totalCalls.toLocaleString("ru-RU")} color={C.acc}  sub={`${totals.answered} входящ · ${totals.outgoing} исходящ`} />
+            <KpiCard Icon={Check}  label="Отвеченных"        value={`${answerRate}%`} color={C.ok}  sub={`${totals.missed} пропущено`} />
+            <KpiCard Icon={Clock}  label="Ср. длительность"  value={fmtSec(avgDur)} color={C.warn} sub="на один звонок" />
+            <KpiCard Icon={Shield} label="SLA"               value={`${avgSla}%`} color={avgSla>=90?C.ok:avgSla>=80?C.warn:C.err} sub="ответ ≤ 30 сек" />
+          </div>
+
+          <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:12, overflow:"hidden" }}>
+            <div style={{ padding:"13px 18px", borderBottom:`1px solid ${C.border}`, display:"flex", alignItems:"center", justifyContent:"space-between", gap:12 }}>
+              <div>
+                <div style={{ fontSize:14, fontWeight:600, color:C.text }}>Метрики сотрудников</div>
+                <div style={{ fontSize:12, color:C.text2, marginTop:2 }}>Данные за выбранный период · {metrics.length} операторов</div>
+              </div>
+              <button style={{ display:"flex", alignItems:"center", gap:6, padding:"7px 12px", borderRadius:8, border:`1px solid ${C.border}`, fontSize:13, color:C.text, fontWeight:500, background:C.card, cursor:"pointer", fontFamily:"inherit" }}>
+                <Download size={13}/>Экспорт CSV
+              </button>
+            </div>
+            <div style={{ overflowX:"auto" }}>
+              <table style={{ width:"100%", borderCollapse:"collapse", minWidth:820 }}>
+                <thead>
+                  <tr style={{ background:C.bg2 }}>
+                    {["Сотрудник","Отвечено","Исходящих","Пропущено","Ср. длит.","Время в разговоре","SLA"].map(h=>(
+                      <th key={h} style={{ padding:"9px 16px", textAlign:"left", fontSize:11, fontWeight:600, color:C.text2, textTransform:"uppercase", letterSpacing:"0.06em", whiteSpace:"nowrap" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {metrics.map(m => (
+                    <tr key={m.name} style={{ borderTop:`1px solid ${C.border}` }}>
+                      <td style={{ padding:"11px 16px" }}>
+                        <div style={{ display:"flex", alignItems:"center", gap:9 }}>
+                          <Av i={m.av} c={m.col} sz={28}/>
+                          <span style={{ fontSize:13, fontWeight:500, color:C.text }}>{m.name}</span>
+                        </div>
+                      </td>
+                      <td style={{ padding:"11px 16px", fontSize:13, color:C.text, fontFamily:"'DM Mono', monospace" }}>{m.answered}</td>
+                      <td style={{ padding:"11px 16px", fontSize:13, color:C.text, fontFamily:"'DM Mono', monospace" }}>{m.outgoing}</td>
+                      <td style={{ padding:"11px 16px" }}>
+                        {m.missed > 0
+                          ? <span style={{ fontSize:13, color:C.err, fontFamily:"'DM Mono', monospace", fontWeight:600 }}>{m.missed}</span>
+                          : <span style={{ fontSize:13, color:C.text3 }}>—</span>}
+                      </td>
+                      <td style={{ padding:"11px 16px", fontSize:13, color:C.text, fontFamily:"'DM Mono', monospace" }}>{fmtSec(m.avgDur)}</td>
+                      <td style={{ padding:"11px 16px", fontSize:13, color:C.text, fontFamily:"'DM Mono', monospace" }}>{fmtSecLong(m.totalTalk)}</td>
+                      <td style={{ padding:"11px 16px" }}><SlaBadge value={m.sla}/></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── USERS ───
+function UsersPage() {
+  const [users, setUsers] = useState(USERS_INIT);
+  const [q, setQ] = useState("");
+  const flip = (id, field) => setUsers(u => u.map(x => x.id===id ? {...x, [field]: field==="role"?(x.role==="admin"?"user":"admin"):(x.st==="active"?"blocked":"active")} : x));
+  const filt = users.filter(u => u.name.toLowerCase().includes(q.toLowerCase()) || u.email.toLowerCase().includes(q.toLowerCase()));
+
+  return (
+    <div style={{ minHeight:"100%", background:C.bg2 }}>
+      <PgHdr title="Управление пользователями" sub={`${users.length} ${users.length===1?"сотрудник":"сотрудников"} · синхронизация с Bitrix24`}
+        action={<button style={{ display:"flex",alignItems:"center",gap:6,padding:"9px 14px",borderRadius:8,border:`1px solid ${C.border}`,fontSize:13.5,color:C.text,fontWeight:500,background:C.card,cursor:"pointer",fontFamily:"inherit" }}><RefreshCw size={13}/>Синхронизировать</button>}
+      />
+      <div style={{ padding:24 }}>
+        <div style={{ background:C.card,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden" }}>
+          <div style={{ padding:"12px 16px",borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",gap:8 }}>
+            <Search size={14} color={C.text3}/>
+            <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Поиск по имени или email…"
+              style={{ flex:1,border:"none",outline:"none",fontSize:14,color:C.text,background:"transparent",fontFamily:"inherit" }}/>
+          </div>
+          {filt.length === 0 ? (
+            <Empty Icon={Users} title={q?"Никого не найдено":"Пользователей пока нет"} sub={q?"Попробуйте изменить запрос":"Синхронизируйте пользователей из Bitrix24 или добавьте вручную."}/>
+          ) : (
+            <div style={{ overflowX:"auto" }}>
+              <table style={{ width:"100%",borderCollapse:"collapse",minWidth:640 }}>
+                <thead>
+                  <tr style={{ background:C.bg2 }}>
+                    {["Сотрудник","Отдел","Номер","Роль","Статус","Последний вход",""].map(h=>(
+                      <th key={h} style={{ padding:"9px 16px",textAlign:"left",fontSize:11,fontWeight:600,color:C.text2,textTransform:"uppercase",letterSpacing:"0.06em",whiteSpace:"nowrap" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {filt.map(u=>(
+                    <tr key={u.id} style={{ borderTop:`1px solid ${C.border}` }}>
+                      <td style={{ padding:"11px 16px" }}>
+                        <div style={{ display:"flex",alignItems:"center",gap:9 }}>
+                          <Av i={u.av} c={u.col} sz={32}/>
+                          <div>
+                            <div style={{ fontSize:13.5,fontWeight:500,color:C.text }}>{u.name}</div>
+                            <div style={{ fontSize:11,color:C.text3 }}>{u.email}</div>
+                          </div>
+                        </div>
+                      </td>
+                      <td style={{ padding:"11px 16px",fontSize:13,color:C.text2 }}>{u.dept}</td>
+                      <td style={{ padding:"11px 16px" }}>
+                        {u.ext ? <span style={{ fontFamily:"'DM Mono', monospace", fontSize:13,fontWeight:600,color:C.text }}>#{u.ext}</span>
+                              : <span style={{ fontSize:12,color:C.text3,fontStyle:"italic" }}>не назначен</span>}
+                      </td>
+                      <td style={{ padding:"11px 16px" }}>
+                        <button onClick={()=>flip(u.id,"role")} style={{ background:"none",border:"none",cursor:"pointer",padding:0 }}>
+                          <Bdg v={u.role==="admin"?"adm":"def"}>{u.role==="admin"?"Администратор":"Пользователь"}</Bdg>
+                        </button>
+                      </td>
+                      <td style={{ padding:"11px 16px" }}><Bdg v={u.st==="active"?"ok":"err"}>{u.st==="active"?"Активен":"Заблокирован"}</Bdg></td>
+                      <td style={{ padding:"11px 16px",fontSize:12,color:C.text3 }}>{u.login}</td>
+                      <td style={{ padding:"11px 16px" }}>
+                        <button onClick={()=>flip(u.id,"st")} style={{ padding:"5px 10px",borderRadius:6,border:`1px solid ${C.border}`,fontSize:12,color:C.text2,fontWeight:500,background:C.card,cursor:"pointer",fontFamily:"inherit" }}>
+                          {u.st==="active"?"Заблокировать":"Разблокировать"}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── PHONE SETTINGS ───
+function PhoneSettingsPage() {
+  const [saved, setSaved] = useState(false);
+  const [freeNums, setFreeNums] = useState([]);
+  const [assigned] = useState([]);
+  const [newExt, setNewExt] = useState("");
+  const [newPwd, setNewPwd] = useState("");
+  const save = ()=>{ setSaved(true); setTimeout(()=>setSaved(false),2500); };
+  const addFree = () => {
+    if (!newExt.trim() || !newPwd.trim()) return;
+    setFreeNums(f => [{ ext:newExt.trim(), pwd:newPwd, saved:true }, ...f]);
+    setNewExt(""); setNewPwd("");
+  };
+  const updFreePwd = (i, v) => setFreeNums(f => f.map((x,idx)=>idx===i?{...x,pwd:v,saved:false}:x));
+  const saveFree   = (i)    => setFreeNums(f => f.map((x,idx)=>idx===i?{...x,saved:true}:x));
+  const editFree   = (i)    => setFreeNums(f => f.map((x,idx)=>idx===i?{...x,saved:false}:x));
+  const rmFree = (i) => setFreeNums(f => f.filter((_,idx)=>idx!==i));
+
+  const Sec = ({title, sub, children}) => (
+    <div style={{ background:C.card,border:`1px solid ${C.border}`,borderRadius:12,marginBottom:16,overflow:"hidden" }}>
+      <div style={{ padding:"14px 20px",borderBottom:`1px solid ${C.border}` }}>
+        <div style={{ fontSize:14,fontWeight:600,color:C.text }}>{title}</div>
+        {sub && <div style={{ fontSize:12,color:C.text2,marginTop:2 }}>{sub}</div>}
+      </div>
+      <div style={{ padding:"18px 20px" }}>{children}</div>
+    </div>
+  );
+
+  return (
+    <div style={{ minHeight:"100%",background:C.bg2 }}>
+      <PgHdr title="Настройки телефонии" sub="FreePBX WebRTC · WSS-подключение и внутренние номера"
+        action={
+          <button onClick={save} style={{ display:"flex",alignItems:"center",gap:7,background:saved?C.acc:C.text,color:"white",padding:"9px 18px",borderRadius:8,fontWeight:600,fontSize:14,border:"none",cursor:"pointer",fontFamily:"inherit" }}>
+            {saved?<><Check size={15}/>Сохранено</>:<><Save size={15}/>Сохранить</>}
+          </button>
+        }
+      />
+      <div style={{ padding:24,maxWidth:640 }}>
+        <Sec title="Подключение к FreePBX" sub="WebRTC-шлюз · WSS-сигнализация">
+          <Field label="WSS-адрес шлюза"><input placeholder="wss://pbx.example.com:8089/ws" style={{ ...inp(), fontFamily:"'DM Mono', monospace" }}/></Field>
+          <button style={{ display:"flex",alignItems:"center",gap:6,padding:"8px 14px",borderRadius:8,border:`1px solid ${C.border}`,fontSize:13,color:C.text,background:C.card,cursor:"pointer",fontFamily:"inherit",marginTop:4,fontWeight:500 }}>
+            <Phone size={13}/>Тестовый звонок
+          </button>
+        </Sec>
+
+        <Sec title="Внутренние номера" sub="Привязка номеров FreePBX к пользователям Toolkit">
+          <div style={{ display:"flex",flexWrap:"wrap",gap:8,marginBottom:14,paddingBottom:14,borderBottom:`1px dashed ${C.border}` }}>
+            <input value={newExt} onChange={e=>setNewExt(e.target.value.replace(/\D/g,"").slice(0,6))} onKeyDown={e=>{ if(e.key==="Enter") addFree(); }}
+              placeholder="Номер (напр. 1012)" style={{ width:150,padding:"8px 11px",border:`1px solid ${C.border}`,borderRadius:7,fontSize:13,fontFamily:"'DM Mono', monospace",color:C.text,outline:"none",background:C.card }}/>
+            <input type="password" value={newPwd} onChange={e=>setNewPwd(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter") addFree(); }}
+              placeholder="Пароль*" style={{ flex:1,minWidth:140,padding:"8px 11px",border:`1px solid ${C.border}`,borderRadius:7,fontSize:13,fontFamily:"'DM Mono', monospace",color:C.text,outline:"none",background:C.card }}/>
+            <button onClick={addFree} disabled={!newExt.trim() || !newPwd.trim()}
+              style={{ display:"flex",alignItems:"center",gap:5,padding:"8px 14px",borderRadius:7,border:"none",background:(newExt.trim()&&newPwd.trim())?C.acc:C.bg3,color:(newExt.trim()&&newPwd.trim())?"white":C.text3,fontSize:13,fontWeight:600,cursor:(newExt.trim()&&newPwd.trim())?"pointer":"default",fontFamily:"inherit" }}>
+              <Save size={14}/>Сохранить
+            </button>
+          </div>
+
+          {freeNums.length > 0 && (
+            <div style={{ marginBottom:14 }}>
+              <div style={{ fontSize:10,fontWeight:600,color:C.text2,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8 }}>
+                Свободные номера · {freeNums.length}
+              </div>
+              {freeNums.map((n,i)=>{
+                const miss = !n.pwd.trim();
+                return (
+                  <div key={i} style={{ display:"flex",alignItems:"center",gap:10,padding:"8px 10px",background:C.bg2,border:`1px solid ${C.border}`,borderRadius:8,marginBottom:6 }}>
+                    <div style={{ width:28,height:28,borderRadius:"50%",background:C.border,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0 }}>
+                      <Hash size={13} color={C.text2}/>
+                    </div>
+                    <span style={{ flex:1,fontSize:13,fontWeight:600,fontFamily:"'DM Mono', monospace",color:C.text }}>#{n.ext}</span>
+                    <input type="password" value={n.pwd} onChange={e=>updFreePwd(i,e.target.value)} disabled={n.saved} placeholder="Пароль*"
+                      style={{ width:130,padding:"5px 8px",border:`1px solid ${miss?C.err:C.border}`,borderRadius:6,fontSize:12,fontFamily:"'DM Mono', monospace",color:C.text,outline:"none",background:n.saved?C.bg3:C.card,filter:n.saved?"blur(2.5px)":"none" }}/>
+                    {n.saved ? (
+                      <button onClick={()=>editFree(i)} title="Изменить пароль" style={{ width:28,height:28,borderRadius:6,display:"flex",alignItems:"center",justifyContent:"center",background:"transparent",cursor:"pointer",color:C.text2,border:`1px solid ${C.border}` }}>
+                        <Edit2 size={13}/>
+                      </button>
+                    ) : (
+                      <button onClick={()=>saveFree(i)} disabled={miss} title="Сохранить пароль" style={{ width:28,height:28,borderRadius:6,display:"flex",alignItems:"center",justifyContent:"center",background:miss?C.bg3:C.acc,color:miss?C.text3:"white",cursor:miss?"default":"pointer",border:"none" }}>
+                        <Check size={14}/>
+                      </button>
+                    )}
+                    <button onClick={()=>rmFree(i)} title="Удалить номер" style={{ width:26,height:26,borderRadius:6,display:"flex",alignItems:"center",justifyContent:"center",background:"transparent",cursor:"pointer",color:C.text3,border:"none" }}>
+                      <X size={14}/>
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {freeNums.length === 0 && assigned.length === 0 && (
+            <div style={{ padding:"24px 12px", textAlign:"center", color:C.text3 }}>
+              <Hash size={20} style={{ marginBottom:8 }}/>
+              <div style={{ fontSize:12.5, color:C.text2, fontWeight:500 }}>Номера не созданы</div>
+              <div style={{ fontSize:11.5, color:C.text3, marginTop:3, lineHeight:1.5 }}>Добавьте первый номер из FreePBX в поле выше</div>
+            </div>
+          )}
+        </Sec>
+      </div>
+    </div>
+  );
+}
+
+// ─── SMTP SETTINGS ───
+function SmtpSettingsPage() {
+  const [saved, setSaved] = useState(false);
+  const [testSt, setTestSt] = useState("idle");
+  const [enc, setEnc] = useState("starttls");
+  const [port, setPort] = useState("587");
+  const [testEmail, setTestEmail] = useState("");
+
+  const save = ()=>{ setSaved(true); setTimeout(()=>setSaved(false),2500); };
+  const testConn = () => {
+    setTestSt("sending");
+    setTimeout(() => { setTestSt("sent"); setTimeout(() => setTestSt("idle"), 4000); }, 1500);
+  };
+
+  const Sec = ({ title, sub, children }) => (
+    <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:12, marginBottom:16, overflow:"hidden" }}>
+      <div style={{ padding:"14px 20px", borderBottom:`1px solid ${C.border}` }}>
+        <div style={{ fontSize:14, fontWeight:600, color:C.text }}>{title}</div>
+        {sub && <div style={{ fontSize:12, color:C.text2, marginTop:2 }}>{sub}</div>}
+      </div>
+      <div style={{ padding:"18px 20px" }}>{children}</div>
+    </div>
+  );
+
+  return (
+    <div style={{ minHeight:"100%", background:C.bg2 }}>
+      <style>{`@keyframes spin2{to{transform:rotate(360deg)}}`}</style>
+      <PgHdr title="Настройки SMTP" sub="Отправка приглашений на встречи и уведомлений"
+        action={<button onClick={save} style={{ display:"flex", alignItems:"center", gap:7, background:saved?C.acc:C.text, color:"white", padding:"9px 18px", borderRadius:8, fontWeight:600, fontSize:14, border:"none", cursor:"pointer", fontFamily:"inherit" }}>{saved ? <><Check size={15}/>Сохранено</> : <><Save size={15}/>Сохранить</>}</button>}
+      />
+      <div style={{ padding:24, maxWidth:640 }}>
+        <Sec title="Сервер SMTP" sub="Параметры подключения к почтовому серверу">
+          <Field label="Хост"><input placeholder="smtp.example.com" style={{ ...inp(), fontFamily:"'DM Mono', monospace" }}/></Field>
+          <div style={{ display:"grid", gridTemplateColumns:"140px 1fr", gap:12, marginBottom:14 }}>
+            <div>
+              <Lbl>Порт</Lbl>
+              <select value={port} onChange={e=>setPort(e.target.value)} style={{ ...inp(), fontFamily:"'DM Mono', monospace", cursor:"pointer" }}>
+                <option value="25">25</option><option value="465">465</option><option value="587">587</option>
+              </select>
+            </div>
+            <div>
+              <Lbl>Шифрование</Lbl>
+              <select value={enc} onChange={e=>setEnc(e.target.value)} style={{ ...inp(), cursor:"pointer" }}>
+                <option value="ssl">SSL/TLS</option><option value="starttls">STARTTLS</option><option value="none">Без шифрования</option>
+              </select>
+            </div>
+          </div>
+          <Field label="Логин"><input placeholder="noreply@example.com" style={inp()}/></Field>
+          <Field label="Пароль"><input type="password" placeholder="••••••••" style={inp()}/></Field>
+        </Sec>
+
+        <Sec title="Отправитель" sub="Как будет выглядеть адрес в письмах">
+          <Field label="Имя отправителя"><input placeholder="Название компании" style={inp()}/></Field>
+          <Field label="Email отправителя"><input placeholder="noreply@example.com" style={{ ...inp(), fontFamily:"'DM Mono', monospace" }}/></Field>
+        </Sec>
+
+        <Sec title="Проверка" sub="Отправить тестовое письмо с текущими настройками">
+          <div style={{ display:"flex", gap:8, alignItems:"flex-end" }}>
+            <div style={{ flex:1 }}>
+              <Lbl>Адрес получателя</Lbl>
+              <input value={testEmail} onChange={e=>setTestEmail(e.target.value)} placeholder="your@email.com" style={inp()}/>
+            </div>
+            <button onClick={testConn} disabled={testSt!=="idle" || !testEmail.trim()}
+              style={{ padding:"9px 14px", borderRadius:8, border:`1px solid ${testSt==="sent"?C.accBrd:C.border}`, background: testSt==="sent"?C.accBg:C.card, color: testSt==="sent"?C.accTx:C.text, fontSize:13, fontWeight:500, cursor:testSt!=="idle"||!testEmail.trim()?"default":"pointer", fontFamily:"inherit", display:"flex", alignItems:"center", gap:6, opacity: testSt==="sending" || !testEmail.trim() ? 0.7 : 1, whiteSpace:"nowrap" }}>
+              {testSt==="sent" ? <><Check size={14}/>Письмо отправлено</>
+                : testSt==="sending" ? <><RefreshCw size={14} style={{ animation:"spin2 1s linear infinite" }}/>Отправка</>
+                : <><Send size={14}/>Отправить тест</>}
+            </button>
+          </div>
+          <div style={{ fontSize:11.5, color:C.text3, marginTop:10, lineHeight:1.5 }}>
+            Если письмо не пришло — проверьте настройки подключения, логин/пароль и папку «Спам».
+          </div>
+        </Sec>
+      </div>
+    </div>
+  );
+}
+
+// ─── PROFILE MODAL ───
+function ProfileModal({ onClose }) {
+  const { push, status } = useApp();
+  const me = USERS_INIT[0];
+  const [hasNum, setHasNum] = useState(!!me.ext);
+  const [requested, setRequested] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const curStatus = STATUSES[status];
+
+  useEffect(() => {
+    const h = e => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", h);
+    return () => document.removeEventListener("keydown", h);
+  }, [onClose]);
+
+  const copy = () => {
+    navigator.clipboard?.writeText(`usr_${me.id}`);
+    setCopied(true); setTimeout(()=>setCopied(false), 1800);
+  };
+
+  const Row = ({label, value, mono, action}) => (
+    <div style={{ display:"flex",alignItems:"center",padding:"11px 0",borderBottom:`1px solid ${C.border}` }}>
+      <div style={{ width:170,fontSize:12.5,color:C.text2,flexShrink:0 }}>{label}</div>
+      <div style={{ flex:1,fontSize:13.5,color:C.text,fontWeight:500,fontFamily:mono?"'DM Mono', monospace":"inherit",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{value}</div>
+      {action}
+    </div>
+  );
+
+  return (
+    <div onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}
+      style={{ position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:200,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"40px 20px",overflowY:"auto" }}>
+      <div style={{ background:C.bg2,borderRadius:12,width:"100%",maxWidth:680,boxShadow:"0 20px 50px rgba(0,0,0,0.2)",display:"flex",flexDirection:"column",maxHeight:"calc(100vh - 80px)",overflow:"hidden",border:`1px solid ${C.border}` }}>
+        <div style={{ padding:"16px 22px",borderBottom:`1px solid ${C.border}`,background:C.card,display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0 }}>
+          <div>
+            <h2 style={{ margin:0,fontSize:16,fontWeight:600,color:C.text }}>Мой профиль</h2>
+            <p style={{ margin:"3px 0 0",fontSize:12.5,color:C.text2 }}>Учётные данные и доступы сотрудника</p>
+          </div>
+          <button onClick={onClose} style={{ width:32,height:32,borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",background:"transparent",color:C.text2,cursor:"pointer",border:"none" }}>
+            <X size={18}/>
+          </button>
+        </div>
+        <div style={{ overflowY:"auto",padding:"20px 22px" }}>
+          <div style={{ background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:18,marginBottom:14,display:"flex",alignItems:"center",gap:16 }}>
+            <div style={{ position:"relative", flexShrink:0 }}>
+              <Av i={me.av} c={me.col} sz={64}/>
+              <span style={{ position:"absolute", bottom:0, right:0, width:16, height:16, borderRadius:"50%", background:curStatus.col, border:`3px solid ${C.card}`, boxSizing:"content-box" }}/>
+            </div>
+            <div style={{ flex:1,minWidth:0 }}>
+              <h2 style={{ margin:"0 0 6px",fontSize:18,fontWeight:600,color:C.text }}>{me.name}</h2>
+              <div style={{ display:"flex",gap:6,marginBottom:7,flexWrap:"wrap",alignItems:"center" }}>
+                <Bdg v="adm">{me.role==="admin"?"Администратор":"Пользователь"}</Bdg>
+                <Bdg>{me.dept}</Bdg>
+                <span style={{ display:"inline-flex",alignItems:"center",gap:5,fontSize:12,color:C.text2 }}>
+                  <span style={{ width:7,height:7,borderRadius:"50%",background:curStatus.col }}/>
+                  {curStatus.label}
+                </span>
+              </div>
+              <div style={{ fontSize:13,color:C.text2,display:"flex",alignItems:"center",gap:6 }}>
+                <Mail size={13}/>{me.email}
+              </div>
+            </div>
+          </div>
+
+          <div style={{ background:C.card,border:`1px solid ${C.border}`,borderRadius:12,marginBottom:14,overflow:"hidden" }}>
+            <div style={{ padding:"12px 18px",borderBottom:`1px solid ${C.border}`,fontSize:13.5,fontWeight:600,color:C.text }}>Учётная запись</div>
+            <div style={{ padding:"2px 18px 12px" }}>
+              <Row label="ID пользователя" value={`usr_${me.id}`} mono action={
+                <button onClick={copy} style={{ width:28,height:28,borderRadius:6,display:"flex",alignItems:"center",justifyContent:"center",background:copied?C.accBg2:"transparent",color:copied?C.acc:C.text3,cursor:"pointer",border:"none" }}>
+                  {copied?<Check size={14}/>:<Copy size={13}/>}
+                </button>
+              }/>
+              <Row label="Email" value={me.email}/>
+              <Row label="Отдел" value={me.dept}/>
+              <Row label="Последний вход" value={<span style={{ display:"inline-flex",alignItems:"center",gap:5 }}><span style={{ width:6,height:6,borderRadius:"50%",background:C.acc,display:"inline-block" }}/>Активен сейчас</span>}/>
+            </div>
+          </div>
+
+          <div style={{ background:C.card,border:`1px solid ${C.border}`,borderRadius:12,marginBottom:14,overflow:"hidden" }}>
+            <div style={{ padding:"12px 18px",borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"space-between" }}>
+              <span style={{ fontSize:13.5,fontWeight:600,color:C.text }}>Телефония</span>
+              <span style={{ fontSize:11,color:C.text3,display:"flex",alignItems:"center",gap:5 }}>
+                <Shield size={11}/>Управляется администратором
+              </span>
+            </div>
+            {hasNum && me.ext ? (
+              <div style={{ padding:"18px" }}>
+                <div style={{ display:"flex",alignItems:"center",gap:14 }}>
+                  <div style={{ width:52,height:52,borderRadius:13,background:C.accBg,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0 }}>
+                    <Phone size={21} color={C.acc}/>
+                  </div>
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontSize:11,fontWeight:600,color:C.text2,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:3 }}>Внутренний номер</div>
+                    <div style={{ fontFamily:"'DM Mono', monospace", fontSize:22,fontWeight:600,color:C.text,letterSpacing:"0.02em" }}>#{me.ext}</div>
+                    <div style={{ display:"flex",alignItems:"center",gap:5,marginTop:4 }}>
+                      <div style={{ width:6,height:6,borderRadius:"50%",background:C.acc,boxShadow:`0 0 0 2px ${C.acc}33` }}/>
+                      <span style={{ fontSize:12,color:C.acc,fontWeight:600 }}>Зарегистрирован на FreePBX</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div style={{ padding:"18px" }}>
+                <div style={{ background:C.warnBg,border:`1px solid ${C.warnBrd}`,borderRadius:10,padding:"14px 16px",display:"flex",alignItems:"flex-start",gap:12,marginBottom:14 }}>
+                  <div style={{ width:34,height:34,borderRadius:9,background:C.card,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0 }}>
+                    <PhoneOff size={16} color={C.warnTx}/>
+                  </div>
+                  <div>
+                    <div style={{ fontSize:13.5,fontWeight:600,color:C.warnTx }}>Внутренний номер не назначен</div>
+                    <div style={{ fontSize:12,color:C.warnTx,marginTop:3,lineHeight:1.5 }}>
+                      Звонки через внутреннюю АТС недоступны. Отправьте запрос администратору — номер будет назначен из свободного пула.
+                    </div>
+                  </div>
+                </div>
+                {!requested ? (
+                  <button onClick={()=>{
+                    setRequested(true);
+                    push({ type:"request", title:"Запрос на номер отправлен", desc:"Администратор получит уведомление и назначит внутренний номер" });
+                  }} style={{ background:C.acc,color:"white",padding:"10px 18px",borderRadius:8,fontWeight:600,fontSize:14,border:"none",cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",gap:7 }}>
+                    <Phone size={15}/>Запросить номер
+                  </button>
+                ) : (
+                  <div style={{ display:"flex",alignItems:"center",gap:10,padding:"11px 14px",background:C.accBg,border:`1px solid ${C.accBrd}`,borderRadius:8,color:C.accTx,fontSize:13,fontWeight:500 }}>
+                    <Clock size={14}/>
+                    <span style={{ flex:1 }}>Запрос отправлен администратору · ожидайте назначения</span>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div style={{ display:"flex",gap:10 }}>
+            <button style={{ flex:1,padding:"10px 16px",borderRadius:8,border:`1px solid ${C.border}`,background:C.card,color:C.text,fontWeight:500,fontSize:13.5,cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",justifyContent:"center",gap:7 }}>
+              <Key size={14}/>Сменить пароль
+            </button>
+            <button style={{ padding:"10px 18px",borderRadius:8,border:`1px solid ${C.border}`,background:C.card,color:C.err,fontWeight:500,fontSize:13.5,cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",gap:7 }}>
+              <LogOut size={14}/>Выйти
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── STUB ───
+function StubPage({ page }) {
+  const M = {
+    messengers: { Icon:MessageSquare, col:C.ok,   bg:C.okBg,   title:"Мессенджеры", desc:"Омниканальный inbox: WhatsApp, Telegram и другие каналы. Также внутренний чат сотрудников.", stage:"Этап 2" },
+    contacts:   { Icon:Users,         col:C.purp, bg:C.purpBg, title:"Контакты",    desc:"Справочник коллег с оргструктурой и внешних контрагентов, синхронизация с Bitrix24.",        stage:"Этап 2" },
+    helpdesk:   { Icon:HelpCircle,    col:C.warn, bg:C.warnBg, title:"Хелпдэск",    desc:"Система тикетов для ИТ, АХО, HR. SLA-политики, назначение, история обращений, база знаний.", stage:"Этап 2" },
+  };
+  const m = M[page];
+  return (
+    <div style={{ minHeight:"100%", background:C.bg2, display:"flex", alignItems:"center", justifyContent:"center" }}>
+      <div style={{ textAlign:"center", maxWidth:380, padding:24 }}>
+        <div style={{ width:68,height:68,borderRadius:20,background:m.bg,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 20px" }}>
+          <m.Icon size={30} color={m.col}/>
+        </div>
+        <h2 style={{ margin:"0 0 10px",fontSize:20,fontWeight:600,color:C.text }}>{m.title}</h2>
+        <p style={{ margin:"0 0 20px",fontSize:14,color:C.text2,lineHeight:1.65 }}>{m.desc}</p>
+        <Bdg v="warn">В разработке · {m.stage}</Bdg>
+      </div>
+    </div>
+  );
+}
+
+// ─── NAV CONFIG ───
+const NAV = [
+  { id:"vcs",           label:"Конференции",   Icon:Video },
+  { id:"analytics",     label:"Аналитика",     Icon:BarChart3 },
+  { id:"transcription", label:"Транскрибация", Icon:FileText },
+  { id:"messengers",    label:"Мессенджеры",   Icon:MessageSquare, stub:true },
+  { id:"contacts",      label:"Контакты",      Icon:Users,         stub:true },
+  { id:"helpdesk",      label:"Хелпдэск",      Icon:HelpCircle,    stub:true },
+];
+const ADM = [
+  { id:"users",          label:"Пользователи",   Icon: User },
+  { id:"phone-settings", label:"Настройки АТС",  Icon: Settings },
+  { id:"smtp-settings",  label:"Настройки SMTP", Icon: Send },
+];
+
+// ─── APP ───
+export default function App() {
+  return (
+    <AppProvider>
+      <AppInner/>
+    </AppProvider>
+  );
+}
+
+function AppInner() {
+  const [page, setPage] = useState("vcs");
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const hoverTimer = useRef(null);
+  const me = USERS_INIT[0];
+  const { status } = useApp();
+  const curStatus = STATUSES[status];
+
+  const onEnter = () => { clearTimeout(hoverTimer.current); setExpanded(true); };
+  const onLeave = () => { clearTimeout(hoverTimer.current); hoverTimer.current = setTimeout(()=>setExpanded(false), 120); };
+
+  return (
+    <div style={{ display:"flex", height:"100vh", overflow:"hidden", fontFamily:"'Outfit', system-ui, sans-serif", color:C.text, background:C.bg }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap');
+        *, *::before, *::after { box-sizing:border-box; margin:0; padding:0; }
+        button { cursor:pointer; border:none; background:none; font-family:inherit; }
+        input, select, textarea { font-family:inherit; }
+        input::placeholder, textarea::placeholder { color:${C.text3}; }
+        ::-webkit-scrollbar { width:6px; height:6px; }
+        ::-webkit-scrollbar-track { background:transparent; }
+        ::-webkit-scrollbar-thumb { background:${C.border2}; border-radius:3px; }
+        ::-webkit-scrollbar-thumb:hover { background:${C.text3}; }
+      `}</style>
+
+      <nav onMouseEnter={onEnter} onMouseLeave={onLeave}
+        style={{ width: expanded ? 220 : 56, background: C.bg2, display: "flex", flexDirection: "column", transition: "width 180ms ease", overflow: "hidden", flexShrink: 0, borderRight: `1px solid ${C.border}`, position: "relative", zIndex: 20 }}>
+        <div style={{ padding:"12px 10px", borderBottom:`1px solid ${C.border}`, display:"flex", alignItems:"center", gap:10, whiteSpace:"nowrap", minHeight:56 }}>
+          <div style={{ width:36, height:36, borderRadius:8, background:C.card, border:`1px solid ${C.border}`, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, overflow:"hidden", padding:3 }}>
+            <img src={LOGO_URL} alt="SoftService"
+              style={{ maxWidth:"100%", maxHeight:"100%", objectFit:"contain", display:"block" }}
+              onError={e => {
+                e.currentTarget.style.display = "none";
+                const p = e.currentTarget.parentElement;
+                if (p && !p.querySelector('span')) {
+                  const s = document.createElement('span');
+                  s.textContent = "СС";
+                  s.style.cssText = `color:${C.acc};font-weight:700;font-size:13px`;
+                  p.appendChild(s);
+                }
+              }}
+            />
+          </div>
+          <div style={{ minWidth:0, overflow:"hidden", opacity:expanded?1:0, transition:"opacity 120ms", transitionDelay:expanded?"80ms":"0ms" }}>
+            <div style={{ color:C.text, fontWeight:700, fontSize:14, letterSpacing:"-0.02em", lineHeight:1.15 }}>Toolkit</div>
+            <div style={{ color:C.text3, fontSize:11, marginTop:1 }}>СофтСервис · softservice.by</div>
+          </div>
+        </div>
+
+        <div style={{ flex:1, padding:"8px 0", overflowY:"auto", overflowX:"hidden", display:"flex", flexDirection:"column" }}>
+          <div style={{ padding:"10px 14px 4px", fontSize:10, fontWeight:600, color:C.text3, textTransform:"uppercase", letterSpacing:"0.09em", whiteSpace:"nowrap", opacity:expanded?1:0, transition:"opacity 120ms", transitionDelay:expanded?"80ms":"0ms", height:expanded?"auto":0, overflow:"hidden" }}>Инструменты</div>
+          {NAV.map(item=><NavItem key={item.id} item={item} active={page===item.id} expanded={expanded} onClick={()=>setPage(item.id)}/>)}
+          <div style={{ margin:"8px 12px", borderTop:`1px solid ${C.border}` }}/>
+          <div style={{ padding:"4px 14px 4px", fontSize:10, fontWeight:600, color:C.text3, textTransform:"uppercase", letterSpacing:"0.09em", whiteSpace:"nowrap", opacity:expanded?1:0, transition:"opacity 120ms", transitionDelay:expanded?"80ms":"0ms", height:expanded?"auto":0, overflow:"hidden" }}>Администратор</div>
+          {ADM.map(item=><NavItem key={item.id} item={item} active={page===item.id} expanded={expanded} onClick={()=>setPage(item.id)}/>)}
+        </div>
+
+        <BottomActions expanded={expanded}/>
+
+        <button onClick={()=>setProfileOpen(true)} title={!expanded?"Мой профиль":undefined}
+          style={{ borderTop:`1px solid ${C.border}`, padding:"10px 12px", display:"flex", alignItems:"center", gap:11, background: profileOpen ? C.bg3 : "transparent", width:"100%", border:"none", cursor:"pointer", fontFamily:"inherit", whiteSpace:"nowrap", overflow:"hidden" }}>
+          <div style={{ position:"relative", flexShrink:0 }}>
+            <div style={{ width:32, height:32, borderRadius:"50%", background:me.col, display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, fontWeight:600, color:"white" }}>{me.av}</div>
+            <span style={{ position:"absolute", bottom:-1, right:-1, width:10, height:10, borderRadius:"50%", background:curStatus.col, border:`2px solid ${C.bg2}`, boxSizing:"content-box" }}/>
+          </div>
+          <div style={{ flex:1, overflow:"hidden", textAlign:"left", opacity:expanded?1:0, transition:"opacity 120ms", transitionDelay:expanded?"80ms":"0ms" }}>
+            <div style={{ color:C.text, fontSize:13, fontWeight:600, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{me.name}</div>
+            <div style={{ color:C.text3, fontSize:11, marginTop:1, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
+              {me.ext ? `#${me.ext}` : me.email}
+            </div>
+          </div>
+          {expanded && <ChevronRight size={14} color={C.text3}/>}
+        </button>
+      </nav>
+
+      <main style={{ flex:1, overflow:"auto", display:"flex", flexDirection:"column" }}>
+        {page==="vcs"           && <VcsPage/>}
+        {page==="analytics"     && <AnalyticsPage/>}
+        {page==="transcription" && <TranscriptionPage/>}
+        {page==="users"         && <UsersPage/>}
+        {page==="phone-settings"&& <PhoneSettingsPage/>}
+        {page==="smtp-settings" && <SmtpSettingsPage/>}
+        {["messengers","contacts","helpdesk"].includes(page) && <StubPage page={page}/>}
+      </main>
+
+      <SoftphoneWidget/>
+
+      {profileOpen && <ProfileModal onClose={()=>setProfileOpen(false)}/>}
+    </div>
+  );
+}

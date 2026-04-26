@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Toolkit</title>
+    <style>
+        body { font-family: system-ui, -apple-system, sans-serif; max-width: 640px; margin: 64px auto; padding: 0 24px; color: #222; }
+        h1 { font-size: 24px; margin-bottom: 8px; }
+        .tag { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 4px; background: #f3f3f3; color: #666; }
+        ul { line-height: 1.8; }
+        code { background: #f7f7f7; padding: 1px 6px; border-radius: 3px; font-size: 13px; }
+        .muted { color: #777; font-size: 14px; margin-top: 32px; }
+    </style>
+</head>
+<body>
+    <h1>Toolkit <span class="tag">итерация 1 — инфра-стек</span></h1>
+    <p>Инфраструктура поднята. Приложение (SPA + API) в разработке.</p>
+    <h2>Сервисы</h2>
+    <ul>
+        <li>PostgreSQL — порт <code>5432</code></li>
+        <li>MinIO Console — <a href="http://localhost:9001" target="_blank">localhost:9001</a></li>
+        <li>OpenSearch — порт <code>9200</code></li>
+        <li>LiveKit HTTP health — <a href="http://localhost:7880" target="_blank">localhost:7880</a></li>
+        <li>Grafana — <a href="http://localhost:3001" target="_blank">localhost:3001</a></li>
+        <li>Prometheus — <a href="http://localhost:9090" target="_blank">localhost:9090</a></li>
+    </ul>
+    <p class="muted">Документация: <code>toolkit-tz/</code>. Следующая итерация — backend API (Go) + SPA-каркас (React+Vite).</p>
+</body>
+</html>

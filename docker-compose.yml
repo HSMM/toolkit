@@ -1,0 +1,345 @@
+# Toolkit stack — dev/local deployment.
+# Production override: docker-compose.prod.yml (LiveKit/coturn в host network, web на private IP).
+# См. README.md "Быстрый старт".
+
+services:
+
+  # ---------- Data layer ----------
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+      - ./ops/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [internal]
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    command: server /data --console-address ":9001"
+    volumes:
+      - ./data/minio:/data
+    ports:
+      - "${MINIO_API_PORT}:9000"
+      - "${MINIO_CONSOLE_PORT}:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [internal]
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET_RECORDINGS: ${MINIO_BUCKET_RECORDINGS}
+      MINIO_BUCKET_REPORTS: ${MINIO_BUCKET_REPORTS}
+      MINIO_BUCKET_BACKUPS: ${MINIO_BUCKET_BACKUPS}
+    entrypoint: /bin/sh
+    command: /scripts/init-buckets.sh
+    volumes:
+      - ./ops/minio/init-buckets.sh:/scripts/init-buckets.sh:ro
+    networks: [internal]
+    restart: "no"
+
+  opensearch:
+    image: opensearchproject/opensearch:2.13.0
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=${OPENSEARCH_INITIAL_ADMIN_PASSWORD}
+      - DISABLE_SECURITY_PLUGIN=true        # dev only; prod — включить и настроить
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+      nofile: { soft: 65536, hard: 65536 }
+    volumes:
+      - ./data/opensearch:/usr/share/opensearch/data
+    ports:
+      - "${OPENSEARCH_PORT}:9200"
+    networks: [internal]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --save "" --appendonly no
+    ports:
+      - "${REDIS_PORT}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks: [internal]
+
+  # ---------- Media layer ----------
+
+  livekit:
+    image: livekit/livekit-server:latest
+    restart: unless-stopped
+    command: --config /etc/livekit.yaml
+    volumes:
+      - ./ops/livekit/livekit.yaml:/etc/livekit.yaml:ro
+    environment:
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
+    ports:
+      - "${LIVEKIT_HTTP_PORT}:7880"
+      - "${LIVEKIT_TCP_PORT}:7881"
+      - "50000-50050:50000-50050/udp"    # узкий dev-диапазон; prod: 50000-60000 через host network
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks: [edge, internal]
+
+  livekit-egress:
+    image: livekit/egress:latest
+    restart: unless-stopped
+    environment:
+      EGRESS_CONFIG_FILE: /etc/egress.yaml
+    volumes:
+      - ./ops/livekit/egress.yaml:/etc/egress.yaml:ro
+      - ./data/egress:/out
+    cap_add:
+      - SYS_ADMIN      # требуется для Chromium sandbox у composite egress
+    depends_on:
+      redis:
+        condition: service_healthy
+      livekit:
+        condition: service_started
+    networks: [edge, internal]
+
+  coturn:
+    image: coturn/coturn:latest
+    restart: unless-stopped
+    command: >
+      -n
+      --log-file=stdout
+      --listening-port=${COTURN_PORT}
+      --realm=${COTURN_REALM}
+      --use-auth-secret
+      --static-auth-secret=${COTURN_STATIC_AUTH_SECRET}
+      --external-ip=${COTURN_EXTERNAL_IP}
+      --min-port=49152
+      --max-port=49999
+      --no-cli
+      --no-tlsv1
+      --no-tlsv1_1
+    ports:
+      - "${COTURN_PORT}:3478/udp"
+      - "${COTURN_PORT}:3478/tcp"
+      - "49152-49999:49152-49999/udp"
+    networks: [edge]
+
+  # ---------- Application layer ----------
+
+  migrate:
+    build: ./apps/api
+    command: ["migrate", "--cmd=up"]
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      JWT_SECRET: ${JWT_SECRET}
+      MIGRATIONS_PATH: file:///app/migrations
+      TOOLKIT_ENV: dev
+    volumes:
+      - ./migrations:/app/migrations:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [internal]
+    restart: "no"
+
+  api:
+    build: ./apps/api
+    command: ["api"]
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      JWT_SECRET: ${JWT_SECRET}
+      HTTP_PORT: "8080"
+      TOOLKIT_ENV: dev
+      LOG_LEVEL: info
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks: [edge, internal]
+    restart: unless-stopped
+
+  worker:
+    build: ./apps/api
+    command: ["worker"]
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      JWT_SECRET: ${JWT_SECRET}
+      TOOLKIT_ENV: dev
+      LOG_LEVEL: info
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks: [internal]
+    restart: unless-stopped
+
+  # Сборка SPA (выполняется один раз при старте, копирует dist/ в общий volume).
+  # Меняешь код в apps/web/* → docker compose up --build web-build
+  web-build:
+    build:
+      context: ./apps/web
+      target: build
+    command: ["sh", "-c", "cp -r /src/dist/. /out/ && echo 'web build copied to /out'"]
+    volumes:
+      - web_dist:/out
+    restart: "no"
+
+  web:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    volumes:
+      - ./ops/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - web_dist:/usr/share/nginx/html:ro
+    ports:
+      - "${WEB_PORT}:80"
+    depends_on:
+      web-build:
+        condition: service_completed_successfully
+    networks: [edge, internal]
+
+  # ---------- Backups ----------
+
+  postgres-backup:
+    build: ./ops/postgres-backup
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      MINIO_URL: http://minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      BACKUP_BUCKET: ${MINIO_BUCKET_BACKUPS}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    networks: [internal]
+
+  # ---------- Observability ----------
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    restart: unless-stopped
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/host
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc|run|var/lib/docker/.+)($$|/)
+    pid: host
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host:ro,rslave
+    networks: [internal]
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_NAME: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [internal]
+
+  prometheus:
+    image: prom/prometheus:latest
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    volumes:
+      - ./ops/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./data/prometheus:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT}:9090"
+    networks: [internal]
+
+  loki:
+    image: grafana/loki:3.0.0
+    restart: unless-stopped
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./ops/loki/loki.yaml:/etc/loki/local-config.yaml:ro
+      - ./data/loki:/loki
+    ports:
+      - "${LOKI_PORT}:3100"
+    networks: [internal]
+
+  promtail:
+    image: grafana/promtail:3.0.0
+    restart: unless-stopped
+    command: -config.file=/etc/promtail/config.yaml
+    volumes:
+      - ./ops/loki/promtail.yaml:/etc/promtail/config.yaml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
+    networks: [internal]
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      # Unified alerting → SMTP. Контактные точки и правила — в provisioning/alerting/.
+      GF_SMTP_ENABLED: "true"
+      GF_SMTP_HOST: "${SMTP_HOST}:${SMTP_PORT}"
+      GF_SMTP_USER: ${SMTP_USER}
+      GF_SMTP_PASSWORD: ${SMTP_PASSWORD}
+      GF_SMTP_FROM_ADDRESS: ${SMTP_FROM}
+      GF_SMTP_FROM_NAME: ${SMTP_FROM_NAME}
+      GF_SMTP_SKIP_VERIFY: ${SMTP_SKIP_VERIFY}
+      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO}
+    volumes:
+      - ./ops/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./data/grafana:/var/lib/grafana
+    ports:
+      - "${GRAFANA_PORT}:3000"
+    depends_on:
+      - prometheus
+      - loki
+    networks: [internal]
+
+networks:
+  edge:
+  internal:
+
+volumes:
+  web_dist:
