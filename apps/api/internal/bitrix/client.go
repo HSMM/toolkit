@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"path"
@@ -54,8 +55,8 @@ func (c *Client) AuthorizeURL(redirectURI, state string) (string, error) {
 	return base.String(), nil
 }
 
-func (c *Client) ExchangeCode(ctx context.Context, code, redirectURI string) (*TokenResponse, error) {
-	endpoint, err := c.portalEndpoint("/oauth/token/")
+func (c *Client) ExchangeCode(ctx context.Context, code, redirectURI, serverDomain string) (*TokenResponse, error) {
+	endpoint, err := c.oauthEndpoint(serverDomain, "/oauth/token/")
 	if err != nil {
 		return nil, err
 	}
@@ -157,8 +158,12 @@ func (c *Client) getJSON(ctx context.Context, rawURL string, out any) error {
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		return fmt.Errorf("bitrix: unexpected status %d", res.StatusCode)
 	}
-	if err := json.NewDecoder(res.Body).Decode(out); err != nil {
-		return fmt.Errorf("bitrix decode: %w", err)
+	body, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	if err != nil {
+		return fmt.Errorf("bitrix body read: %w", err)
+	}
+	if err := json.Unmarshal(body, out); err != nil {
+		return fmt.Errorf("bitrix decode: %w; body: %s", err, responseSnippet(body))
 	}
 	return nil
 }
@@ -177,4 +182,34 @@ func (c *Client) portalEndpoint(p string) (*url.URL, error) {
 
 func (c *Client) restEndpoint(p string) (*url.URL, error) {
 	return c.portalEndpoint(p)
+}
+
+func (c *Client) oauthEndpoint(serverDomain, p string) (*url.URL, error) {
+	serverDomain = strings.TrimSpace(serverDomain)
+	if serverDomain == "" {
+		return c.portalEndpoint(p)
+	}
+	if !strings.Contains(serverDomain, "://") {
+		serverDomain = "https://" + serverDomain
+	}
+	u, err := url.Parse(serverDomain)
+	if err != nil {
+		return nil, fmt.Errorf("bitrix oauth server url: %w", err)
+	}
+	if u.Scheme != "https" || u.Host == "" {
+		return nil, fmt.Errorf("bitrix oauth server url: expected https host")
+	}
+	u.Path = path.Join(u.Path, p)
+	if strings.HasSuffix(p, "/") && !strings.HasSuffix(u.Path, "/") {
+		u.Path += "/"
+	}
+	return u, nil
+}
+
+func responseSnippet(body []byte) string {
+	s := strings.TrimSpace(string(body))
+	if len(s) > 300 {
+		s = s[:300]
+	}
+	return s
 }

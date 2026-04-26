@@ -153,3 +153,22 @@
 
 **Проверка:**
 - По логам `web` подтверждено, что Bitrix реально возвращал `GET /?code=...`.
+
+## 2026-04-26 — Фикс обмена Bitrix OAuth code на token
+
+**Задача:** после перехода на `/oauth/callback` API возвращал
+`bitrix_exchange_failed`; в логах backend была ошибка JSON decode, потому что
+запрос token endpoint получал HTML вместо JSON.
+
+**Диагностика:**
+- Bitrix24 callback содержит `server_domain=oauth.bitrix24.tech`.
+- Toolkit отправлял запрос `/oauth/token/` на URL портала
+  `portal.softservice.by`, а обмен кода нужно делать через OAuth-сервер,
+  который Bitrix возвращает в callback.
+
+**Сделано:**
+- `server_domain` из callback передаётся в Bitrix client при обмене code на token.
+- Bitrix client строит token endpoint от `server_domain`, если он есть, и
+  оставляет старый fallback на portal URL.
+- Ошибка декодирования ответа Bitrix теперь логирует короткий фрагмент тела
+  ответа, чтобы быстрее видеть HTML/JSON-причину.

@@ -82,7 +82,7 @@ func (h *Handlers) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := h.bitrix.ExchangeCode(r.Context(), code, h.callbackURL())
+	token, err := h.bitrix.ExchangeCode(r.Context(), code, h.callbackURL(), r.URL.Query().Get("server_domain"))
 	if err != nil {
 		h.logger.Error("bitrix code exchange failed", "err", err)
 		writeJSONError(w, http.StatusBadGateway, "bitrix_exchange_failed", "Bitrix24 code exchange failed")
