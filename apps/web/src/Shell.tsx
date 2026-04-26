@@ -660,10 +660,11 @@ function VcsPage({ me, onOpenTranscriptions }: { me: Me; onOpenTranscriptions?: 
   const [title, setTitle] = useState("");
   const [date, setDate] = useState(() => new Date(Date.now() + 86_400_000).toISOString().slice(0, 10));
   const [time, setTime] = useState("10:00");
-  const [transcribe, setTranscribe] = useState(true);
+  // Транскрибация триггерится вручную из истории встреч (см. модуль
+  // «Транскрибация»). На форме создания не показываем.
   const [record, setRecord] = useState(true);
 
-  const resetForm = () => { setTitle(""); setTranscribe(true); setRecord(true); };
+  const resetForm = () => { setTitle(""); setRecord(true); };
   const openModal = (m: "schedule" | "instant") => { resetForm(); setMode(m); setModal(true); };
   const closeModal = () => setModal(false);
 
@@ -678,7 +679,7 @@ function VcsPage({ me, onOpenTranscriptions }: { me: Me; onOpenTranscriptions?: 
         title: title.trim(),
         scheduled_at: scheduledISO,
         record_enabled: record,
-        auto_transcribe: transcribe,
+        auto_transcribe: false,
       });
       closeModal();
       push({
@@ -829,7 +830,6 @@ function VcsPage({ me, onOpenTranscriptions }: { me: Me; onOpenTranscriptions?: 
               )}
               {[
                 { v: record, set: setRecord, t: "Запись встречи", d: "Композитная запись (mp4) сохраняется в MinIO. Включается на host'е через LiveKit Egress (E5.2)." },
-                { v: transcribe, set: setTranscribe, t: "Транскрибация", d: "После завершения запись отправится в GigaAM, расшифровка появится в модуле «Транскрибация»." },
               ].map((opt, i) => (
                 <label key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", border: `1px solid ${opt.v ? C.acc : C.border}`, borderRadius: 10, cursor: "pointer", background: opt.v ? C.accBg : C.card, marginBottom: 8 }}>
                   <div style={{ position: "relative", width: 36, height: 20, background: opt.v ? C.acc : C.border2, borderRadius: 10, flexShrink: 0 }}>
