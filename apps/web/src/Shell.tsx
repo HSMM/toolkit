@@ -1112,16 +1112,10 @@ type ExtRow = {
 function AnalyticsPage() {
   const [tab, setTab] = useState<"monitoring" | "metrics">("monitoring");
   const [range, setRange] = useState("today");
-  const [exts, setExts] = useState<ExtRow[]>([
-    { ext: 1001, name: "Дмитрий Волков",        av: "ДВ", col: "#6366f1", state: "idle" },
-    { ext: 1002, name: "Анна Смирнова",         av: "АС", col: "#10b981", state: "oncall",  peer: "+7 495 123-45-67",  duration: 127,  direction: "in",  queue: "Продажи" },
-    { ext: 1003, name: "Иван Петров",           av: "ИП", col: "#f59e0b", state: "ringing", peer: "+375 29 200-78-29", duration: 0,    direction: "in" },
-    { ext: 1004, name: "Елена Соколова",        av: "ЕС", col: "#8b5cf6", state: "hold",    peer: "+375 44 700-60-15", duration: 44 },
-    { ext: 1007, name: "Александр Прокопович",  av: "АП", col: "#0ea5e9", state: "idle" },
-    { ext: 1008, name: "Мария Ковалёва",        av: "МК", col: "#14b8a6", state: "oncall",  peer: "1012",              duration: 3502, direction: "out", internal: true },
-    { ext: 1009, name: "Павел Семёнов",         av: "ПС", col: "#f43f5e", state: "dnd" },
-    { ext: 1010, name: "Ольга Егорова",         av: "ОЕ", col: "#a855f7", state: "offline" },
-  ]);
+
+  // Состояния extensions из FreePBX AMI (E5+) — пока endpoint не реализован,
+  // массив пустой, и шаблон показывает Empty-state.
+  const [exts, setExts] = useState<ExtRow[]>([]);
 
   useEffect(() => {
     const iv = setInterval(() => {
@@ -1156,20 +1150,9 @@ function AnalyticsPage() {
   const dnd     = exts.filter((e) => e.state === "dnd").length;
   const load    = online ? Math.round(busy / online * 100) : 0;
 
-  const queues = [
-    { name: "Продажи",     waiting: 2, agents: 4, answered: 47, avgWait: 18, sla: 92 },
-    { name: "Поддержка",   waiting: 0, agents: 2, answered: 12, avgWait: 34, sla: 88 },
-    { name: "Бухгалтерия", waiting: 1, agents: 1, answered: 6,  avgWait: 52, sla: 76 },
-  ];
-
-  const metrics = [
-    { name: "Анна Смирнова",        av: "АС", col: "#10b981", answered: 42, outgoing: 18, missed: 3, avgDur: 192, totalTalk: 8820, sla: 94 },
-    { name: "Иван Петров",          av: "ИП", col: "#f59e0b", answered: 38, outgoing: 22, missed: 5, avgDur: 174, totalTalk: 7680, sla: 87 },
-    { name: "Елена Соколова",       av: "ЕС", col: "#8b5cf6", answered: 31, outgoing: 9,  missed: 2, avgDur: 221, totalTalk: 6120, sla: 96 },
-    { name: "Александр Прокопович", av: "АП", col: "#0ea5e9", answered: 55, outgoing: 14, missed: 7, avgDur: 156, totalTalk: 9450, sla: 85 },
-    { name: "Мария Ковалёва",       av: "МК", col: "#14b8a6", answered: 27, outgoing: 31, missed: 1, avgDur: 204, totalTalk: 7920, sla: 95 },
-    { name: "Павел Семёнов",        av: "ПС", col: "#f43f5e", answered: 19, outgoing: 8,  missed: 4, avgDur: 142, totalTalk: 3840, sla: 82 },
-  ];
+  // Очереди FreePBX (E5+) и метрики операторов (E8+ admin) — придут с backend.
+  const queues: { name: string; waiting: number; agents: number; answered: number; avgWait: number; sla: number }[] = [];
+  const metrics: { name: string; av: string; col: string; answered: number; outgoing: number; missed: number; avgDur: number; totalTalk: number; sla: number }[] = [];
 
   const totals = {
     answered:  metrics.reduce((s, m) => s + m.answered, 0),
@@ -1179,8 +1162,8 @@ function AnalyticsPage() {
   };
   const totalCalls = totals.answered + totals.outgoing + totals.missed;
   const answerRate = totalCalls ? Math.round((totals.answered + totals.outgoing) / totalCalls * 100) : 0;
-  const avgSla = Math.round(metrics.reduce((s, m) => s + m.sla, 0) / metrics.length);
-  const avgDur = Math.round(metrics.reduce((s, m) => s + m.avgDur, 0) / metrics.length);
+  const avgSla = metrics.length ? Math.round(metrics.reduce((s, m) => s + m.sla, 0) / metrics.length) : 0;
+  const avgDur = metrics.length ? Math.round(metrics.reduce((s, m) => s + m.avgDur, 0) / metrics.length) : 0;
 
   return (
     <div style={{ minHeight: "100%", background: C.bg2 }}>
@@ -1226,7 +1209,11 @@ function AnalyticsPage() {
               <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>Внутренние номера</div>
               <div style={{ fontSize: 12, color: C.text2, marginTop: 2 }}>{exts.length} номеров · состояния из AMI</div>
             </div>
-            <div>
+            {exts.length === 0 ? (
+              <Empty Icon={Phone}
+                title="Нет данных по extensions"
+                sub="Подключение к FreePBX AMI не настроено или АТС не возвращает события. Проверьте настройки телефонии в админ-панели." />
+            ) : <div>
               {exts.map((e) => {
                 const m = stateMeta[e.state];
                 const isBusy = e.state === "oncall" || e.state === "hold";
@@ -1273,7 +1260,7 @@ function AnalyticsPage() {
                   </div>
                 );
               })}
-            </div>
+            </div>}
           </div>
 
           <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
@@ -1281,7 +1268,9 @@ function AnalyticsPage() {
               <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>Очереди</div>
               <div style={{ fontSize: 12, color: C.text2, marginTop: 2 }}>Распределение входящих звонков</div>
             </div>
-            <div style={{ overflowX: "auto" }}>
+            {queues.length === 0 ? (
+              <Empty Icon={Clock} title="Очереди не настроены" sub="После настройки очередей FreePBX данные появятся здесь автоматически." />
+            ) : <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 640 }}>
                 <thead>
                   <tr style={{ background: C.bg2 }}>
@@ -1309,7 +1298,7 @@ function AnalyticsPage() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </div>}
           </div>
         </div>
       ) : (
@@ -1331,7 +1320,11 @@ function AnalyticsPage() {
                 <Download size={13} />Экспорт CSV
               </button>
             </div>
-            <div style={{ overflowX: "auto" }}>
+            {metrics.length === 0 ? (
+              <Empty Icon={BarChart3}
+                title="Метрики операторов недоступны"
+                sub="Появятся когда CDR-импорт из FreePBX начнёт собирать историю звонков." />
+            ) : <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 820 }}>
                 <thead>
                   <tr style={{ background: C.bg2 }}>
@@ -1363,7 +1356,7 @@ function AnalyticsPage() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </div>}
           </div>
         </div>
       )}
