@@ -240,6 +240,8 @@ services:
     build:
       context: ./apps/web
       target: build
+      args:
+        VITE_LOGO_URL: ${VITE_LOGO_URL:-}
     command: ["sh", "-c", "cp -r /src/dist/. /out/ && echo 'web build copied to /out'"]
     volumes:
       - web_dist:/out

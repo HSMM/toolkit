@@ -6,6 +6,11 @@ FROM node:20-alpine AS build
 
 WORKDIR /src
 
+# Build-time env для Vite (VITE_* инлайнится в bundle на сборке).
+# Прокидываются через docker-compose `build.args` либо CLI `--build-arg`.
+ARG VITE_LOGO_URL
+ENV VITE_LOGO_URL=$VITE_LOGO_URL
+
 COPY package.json package-lock.json* ./
 RUN npm ci || npm install --no-audit --no-fund
 
