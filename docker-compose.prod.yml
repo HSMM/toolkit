@@ -18,7 +18,7 @@ services:
       - ./ops/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
 
   minio:
-    ports:
+    ports: !override
       - "${APP_BIND_ADDRESS}:9000:9000"               # S3 API — только внутри сети
       - "${APP_BIND_ADDRESS}:9001:9001"               # Console — только внутри сети
     volumes:
@@ -54,11 +54,11 @@ services:
     # Задаётся через env COTURN_EXTERNAL_IP
 
   web:
-    ports:
+    ports: !override
       - "${APP_BIND_ADDRESS}:${APP_BIND_PORT}:80"     # внешний прокси → app-сервер:18001 → контейнер:80
 
   prometheus:
-    ports:
+    ports: !override
       - "${APP_BIND_ADDRESS}:9090:9090"
     volumes:
       - ./ops/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
@@ -71,7 +71,7 @@ services:
       - /opt/toolkit/data/loki:/loki
 
   grafana:
-    ports:
+    ports: !override
       - "${APP_BIND_ADDRESS}:3001:3000"               # доступ только через VPN или SSH-tunnel
     volumes:
       - ./ops/grafana/provisioning:/etc/grafana/provisioning:ro
