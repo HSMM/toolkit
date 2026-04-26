@@ -64,7 +64,7 @@ func (q *Queue) Enqueue(ctx context.Context, kind string, payload any, opts ...E
 	}
 	const ins = `
 		INSERT INTO job (kind, payload, scheduled_at, priority, max_attempts)
-		VALUES ($1, $2::jsonb, NOW() + ($3 || ' seconds')::interval, $4, $5)
+		VALUES ($1, $2::jsonb, NOW() + make_interval(secs => $3), $4, $5)
 		RETURNING id
 	`
 	var id int64
@@ -161,7 +161,7 @@ func (q *Queue) Fail(ctx context.Context, id int64, runErr error) error {
 		SET
 			status       = CASE WHEN attempts >= max_attempts THEN 'dead_letter' ELSE 'pending' END,
 			scheduled_at = CASE WHEN attempts >= max_attempts THEN scheduled_at
-			                    ELSE NOW() + (LEAST(POWER(2, attempts), 3600) || ' seconds')::interval END,
+			                    ELSE NOW() + make_interval(secs => LEAST(POWER(2, attempts), 3600)::int) END,
 			locked_at    = NULL,
 			locked_by    = NULL,
 			last_error   = $2
@@ -174,7 +174,7 @@ func (q *Queue) Fail(ctx context.Context, id int64, runErr error) error {
 // Reschedule explicitly delays the job's next attempt (does NOT count as a failure).
 func (q *Queue) Reschedule(ctx context.Context, id int64, delay time.Duration) error {
 	_, err := q.pool.Exec(ctx,
-		`UPDATE job SET status = 'pending', scheduled_at = NOW() + ($2 || ' seconds')::interval,
+		`UPDATE job SET status = 'pending', scheduled_at = NOW() + make_interval(secs => $2),
 		    locked_at = NULL, locked_by = NULL WHERE id = $1`,
 		id, int(delay.Seconds()))
 	return err
