@@ -1,0 +1,18 @@
+Toolkit
+Copyright 2026 HSMM
+
+Toolkit is licensed under the Apache License, Version 2.0.
+
+This product includes and interoperates with third-party open-source
+software. Third-party components remain subject to their own licenses.
+See THIRD_PARTY_NOTICES.md for a project-level summary.
+
+The Toolkit name, project logos, company names, service names, and
+trademarks referenced in this repository are not licensed under the
+Apache License, except as required for reasonable and customary
+attribution.
+
+This repository may reference external systems such as Bitrix24,
+FreePBX, LiveKit, GigaAM, PostgreSQL, MinIO, OpenSearch, Grafana,
+Prometheus, Loki, coturn, Redis, and Nginx. Those systems are separate
+works and are governed by their respective licenses and terms.
