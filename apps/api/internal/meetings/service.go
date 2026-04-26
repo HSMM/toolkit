@@ -147,13 +147,15 @@ func (s *Service) List(ctx context.Context, userID uuid.UUID, limit int) ([]*Mee
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
+	// EXISTS вместо DISTINCT+JOIN: иначе PG ругается на ORDER BY с выражениями,
+	// которых нет дословно в select-list.
 	const q = `
-		SELECT DISTINCT m.id, m.created_by, m.title, COALESCE(m.description,''),
+		SELECT m.id, m.created_by, m.title, COALESCE(m.description,''),
 		       m.scheduled_at, m.started_at, m.ended_at, m.livekit_room_id,
 		       m.record_enabled, m.auto_transcribe, m.has_external, m.created_at
 		FROM meeting m
-		LEFT JOIN participant p ON p.meeting_id = m.id
-		WHERE m.created_by = $1 OR p.user_id = $1
+		WHERE m.created_by = $1
+		   OR EXISTS (SELECT 1 FROM participant p WHERE p.meeting_id = m.id AND p.user_id = $1)
 		ORDER BY (m.ended_at IS NULL) DESC,
 		         COALESCE(m.started_at, m.scheduled_at, m.created_at) DESC
 		LIMIT $2
