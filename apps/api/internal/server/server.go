@@ -26,8 +26,8 @@ import (
 	"github.com/HSMM/toolkit/internal/auth"
 	"github.com/HSMM/toolkit/internal/config"
 	"github.com/HSMM/toolkit/internal/db"
-	oauthhandlers "github.com/HSMM/toolkit/internal/server/oauth"
 	"github.com/HSMM/toolkit/internal/server/middleware"
+	oauthhandlers "github.com/HSMM/toolkit/internal/server/oauth"
 	"github.com/HSMM/toolkit/internal/ws"
 )
 

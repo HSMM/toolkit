@@ -127,5 +127,13 @@
 
 **Осталось/наблюдения:**
 - После ручного ввода секрета в чат его желательно перевыпустить в Bitrix24.
-- Нужно проверить реальный login-flow на `https://toolkit.softservice.by/login`
-  после деплоя.
+
+**Проверка на prod:**
+- В `/opt/toolkit/.env` на сервере `10.10.0.17` прописаны `TOOLKIT_BASE_URL`,
+  `TOOLKIT_CORS_ORIGINS`, `BITRIX_PORTAL_URL`, `BITRIX_CLIENT_ID`,
+  `BITRIX_CLIENT_SECRET`.
+- Backend пересобран через Docker Compose; `api` и `worker` стартовали.
+- `GET /oauth/login?return_to=/phone` возвращает `302` на
+  `https://portal.softservice.by/oauth/authorize/` с callback
+  `https://toolkit.softservice.by/oauth/callback`.
+- `POST /oauth/refresh` без cookie возвращает ожидаемый `401`.

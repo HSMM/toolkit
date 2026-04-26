@@ -87,7 +87,7 @@ func (c *Client) CurrentUser(ctx context.Context, accessToken string) (*User, er
 	endpoint.RawQuery = q.Encode()
 
 	var envelope struct {
-		Result User `json:"result"`
+		Result User   `json:"result"`
 		Error  string `json:"error"`
 		Desc   string `json:"error_description"`
 	}
