@@ -145,7 +145,6 @@ services:
       --max-port=49999
       --no-cli
       --no-tlsv1
-      --no-tlsv1_1
     ports:
       - "${COTURN_PORT}:3478/udp"
       - "${COTURN_PORT}:3478/tcp"

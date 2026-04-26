@@ -1,6 +1,9 @@
 -- Migration 000001: базовые таблицы авторизации и аудита.
 -- См. модель данных: toolkit-tz/toolkit-architecture.md, раздел 3.
 
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+CREATE EXTENSION IF NOT EXISTS "pg_trgm";
+
 -- =========================================================================
 -- user
 -- =========================================================================

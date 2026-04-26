@@ -30,7 +30,8 @@ services:
       - /opt/toolkit/data/opensearch:/usr/share/opensearch/data
 
   redis:
-    ports: !reset []
+    ports: !override
+      - "127.0.0.1:${REDIS_PORT}:6379"               # LiveKit в host network подключается к Redis через localhost
 
   livekit:
     network_mode: host

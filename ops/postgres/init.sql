@@ -1,8 +1,6 @@
--- PostgreSQL init: создаёт вспомогательные роли и схему.
--- Базовая БД уже создана POSTGRES_DB. Здесь только дополнительные роли.
+-- PostgreSQL init: создаёт вспомогательные роли и расширения.
+-- Запускается docker-entrypoint в контексте POSTGRES_DB (НЕ нужно \c — мы уже там).
 -- Миграции схемы хранятся в migrations/ и запускаются backend-миграционным runner'ом.
-
-\c :POSTGRES_DB
 
 -- Роль для обычных API-запросов (INSERT/UPDATE/SELECT/DELETE, кроме audit_log)
 DO $$ BEGIN
