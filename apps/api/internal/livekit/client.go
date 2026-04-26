@@ -228,6 +228,68 @@ func (c *Client) StartParticipantAudioEgress(ctx context.Context, room, identity
 	return resp.EgressID, nil
 }
 
+// StartRoomCompositeEgress — одна запись на всю комнату: видео-grid + микшированное аудио,
+// MP4 в S3. Используется для «полной» записи встречи (E5.2 pivot, без per-track).
+//
+// layout — "grid" (по умолчанию), "speaker", "single-speaker" — см. LiveKit docs.
+func (c *Client) StartRoomCompositeEgress(ctx context.Context, room, layout, filepath string, s3 S3Config) (string, error) {
+	if layout == "" {
+		layout = "grid"
+	}
+	body := map[string]any{
+		"room_name": room,
+		"layout":    layout,
+		// preset H264_720P_30 даёт балансный bitrate; подходит и для 1-2 человек, и для 6-10.
+		"preset": "H264_720P_30",
+		"file_outputs": []any{
+			map[string]any{
+				"file_type": "MP4",
+				"filepath":  filepath,
+				"s3":        s3.json(),
+			},
+		},
+	}
+	var resp egressInfoMin
+	if err := c.twirp(ctx, "Egress", room, "StartRoomCompositeEgress", body, &resp); err != nil {
+		return "", err
+	}
+	return resp.EgressID, nil
+}
+
+// StartRoomCompositeAudioEgress — то же что выше, но audio_only=true.
+// Файл — OGG/Opus с микшированным аудио всех participant'ов комнаты.
+// Используется параллельно с видео-композитом для получения транскрибируемой
+// дорожки (видео-MP4 не подходит для GigaAM напрямую).
+func (c *Client) StartRoomCompositeAudioEgress(ctx context.Context, room, filepath string, s3 S3Config) (string, error) {
+	body := map[string]any{
+		"room_name":  room,
+		"audio_only": true,
+		"file_outputs": []any{
+			map[string]any{
+				"file_type": "OGG",
+				"filepath":  filepath,
+				"s3":        s3.json(),
+			},
+		},
+	}
+	var resp egressInfoMin
+	if err := c.twirp(ctx, "Egress", room, "StartRoomCompositeEgress", body, &resp); err != nil {
+		return "", err
+	}
+	return resp.EgressID, nil
+}
+
+func (s S3Config) json() map[string]any {
+	return map[string]any{
+		"access_key":       s.AccessKey,
+		"secret":           s.Secret,
+		"endpoint":         s.Endpoint,
+		"region":           s.Region,
+		"bucket":           s.Bucket,
+		"force_path_style": s.ForcePathStyle,
+	}
+}
+
 // StopEgress останавливает запись по id. Идемпотентно — already-stopped возвращает OK.
 func (c *Client) StopEgress(ctx context.Context, egressID string) error {
 	if egressID == "" {
