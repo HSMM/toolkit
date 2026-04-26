@@ -106,3 +106,26 @@
 
 **Проверка:**
 - Проверен markdown diff.
+
+## 2026-04-26 — Подключение Bitrix24 OAuth для первого клиента
+
+**Задача:** подготовить Toolkit к авторизации через локальное приложение Bitrix24
+портала `portal.softservice.by` и публичный URL `https://toolkit.softservice.by`.
+
+**Сделано:**
+- Проверено, что текущие `/oauth/*` endpoints были stub-обработчиками.
+- Добавлен минимальный Bitrix24 OAuth client для authorization-code flow.
+- Добавлены handlers `/oauth/login`, `/oauth/callback`, `/oauth/refresh`,
+  `/oauth/logout`, `/oauth/install`.
+- Callback создаёт или обновляет пользователя Toolkit по `user.current`, создаёт
+  HttpOnly refresh-cookie и дальше SPA получает access JWT через `/oauth/refresh`.
+- Добавлены env-пробросы `TOOLKIT_BASE_URL`, `TOOLKIT_CORS_ORIGINS`,
+  `BITRIX_PORTAL_URL`, `BITRIX_CLIENT_ID`, `BITRIX_CLIENT_SECRET`,
+  `BITRIX_APP_TOKEN` в compose.
+- `client_secret` не коммитится в репозиторий; секрет должен храниться только
+  в `.env` окружения.
+
+**Осталось/наблюдения:**
+- После ручного ввода секрета в чат его желательно перевыпустить в Bitrix24.
+- Нужно проверить реальный login-flow на `https://toolkit.softservice.by/login`
+  после деплоя.

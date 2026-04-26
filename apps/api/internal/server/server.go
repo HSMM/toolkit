@@ -26,6 +26,7 @@ import (
 	"github.com/HSMM/toolkit/internal/auth"
 	"github.com/HSMM/toolkit/internal/config"
 	"github.com/HSMM/toolkit/internal/db"
+	oauthhandlers "github.com/HSMM/toolkit/internal/server/oauth"
 	"github.com/HSMM/toolkit/internal/server/middleware"
 	"github.com/HSMM/toolkit/internal/ws"
 )
@@ -41,6 +42,7 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 	jwtIssuer := auth.NewJWTIssuer(cfg.JWTSecret)
 	subjectLoader := auth.NewSubjectLoader(pool)
 	hub := ws.NewHub(logger)
+	oauthHandlers := oauthhandlers.New(cfg, pool, logger, jwtIssuer)
 
 	r := chi.NewRouter()
 
@@ -57,14 +59,12 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 	r.Get("/readyz", handleHealth(pool))
 	r.Get("/version", handleVersion())
 
-	// --- OAuth flow (E1.2) ---
-	// Endpoints registered here as the auth handlers package lands. For now,
-	// stub so the route group exists.
 	r.Route("/oauth", func(r chi.Router) {
-		r.Get("/login", stubHandler("E1.2: bitrix24 oauth login redirect"))
-		r.Get("/callback", stubHandler("E1.2: bitrix24 oauth code exchange"))
-		r.Post("/install", stubHandler("E1.2: bitrix24 local app installation handler"))
-		r.Post("/logout", stubHandler("E1.5: logout"))
+		r.Get("/login", oauthHandlers.Login)
+		r.Get("/callback", oauthHandlers.Callback)
+		r.Post("/refresh", oauthHandlers.Refresh)
+		r.Post("/install", oauthHandlers.Install)
+		r.Post("/logout", oauthHandlers.Logout)
 	})
 
 	// --- Authenticated API ---
