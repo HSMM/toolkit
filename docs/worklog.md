@@ -23,9 +23,9 @@
 - Проверен JSON в `apps/web/package.json`.
 - Изменения запушены в `origin/main`.
 
-## 2026-04-26 — Восстановление prod-запуска Docker на `10.10.0.17`
+## 2026-04-26 — Восстановление prod-запуска Docker на `<APP_SERVER>`
 
-**Задача:** разобраться, почему production stack на сервере `root@10.10.0.17`
+**Задача:** разобраться, почему production stack на сервере `root@<APP_SERVER>`
 не запускается через Docker Compose, и довести стек до рабочего состояния.
 
 **Диагностика:**
@@ -76,11 +76,11 @@
 
 **Проверка:**
 - `docker compose ps` показывает 17 running-сервисов.
-- `http://10.10.0.17:18001/healthz` возвращает `{"status":"ok"}`.
-- `http://10.10.0.17:18001/api/v1/me` возвращает `401`, то есть API доступен
+- `http://<APP_SERVER>:18001/healthz` возвращает `{"status":"ok"}`.
+- `http://<APP_SERVER>:18001/api/v1/me` возвращает `401`, то есть API доступен
   через nginx и требует авторизацию.
-- `http://10.10.0.17:18001/rtc/` возвращает `200`, route до LiveKit проходит.
-- `http://10.10.0.17:9090/-/healthy` возвращает `Prometheus Server is Healthy`.
+- `http://<APP_SERVER>:18001/rtc/` возвращает `200`, route до LiveKit проходит.
+- `http://<APP_SERVER>:9090/-/healthy` возвращает `Prometheus Server is Healthy`.
 - Миграции в БД: `version = 7`, `dirty = false`.
 
 **Осталось/наблюдения:**
@@ -110,7 +110,7 @@
 ## 2026-04-26 — Подключение Bitrix24 OAuth для первого клиента
 
 **Задача:** подготовить Toolkit к авторизации через локальное приложение Bitrix24
-портала `portal.softservice.by` и публичный URL `https://toolkit.softservice.by`.
+портала `portal.example.com` и публичный URL `https://toolkit.example.com`.
 
 **Сделано:**
 - Проверено, что текущие `/oauth/*` endpoints были stub-обработчиками.
@@ -129,19 +129,19 @@
 - После ручного ввода секрета в чат его желательно перевыпустить в Bitrix24.
 
 **Проверка на prod:**
-- В `/opt/toolkit/.env` на сервере `10.10.0.17` прописаны `TOOLKIT_BASE_URL`,
+- В `/opt/toolkit/.env` на сервере `<APP_SERVER>` прописаны `TOOLKIT_BASE_URL`,
   `TOOLKIT_CORS_ORIGINS`, `BITRIX_PORTAL_URL`, `BITRIX_CLIENT_ID`,
   `BITRIX_CLIENT_SECRET`.
 - Backend пересобран через Docker Compose; `api` и `worker` стартовали.
 - `GET /oauth/login?return_to=/phone` возвращает `302` на
-  `https://portal.softservice.by/oauth/authorize/` с callback
-  `https://toolkit.softservice.by/oauth/callback`.
+  `https://portal.example.com/oauth/authorize/` с callback
+  `https://toolkit.example.com/oauth/callback`.
 - `POST /oauth/refresh` без cookie возвращает ожидаемый `401`.
 
 ## 2026-04-26 — Фикс Bitrix callback на корень приложения
 
 **Задача:** после авторизации Bitrix24 возвращал пользователя на
-`https://toolkit.softservice.by/?code=...&state=...`, а не на
+`https://toolkit.example.com/?code=...&state=...`, а не на
 `/oauth/callback`; SPA открывалась без refresh-cookie и снова показывала login.
 
 **Сделано:**
@@ -163,7 +163,7 @@
 **Диагностика:**
 - Bitrix24 callback содержит `server_domain=oauth.bitrix24.tech`.
 - Toolkit отправлял запрос `/oauth/token/` на URL портала
-  `portal.softservice.by`, а обмен кода нужно делать через OAuth-сервер,
+  `portal.example.com`, а обмен кода нужно делать через OAuth-сервер,
   который Bitrix возвращает в callback.
 
 **Сделано:**
