@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/softservice/toolkit/internal/auth"
+	"github.com/HSMM/toolkit/internal/auth"
 )
 
 // RequireAuth verifies the bearer JWT, hydrates the Subject, and attaches it

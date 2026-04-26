@@ -12,7 +12,7 @@ info:
     Это начальная версия (E3.5). По мере добавления модулей (E5/E6/E7/E8) спецификация
     будет расширяться.
 servers:
-  - url: https://toolkit.softservice.by
+  - url: https://toolkit.example.com
     description: Production
   - url: http://localhost:8080
     description: Local dev

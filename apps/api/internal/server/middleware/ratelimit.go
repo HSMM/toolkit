@@ -6,7 +6,7 @@ import (
 
 	"github.com/go-chi/httprate"
 
-	"github.com/softservice/toolkit/internal/auth"
+	"github.com/HSMM/toolkit/internal/auth"
 )
 
 // RateLimitGlobal limits all requests per IP. Used as outer protection.

@@ -6,7 +6,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 
-	"github.com/softservice/toolkit/internal/auth"
+	"github.com/HSMM/toolkit/internal/auth"
 )
 
 // Handler is the HTTP handler registered at /api/v1/ws.
@@ -18,7 +18,7 @@ type Handler struct {
 }
 
 // NewHandler builds a WS endpoint. allowedOrigins must include the SPA origin
-// (e.g. "toolkit.softservice.by"); empty list disables origin check (dev only).
+// (e.g. "toolkit.example.com"); empty list disables origin check (dev only).
 func NewHandler(hub *Hub, allowedOrigins []string) *Handler {
 	return &Handler{
 		hub:            hub,

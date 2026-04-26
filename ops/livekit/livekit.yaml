@@ -27,6 +27,6 @@ logging:
 # В prod этот блок включается как override:
 # turn:
 #   enabled: true
-#   domain: turn.softservice.by
+#   domain: turn.example.com
 #   tls_port: 5349
 #   udp_port: 3478

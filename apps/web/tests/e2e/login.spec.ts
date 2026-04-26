@@ -12,7 +12,7 @@ test("login screen shows CTA and redirects to /oauth/login", async ({ page, base
   const cta = page.getByRole("button", { name: /Войти через Bitrix24/ });
   await expect(cta).toBeVisible();
 
-  // Перехватим переход — мы не идём на реальный portal.softservice.by.
+  // Перехватим переход — мы не идём на реальный portal.example.com.
   let redirected: string | null = null;
   await page.route("**/oauth/login*", route => {
     redirected = route.request().url();

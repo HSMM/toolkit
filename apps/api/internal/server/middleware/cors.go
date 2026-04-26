@@ -7,7 +7,7 @@ import (
 )
 
 // CORS returns a chi-compatible CORS middleware for the API.
-// In prod we whitelist toolkit.softservice.by; in dev — localhost dev-server.
+// In prod we whitelist toolkit.example.com; in dev — localhost dev-server.
 func CORS(allowedOrigins []string) func(http.Handler) http.Handler {
 	return cors.Handler(cors.Options{
 		AllowedOrigins:   allowedOrigins,

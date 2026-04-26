@@ -7,7 +7,7 @@ import (
 
 	chimw "github.com/go-chi/chi/v5/middleware"
 
-	"github.com/softservice/toolkit/internal/auth"
+	"github.com/HSMM/toolkit/internal/auth"
 )
 
 // RequestLogger writes a structured access-log line per request.

@@ -1,24 +1,24 @@
 # Toolkit — runbook развёртывания
 
-Документ для DevOps/админа. Описывает первичный деплой и эксплуатацию Toolkit на app-сервере **`10.10.0.17`** (`/opt/toolkit`).
+Шаблон для DevOps/админа: первичный деплой и эксплуатация Toolkit в корпоративной сети. Адаптируйте плейсхолдеры (`<APP_SERVER>`, `<PROXY_HOST>`, `<TOOLKIT_DOMAIN>`, `<TURN_DOMAIN>`) под свою инфраструктуру.
 
-Связанные документы:
-- `../toolkit-tz/toolkit-tz-mvp-v1.0.md` — ТЗ MVP (раздел 5.5 — окружение).
-- `../toolkit-tz/toolkit-architecture.md` — архитектура.
-- `README.md` — быстрый старт локально.
+Связанные документы (поставляются вне публичного репо):
+- ТЗ MVP — функциональные и нефункциональные требования.
+- Архитектурный документ — компоненты, потоки, модель данных.
+- `README.md` — публичное описание продукта.
 
 ---
 
 ## 1. Топология
 
 ```
-            публичный IP (граничное оборудование заказчика)
+            публичный IP (граничное оборудование)
                  │
         DNAT 443/TCP        DNAT 3478 + 50000-60000/UDP
                  ▼                    ▼
    ┌──────────────────────┐   ┌──────────────────────┐
-   │ NPM (Nginx Proxy Mgr)│   │  app-сервер          │
-   │ 10.10.0.61:443       │   │  10.10.0.17          │
+   │ Reverse-proxy        │   │  app-server          │
+   │ <PROXY_HOST>         │   │  <APP_SERVER>        │
    │ TLS termination      │   │  /opt/toolkit        │
    │ Let's Encrypt        │   │  docker compose      │
    │                      │   │  + LiveKit (host net)│
@@ -35,18 +35,18 @@
 ```
 
 DNS (силами команды домена):
-- `toolkit.softservice.by` → публичный IP, DNAT 443/TCP → `10.10.0.61:443` (NPM).
-- `turn.softservice.by` → публичный IP, DNAT UDP 50000–60000 + 3478 → `10.10.0.17` (coturn + LiveKit RTC).
+- `<TOOLKIT_DOMAIN>` → публичный IP, DNAT 443/TCP → `<PROXY_HOST>:443` (внешний reverse-proxy).
+- `<TURN_DOMAIN>` → публичный IP, DNAT UDP 50000–60000 + 3478 → `<APP_SERVER>` (coturn + LiveKit RTC).
 
 ---
 
 ## 2. Подготовка app-сервера (one-time)
 
 ### 2.1. Базовая ОС
-- Debian 12 / Ubuntu 22.04 LTS (или новее).
-- Минимум 16 vCPU, 32 GB RAM, 500 GB NVMe (см. ТЗ 5.1).
+- Debian 12+ / Ubuntu 22.04+ LTS.
+- Минимум **16 vCPU, 32 GB RAM, 500 GB NVMe** (см. ТЗ 5.1).
 - Публичный IP с открытыми портами:
-  - **443/TCP** для NPM proxy_pass (если NPM на отдельном хосте — может не нужно открывать наружу).
+  - **443/TCP** для reverse-proxy (если он на отдельном хосте — может не нужно открывать наружу).
   - **3478/UDP+TCP** для coturn (STUN/TURN).
   - **50000-60000/UDP** для LiveKit RTC.
   - **22/TCP** для администрирования (с allowlist).
@@ -64,11 +64,11 @@ docker compose version    # v2 plugin
 ```bash
 sudo ufw default deny incoming
 sudo ufw default allow outgoing
-sudo ufw allow from 10.10.0.0/24 to any port 22 proto tcp
+sudo ufw allow from <ADMIN_SUBNET> to any port 22 proto tcp
 sudo ufw allow 3478/udp
 sudo ufw allow 3478/tcp
 sudo ufw allow 50000:60000/udp
-sudo ufw allow from 10.10.0.61 to any port 18001 proto tcp  # NPM → web
+sudo ufw allow from <PROXY_HOST_IP> to any port 18001 proto tcp   # proxy → web
 sudo ufw enable
 ```
 
@@ -83,10 +83,10 @@ sudo mkdir -p /opt/toolkit/data/{postgres,minio,opensearch,prometheus,grafana,lo
 
 ## 3. Первичный деплой
 
-### 3.1. Клон репо
+### 3.1. Клонирование
 ```bash
 cd /opt
-git clone https://oauth2:<PAT>@git.vitai.world/<group>/toolkit.git
+git clone https://github.com/<ORG>/toolkit.git
 cd toolkit
 ```
 
@@ -105,30 +105,31 @@ $EDITOR .env
 | `OPENSEARCH_INITIAL_ADMIN_PASSWORD` | случайный, ≥ 12 |
 | `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | сгенерировать `livekit-cli generate-keys` или openssl rand |
 | `COTURN_STATIC_AUTH_SECRET` | случайный, 32+ |
-| `COTURN_REALM` | `turn.softservice.by` |
+| `COTURN_REALM` | `<TURN_DOMAIN>` |
 | `COTURN_EXTERNAL_IP` | публичный IP, на который DNAT'ится UDP |
 | `GRAFANA_ADMIN_PASSWORD` | случайный |
 | `JWT_SECRET` | 64+ символов |
-| `BITRIX_*` | из локального приложения portal.softservice.by |
+| `BITRIX_*` | из локального приложения вашего портала Bitrix24 |
 | `FREEPBX_*` | согласовать с командой АТС |
 | `GIGAAM_*` | согласовать с командой ASR |
 | `SMTP_*` + `ALERT_EMAIL_TO` | корпоративный SMTP + куда слать алерты |
 | `TOOLKIT_BOOTSTRAP_ADMINS` | email-ы первых админов из Bitrix24 |
+| `APP_BIND_ADDRESS` | приватный IP app-сервера, на котором web слушает за прокси |
 
-### 3.3. Параметры NPM proxy host (передать команде прокси на 10.10.0.61)
+### 3.3. Параметры reverse-proxy
 
 | Параметр | Значение |
 |---|---|
-| Domain | `toolkit.softservice.by` |
-| Forward Hostname/IP | `10.10.0.17` |
-| Forward Port | `18001` |
+| Domain | `<TOOLKIT_DOMAIN>` |
+| Forward Hostname/IP | `<APP_SERVER>` |
+| Forward Port | `18001` (= `APP_BIND_PORT`) |
 | Scheme | `http` |
 | Block Common Exploits | on |
 | Websockets Support | **on** (обязательно для WSS — LiveKit и API events) |
 | SSL → Force SSL | on |
-| SSL → Let's Encrypt | on, email СБ |
-| Advanced → `client_max_body_size` | `100m` (для загрузок) |
-| Advanced → `proxy_read_timeout` | `600s` (для долгих SSE/WSS) |
+| SSL → Let's Encrypt | on |
+| `client_max_body_size` | `100m` (для загрузок) |
+| `proxy_read_timeout` | `600s` (для долгих SSE/WSS) |
 
 ### 3.4. Запуск
 ```bash
@@ -138,10 +139,10 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 Стек поднимется в таком порядке:
 1. `postgres`, `minio`, `opensearch`, `redis` — data layer
 2. `minio-init` — создаёт buckets `recordings`, `reports`, `backups`
-3. `migrate` — прогоняет SQL-миграции (E2.1+)
+3. `migrate` — прогоняет SQL-миграции
 4. `livekit`, `livekit-egress`, `coturn` — media
 5. `api`, `worker` — приложение
-6. `web` (nginx) — статика SPA + прокси на api
+6. `web-build` → `web` (nginx) — статика SPA + reverse-proxy на api
 7. `prometheus`, `loki`, `promtail`, `grafana`, `node-exporter`, `postgres-exporter` — observability
 8. `postgres-backup` — фоновый бэкап
 
@@ -163,28 +164,28 @@ make smoke              # из /opt/toolkit
 
 ### 4.1. Дополнительно
 ```bash
-# Веб-фронт через NPM
-curl -I https://toolkit.softservice.by
+# Веб-фронт через прокси
+curl -I https://<TOOLKIT_DOMAIN>
 
-# Grafana доступна только с приватного IP (по умолчанию)
-ssh -L 3001:10.10.0.17:3001 user@bastion
+# Grafana доступна только с приватного интерфейса (по умолчанию)
+ssh -L 3001:<APP_SERVER>:3001 user@bastion
 # открыть http://localhost:3001 → admin / GRAFANA_ADMIN_PASSWORD
 
 # В Grafana должны быть:
 #  - Datasources: Prometheus, Loki
 #  - Folder "Toolkit" с дашбордами: System, PostgreSQL, LiveKit, API
-#  - Folder "Toolkit Alerts" с правилами: disk-usage-high, postgres-down, livekit-down, ...
+#  - Folder "Toolkit Alerts" с правилами
 
 # Проверь что таргеты Prometheus собираются:
-ssh -L 9090:10.10.0.17:9090 user@bastion
-# открыть http://localhost:9090/targets — все state=UP, кроме api (если ещё не написан)
+ssh -L 9090:<APP_SERVER>:9090 user@bastion
+# открыть http://localhost:9090/targets — все state=UP
 ```
 
 ### 4.2. Проверить бэкап
 ```bash
 make backup-now
 make backup-list
-# Должен появиться файл вида toolkit-20260423T120000Z.dump
+# Должен появиться файл вида toolkit-YYYYMMDDTHHMMSSZ.dump
 ```
 
 ---
@@ -223,8 +224,8 @@ docker compose restart grafana
 | Что | Куда | Расписание | Retention |
 |---|---|---|---|
 | PostgreSQL pg_dump | MinIO bucket `backups` | каждые 24ч (`BACKUP_INTERVAL_SECONDS`) | `BACKUP_RETENTION_DAYS` дней |
-| MinIO bucket `recordings` | **TBD** — копия на отдельный носитель/бакет | по retention из админки | по политике |
-| Audit-log snapshot | MinIO bucket `backups` (отдельный путь) | ежесуточно из app | 3 года (ТЗ 4.2) |
+| MinIO bucket `recordings` | копия на отдельный носитель/бакет | по retention из админки | по политике |
+| Audit-log snapshot | MinIO bucket `backups` (отдельный путь) | ежесуточно из app | долгосрочно |
 
 RPO ≤ 24ч / RTO ≤ 2ч соответствуют ТЗ MVP 5.3.
 
@@ -254,7 +255,7 @@ docker compose restart api worker
 - **System (host)** — CPU, RAM, disk, network. Источник: node-exporter.
 - **PostgreSQL** — connections, transactions, deadlocks, размер БД. Источник: postgres-exporter.
 - **LiveKit (ВКС)** — комнаты, участники, треки, throughput. Источник: livekit /metrics.
-- **API** — request rate, p95 latency, error rate, очередь джобов. Источник: apps/api /metrics (активируется в эпике E3.6).
+- **API** — request rate, p95 latency, error rate, очередь джобов. Источник: apps/api /metrics.
 
 ### 7.2. Алерты (email → `ALERT_EMAIL_TO`)
 | Имя | Триггер | Severity |
@@ -269,8 +270,6 @@ docker compose restart api worker
 | gigaam-down | external_service_up{gigaam}=0 > 15 мин | warning |
 | backup-failures | >1 ошибка за сутки | critical |
 
-Внешние сервисные алерты (`bitrix24-down`, `freepbx-down`, `gigaam-down`, `backup-failures`) активируются когда apps/api expose-нёт соответствующие метрики (см. эпики E1, E5, E7, E10 декомпозиции).
-
 ### 7.3. Логи (Grafana → Explore → Loki)
 Все контейнеры пишут stdout в Docker log driver, Promtail парсит и заливает в Loki.
 ```
@@ -283,8 +282,7 @@ docker compose restart api worker
 
 ### 8.1. Bitrix24 SSO down
 - Новые входы блокируются (503), существующие сессии работают до истечения access (15 мин).
-- Залогиненные пользователи могут потерять сессию через 15 мин.
-- Действия: проверить https://portal.softservice.by с другой машины. Открыть тикет в команду Bitrix24-админов.
+- Действия: проверить портал Bitrix24 с другой машины. Открыть тикет в команду Bitrix24-админов.
 
 ### 8.2. FreePBX down
 - Софтфон не примет/не сделает звонки. ВКС работает.
@@ -293,7 +291,7 @@ docker compose restart api worker
 
 ### 8.3. GigaAM down
 - Очередь транскрибации растёт. Уже сделанные транскрипты доступны.
-- Действия: команда ASR. После восстановления `worker` перезапустит зависшие задачи (retry policy в E7.3).
+- Действия: команда ASR. После восстановления `worker` перезапустит зависшие задачи.
 
 ### 8.4. Сервер целиком недоступен
 - См. раздел 6.2 — восстановить БД из последнего бэкапа на запасном хосте.
@@ -307,11 +305,11 @@ docker compose restart api worker
 - [ ] `git status` чистый, тег версии релиза на текущем HEAD
 - [ ] `make smoke` зелёный (все health-эндпоинты)
 - [ ] Grafana login работает, видны 4 дашборда
-- [ ] Все 9 алертов появились в `Alerting → Alert rules` (часть в `NoData`)
-- [ ] Тестовое письмо алерта дошло на `ALERT_EMAIL_TO` (Alerting → Contact points → Test)
+- [ ] Все 9 алертов появились в `Alerting → Alert rules`
+- [ ] Тестовое письмо алерта дошло на `ALERT_EMAIL_TO`
 - [ ] `make backup-now` создал файл, видно в MinIO
-- [ ] NPM proxy host настроен, `https://toolkit.softservice.by` отвечает (200/302)
-- [ ] DNS `turn.softservice.by` резолвится в публичный IP, port 3478 reachable снаружи
+- [ ] Reverse-proxy настроен, `https://<TOOLKIT_DOMAIN>` отвечает
+- [ ] DNS `<TURN_DOMAIN>` резолвится в публичный IP, port 3478 reachable снаружи
 - [ ] Тестовый WebRTC-вызов на служебный extension прошёл (TURN не зависает)
 - [ ] Backup retention проверен: после 30+ дней старые файлы удаляются
 - [ ] Логи в Grafana → Loki видны для всех контейнеров

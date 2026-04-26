@@ -16,7 +16,7 @@ export const C = {
 } as const;
 
 export const LOGO_URL =
-  "https://www.softservice.by/upload/CAllcorp3/c07/366fkgru59ox7tvosrxlf386mnawnx73.png";
+  "https://via.placeholder.com/64x64/1E5AA8/ffffff?text=TK";
 
 // Утилиты, идентичные тем что в прототипе — выносим, чтобы не таскать копипасту.
 import type { CSSProperties } from "react";

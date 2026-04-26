@@ -23,11 +23,11 @@ import (
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/softservice/toolkit/internal/auth"
-	"github.com/softservice/toolkit/internal/config"
-	"github.com/softservice/toolkit/internal/db"
-	"github.com/softservice/toolkit/internal/server/middleware"
-	"github.com/softservice/toolkit/internal/ws"
+	"github.com/HSMM/toolkit/internal/auth"
+	"github.com/HSMM/toolkit/internal/config"
+	"github.com/HSMM/toolkit/internal/db"
+	"github.com/HSMM/toolkit/internal/server/middleware"
+	"github.com/HSMM/toolkit/internal/ws"
 )
 
 // Run starts the API server. Returns when ctx is cancelled (graceful shutdown).

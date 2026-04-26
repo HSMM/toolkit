@@ -11,9 +11,9 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/softservice/toolkit/internal/config"
-	"github.com/softservice/toolkit/internal/db"
-	"github.com/softservice/toolkit/internal/queue"
+	"github.com/HSMM/toolkit/internal/config"
+	"github.com/HSMM/toolkit/internal/db"
+	"github.com/HSMM/toolkit/internal/queue"
 )
 
 func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {

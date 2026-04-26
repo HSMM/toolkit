@@ -1,24 +1,26 @@
-# Production-override для app-сервера 10.10.0.17 (/opt/toolkit).
+# Production-override для app-сервера в корпоративной сети.
 # Запуск: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 #
 # Основные отличия от dev-стека:
-# - LiveKit и coturn в network_mode: host (нужен UDP-диапазон 50000-60000).
-# - web слушает только на 10.10.0.17:18001 — NPM на 10.10.0.61 проксирует сюда.
-# - Grafana и MinIO Console — только на приватный IP.
-# - Volumes мапятся на хост /opt/toolkit/data/*.
+# - LiveKit и coturn — в network_mode: host (нужен UDP-диапазон 50000-60000).
+# - web слушает только на приватном интерфейсе app-сервера (см. APP_BIND_ADDRESS в .env)
+#   через выделенный порт APP_BIND_PORT (по умолчанию 18001) — внешний reverse-proxy
+#   проксирует TLS-терминацию сюда.
+# - Grafana / MinIO Console / Prometheus — только на приватный IP.
+# - Volumes маппятся на хост (/opt/toolkit/data/*).
 
 services:
 
   postgres:
-    ports: !reset []          # порт БД наружу не публикуем
+    ports: !reset []                                  # порт БД наружу не публикуем
     volumes:
       - /opt/toolkit/data/postgres:/var/lib/postgresql/data
       - ./ops/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
 
   minio:
     ports:
-      - "10.10.0.17:9000:9000"     # S3 API — только внутри сети
-      - "10.10.0.17:9001:9001"     # Console — только внутри сети
+      - "${APP_BIND_ADDRESS}:9000:9000"               # S3 API — только внутри сети
+      - "${APP_BIND_ADDRESS}:9001:9001"               # Console — только внутри сети
     volumes:
       - /opt/toolkit/data/minio:/data
 
@@ -32,8 +34,7 @@ services:
 
   livekit:
     network_mode: host
-    ports: !reset []                # port publishing не нужен в host network
-    # Config override: docker-compose передаст свой livekit.yaml с правильными портами
+    ports: !reset []                                  # port publishing не нужен в host network
     command: --config /etc/livekit.yaml
     volumes:
       - ./ops/livekit/livekit.prod.yaml:/etc/livekit.yaml:ro
@@ -51,11 +52,11 @@ services:
 
   web:
     ports:
-      - "10.10.0.17:18001:80"      # NPM 10.10.0.61 → 10.10.0.17:18001 (контейнерный nginx слушает 80)
+      - "${APP_BIND_ADDRESS}:${APP_BIND_PORT}:80"     # внешний прокси → app-сервер:18001 → контейнер:80
 
   prometheus:
     ports:
-      - "10.10.0.17:9090:9090"
+      - "${APP_BIND_ADDRESS}:9090:9090"
     volumes:
       - ./ops/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - /opt/toolkit/data/prometheus:/prometheus
@@ -68,7 +69,7 @@ services:
 
   grafana:
     ports:
-      - "10.10.0.17:3001:3000"     # доступ только через VPN или SSH-tunnel
+      - "${APP_BIND_ADDRESS}:3001:3000"               # доступ только через VPN или SSH-tunnel
     volumes:
       - ./ops/grafana/provisioning:/etc/grafana/provisioning:ro
       - /opt/toolkit/data/grafana:/var/lib/grafana

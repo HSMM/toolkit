@@ -11,7 +11,7 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 
-	"github.com/softservice/toolkit/internal/config"
+	"github.com/HSMM/toolkit/internal/config"
 )
 
 func RunFromArgs(args []string, cfg *config.Config, logger *slog.Logger) error {

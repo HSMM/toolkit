@@ -13,11 +13,11 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/softservice/toolkit/internal/config"
-	"github.com/softservice/toolkit/internal/logging"
-	"github.com/softservice/toolkit/internal/migrate"
-	"github.com/softservice/toolkit/internal/server"
-	"github.com/softservice/toolkit/internal/worker"
+	"github.com/HSMM/toolkit/internal/config"
+	"github.com/HSMM/toolkit/internal/logging"
+	"github.com/HSMM/toolkit/internal/migrate"
+	"github.com/HSMM/toolkit/internal/server"
+	"github.com/HSMM/toolkit/internal/worker"
 )
 
 func main() {

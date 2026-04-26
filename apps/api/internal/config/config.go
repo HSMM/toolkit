@@ -18,7 +18,7 @@ type Config struct {
 
 	// Auth
 	JWTSecret              string
-	BaseURL                string   // public origin, e.g. https://toolkit.softservice.by
+	BaseURL                string   // public origin, e.g. https://toolkit.example.com
 	BootstrapAdmins        []string // emails from TOOLKIT_BOOTSTRAP_ADMINS
 	AllowedCORSOrigins     []string // for browser SPA origins
 
