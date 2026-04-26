@@ -34,6 +34,7 @@ services:
 
   livekit:
     network_mode: host
+    networks: !reset []                               # mutually exclusive с network_mode
     ports: !reset []                                  # port publishing не нужен в host network
     command: --config /etc/livekit.yaml
     volumes:
@@ -46,6 +47,7 @@ services:
 
   coturn:
     network_mode: host
+    networks: !reset []
     ports: !reset []
     # --external-ip должен быть публичным IP, на который DNAT'ится 3478/UDP
     # Задаётся через env COTURN_EXTERNAL_IP
