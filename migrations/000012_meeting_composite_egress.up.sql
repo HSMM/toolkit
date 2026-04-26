@@ -22,7 +22,7 @@ ALTER TABLE recording
     DROP CONSTRAINT IF EXISTS recording_kind_check;
 ALTER TABLE recording
     ADD CONSTRAINT recording_kind_check
-        CHECK (kind IN ('call', 'meeting_composite', 'meeting_per_track', 'meeting_audio'));
+        CHECK (kind IN ('call', 'meeting_composite', 'meeting_per_track', 'meeting_audio', 'upload'));
 
 -- И recording_kind_fk_match — добавляем ветку для meeting_audio (как у composite).
 ALTER TABLE recording
