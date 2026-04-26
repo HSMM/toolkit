@@ -28,6 +28,8 @@ import (
 	"github.com/HSMM/toolkit/internal/config"
 	"github.com/HSMM/toolkit/internal/db"
 	"github.com/HSMM/toolkit/internal/gigaam"
+	livekitclient "github.com/HSMM/toolkit/internal/livekit"
+	"github.com/HSMM/toolkit/internal/meetings"
 	"github.com/HSMM/toolkit/internal/queue"
 	"github.com/HSMM/toolkit/internal/server/middleware"
 	oauthhandlers "github.com/HSMM/toolkit/internal/server/oauth"
@@ -48,6 +50,23 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 	subjectLoader := auth.NewSubjectLoader(pool)
 	hub := ws.NewHub(logger)
 	oauthHandlers := oauthhandlers.New(cfg, pool, logger, jwtIssuer)
+
+	// LiveKit + meetings (E5).
+	var meetingsHandlers *meetings.Handlers
+	lkClient, lkErr := livekitclient.New(livekitclient.Config{
+		APIKey:    cfg.LiveKitAPIKey,
+		APISecret: cfg.LiveKitAPISecret,
+		URL:       cfg.LiveKitURL,
+	})
+	if lkErr != nil {
+		logger.Warn("livekit init failed; /meetings будет недоступен", "err", lkErr)
+	} else {
+		publicWS := cfg.LiveKitPublicWS
+		if publicWS == "" {
+			logger.Warn("LIVEKIT_PUBLIC_WS_URL пуст — фронт не сможет подключиться к комнате")
+		}
+		meetingsHandlers = meetings.NewHandlers(meetings.New(pool, lkClient, publicWS))
+	}
 
 	// Storage + queue + transcription handlers (E7).
 	// MinIO connect non-fatal: модуль /transcripts отдаст 503 если недоступен.
@@ -116,9 +135,13 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 			r.Mount("/transcripts", transcriptionHandlers.Routes())
 		}
 
+		// ВКС (E5).
+		if meetingsHandlers != nil {
+			r.Mount("/meetings", meetingsHandlers.Routes())
+		}
+
 		// Domain modules — added as their handler packages land.
 		// r.Mount("/calls", calls.Routes(...))
-		// r.Mount("/meetings", meetings.Routes(...))
 		// r.Mount("/contacts", contacts.Routes(...))
 	})
 

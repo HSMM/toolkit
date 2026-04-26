@@ -39,6 +39,12 @@ type Config struct {
 	GigaAMMaxRetries      int
 	GigaAMConcurrentLimit int
 
+	// LiveKit (E5)
+	LiveKitAPIKey    string // shared secret pair (mint tokens, sign Twirp calls)
+	LiveKitAPISecret string
+	LiveKitURL       string // internal Twirp URL (api → livekit), напр. http://livekit:7880
+	LiveKitPublicWS  string // public WS URL для браузера, напр. wss://lk.example.com
+
 	// MinIO / S3-совместимое хранилище
 	MinioEndpoint         string // host:port (без scheme) или https://host
 	MinioAccessKey        string
@@ -80,6 +86,10 @@ func Load() (*Config, error) {
 		FreePBXExtPwd:      getenv("FREEPBX_EXTENSION_PASSWORD", ""),
 		GigaAMAPIURL:       getenv("GIGAAM_API_URL", ""),
 		GigaAMAPIToken:     getenv("GIGAAM_API_TOKEN", ""),
+		LiveKitAPIKey:    getenv("LIVEKIT_API_KEY", ""),
+		LiveKitAPISecret: getenv("LIVEKIT_API_SECRET", ""),
+		LiveKitURL:       getenv("LIVEKIT_URL", "http://livekit:7880"),
+		LiveKitPublicWS:  getenv("LIVEKIT_PUBLIC_WS_URL", ""),
 		MinioEndpoint:         getenv("MINIO_ENDPOINT", "minio:9000"),
 		MinioAccessKey:        getenv("MINIO_ROOT_USER", ""),
 		MinioSecretKey:        getenv("MINIO_ROOT_PASSWORD", ""),

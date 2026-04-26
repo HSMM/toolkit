@@ -62,6 +62,14 @@ services:
       - ./ops/nginx/default.prod.conf:/etc/nginx/conf.d/default.conf:ro
       - web_dist:/usr/share/nginx/html:ro
 
+  api:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"           # api → LiveKit Twirp (host network) через host.docker.internal:7880
+
+  worker:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"           # worker → LiveKit / coturn (host network)
+
   prometheus:
     ports: !override
       - "${APP_BIND_ADDRESS}:9090:9090"

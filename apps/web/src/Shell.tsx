@@ -18,8 +18,8 @@ import {
 } from "react";
 import {
   Phone, Video, MessageSquare, Users, FileText, HelpCircle,
-  Settings, Mic, MicOff, VideoOff, PhoneOff, Monitor, Search,
-  Plus, Download, Edit2, X, Check,
+  Settings, Mic, MicOff, PhoneOff, Monitor, Search,
+  Download, Edit2, X, Check,
   RefreshCw, User, PhoneMissed,
   Save, Wifi, Hash, Shield, Clock, Mail, Key, LogOut,
   Copy, Upload, FileAudio, Trash2, Send, ChevronRight, Inbox,
@@ -31,6 +31,11 @@ import {
 import { C, LOGO_URL } from "@/styles/tokens";
 import { useAuth } from "@/auth/AuthContext";
 import { type Me } from "@/api/me";
+import {
+  useMeetings, useCreateMeeting, useEndMeeting,
+  type Meeting as ApiMeeting,
+} from "@/api/meetings";
+import { MeetingRoom } from "@/MeetingRoom";
 import {
   useTranscripts, useTranscript, useUploadTranscript,
   useDeleteTranscript, useRetryTranscript,
@@ -602,77 +607,69 @@ function SoftphoneWidget() {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
-// VCS (Видеоконференции)
+// VCS (Видеоконференции) — реальная интеграция с LiveKit через /api/v1/meetings
 // ──────────────────────────────────────────────────────────────────────────
 
-type Meeting = {
-  id: number; title: string; date: string; time: string;
-  participants: number[]; externals: string[]; transcribe: boolean; done: boolean;
-};
-
-function VcsPage({ users }: { users: MockUser[] }) {
+function VcsPage({ me }: { me: Me }) {
   const { push } = useApp();
-  const [modal, setModal] = useState(false);
-  const [join, setJoin] = useState<Meeting | null>(null);
-  const [meetings, setMeetings] = useState<Meeting[]>([]);
-  const [mic, setMic] = useState(true);
-  const [cam, setCam] = useState(true);
+  const meetingsQ = useMeetings();
+  const create = useCreateMeeting();
+  const end = useEndMeeting();
 
-  const [mode, setMode] = useState<"schedule" | "instant">("schedule");
+  const [modal, setModal] = useState(false);
+  const [active, setActive] = useState<ApiMeeting | null>(null); // открытая комната
+
+  const [mode, setMode] = useState<"schedule" | "instant">("instant");
   const [title, setTitle] = useState("");
   const [date, setDate] = useState(() => new Date(Date.now() + 86_400_000).toISOString().slice(0, 10));
   const [time, setTime] = useState("10:00");
-  const [internal, setInternal] = useState<number[]>([]);
-  const [searchQ, setSearchQ] = useState("");
-  const [searchFocus, setSearchFocus] = useState(false);
-  const [externals, setExternals] = useState<string[]>([]);
-  const [newEmail, setNewEmail] = useState("");
-  const [emailErr, setEmailErr] = useState(false);
   const [transcribe, setTranscribe] = useState(true);
+  const [record, setRecord] = useState(true);
 
-  const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  const resetForm = () => { setTitle(""); setInternal([]); setSearchQ(""); setExternals([]); setNewEmail(""); setEmailErr(false); setTranscribe(true); };
+  const resetForm = () => { setTitle(""); setTranscribe(true); setRecord(true); };
   const openModal = (m: "schedule" | "instant") => { resetForm(); setMode(m); setModal(true); };
   const closeModal = () => setModal(false);
-  const addInternal = (u: MockUser) => { if (!internal.includes(u.id)) setInternal((p) => [...p, u.id]); setSearchQ(""); setSearchFocus(false); };
-  const removeInternal = (id: number) => setInternal((p) => p.filter((x) => x !== id));
-  const addEmail = () => {
-    const e = newEmail.trim().toLowerCase();
-    if (!e) return;
-    if (!EMAIL_RE.test(e) || externals.includes(e)) { setEmailErr(true); setTimeout(() => setEmailErr(false), 2500); return; }
-    setExternals((p) => [...p, e]); setNewEmail("");
-  };
-  const removeEmail = (e: string) => setExternals((p) => p.filter((x) => x !== e));
-  const fmtDate = (iso: string) => { const [y, m, d] = iso.split("-"); return `${d}.${m}.${y}`; };
-  const fmtTime = (d: Date) => `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 
-  const createMeeting = () => {
+  const submit = async () => {
     if (!title.trim()) return;
-    const m: Meeting = {
-      id: Date.now(), title: title.trim(),
-      date: mode === "instant" ? "Сейчас" : fmtDate(date),
-      time: mode === "instant" ? fmtTime(new Date()) : time,
-      participants: internal, externals, transcribe, done: false,
-    };
-    setMeetings((p) => [m, ...p]); closeModal();
-    const recipientCount = internal.length + externals.length;
-    push({
-      type: "meeting",
-      title: mode === "schedule" ? "Встреча запланирована" : "Встреча запущена",
-      desc: mode === "schedule"
-        ? `«${m.title}» · ${m.date} ${m.time}${recipientCount > 0 ? ` · приглашено ${recipientCount}` : ""}`
-        : `«${m.title}»${recipientCount > 0 ? ` · приглашено ${recipientCount}` : ""}`,
-    });
-    if (mode === "instant") setJoin(m);
+    let scheduledISO: string | undefined;
+    if (mode === "schedule" && date && time) {
+      scheduledISO = new Date(`${date}T${time}:00`).toISOString();
+    }
+    try {
+      const m = await create.mutateAsync({
+        title: title.trim(),
+        scheduled_at: scheduledISO,
+        record_enabled: record,
+        auto_transcribe: transcribe,
+      });
+      closeModal();
+      push({
+        type: "meeting",
+        title: mode === "schedule" ? "Встреча запланирована" : "Встреча запущена",
+        desc: `«${m.title}» · ${m.livekit_room_id}`,
+      });
+      if (mode === "instant") setActive(m);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      push({ type: "system", title: "Не удалось создать встречу", desc: msg });
+    }
   };
 
-  const filtered = users.filter((u) => !internal.includes(u.id) && (u.name.toLowerCase().includes(searchQ.toLowerCase()) || u.email.toLowerCase().includes(searchQ.toLowerCase())));
-  const total = (m: Meeting) => m.participants.length + m.externals.length;
+  const meetings = meetingsQ.data ?? [];
+  const fmtMeetingTime = (m: ApiMeeting): string => {
+    const ref = m.started_at || m.scheduled_at || m.created_at;
+    const d = new Date(ref);
+    const now = Date.now();
+    if (Math.abs(now - d.getTime()) < 86_400_000 / 2 && m.started_at) return "Сейчас · " + d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+    return d.toLocaleDateString("ru-RU") + " · " + d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+  };
+  const isHost = (m: ApiMeeting) => m.created_by === me.user_id || me.role === "admin";
   const canCreate = title.trim().length > 0;
 
   return (
     <div style={{ minHeight: "100%", background: C.bg2 }}>
-      <PgHdr title="Видеоконференции" sub="WebRTC SFU · собственный контур"
+      <PgHdr title="Видеоконференции" sub="LiveKit SFU · собственный контур"
         action={
           <div style={{ display: "flex", gap: 10 }}>
             <button onClick={() => openModal("schedule")} style={{ display: "flex", alignItems: "center", gap: 7, background: C.card, color: C.text, padding: "9px 16px", borderRadius: 8, fontWeight: 500, fontSize: 14, border: `1px solid ${C.border}`, cursor: "pointer", fontFamily: "inherit" }}>
@@ -685,52 +682,47 @@ function VcsPage({ users }: { users: MockUser[] }) {
         }
       />
       <div style={{ padding: 24 }}>
-        {meetings.length === 0 ? (
+        {meetingsQ.isLoading ? (
+          <div style={{ padding: 40, textAlign: "center", color: C.text3, fontSize: 13 }}>Загрузка…</div>
+        ) : meetings.length === 0 ? (
           <Empty Icon={Video}
             title="Нет встреч"
-            sub="Создайте встречу сейчас или запланируйте на будущее — участникам придёт письмо со ссылкой."
+            sub="Создайте встречу сейчас или запланируйте на будущее. Приглашение коллег появится после E2.4 (Bitrix24-синхронизация)."
             action={<button onClick={() => openModal("instant")} style={{ display: "inline-flex", alignItems: "center", gap: 7, background: C.acc, color: "white", padding: "9px 18px", borderRadius: 8, fontWeight: 500, fontSize: 14, border: "none", cursor: "pointer", fontFamily: "inherit" }}><Video size={15} />Создать встречу</button>}
           />
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {meetings.map((m) => {
-              const pUsers = m.participants.map((id) => users.find((u) => u.id === id)).filter((x): x is MockUser => Boolean(x));
+              const ended = !!m.ended_at;
+              const live = !!m.started_at && !ended;
               return (
                 <div key={m.id} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "15px 18px" }}>
                   <div style={{ display: "flex", alignItems: "flex-start", gap: 14 }}>
-                    <div style={{ width: 40, height: 40, borderRadius: 10, background: m.done ? C.bg3 : C.accBg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                      <Video size={18} color={m.done ? C.text3 : C.acc} />
+                    <div style={{ width: 40, height: 40, borderRadius: 10, background: ended ? C.bg3 : C.accBg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                      <Video size={18} color={ended ? C.text3 : C.acc} />
                     </div>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                         <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{m.title}</div>
-                        {m.transcribe && <Bdg v="blue">С транскрибацией</Bdg>}
+                        {live && <Bdg v="ok">В эфире</Bdg>}
+                        {m.auto_transcribe && <Bdg v="blue">С транскрибацией</Bdg>}
+                        {m.record_enabled && <Bdg v="proc">Запись</Bdg>}
                       </div>
-                      <div style={{ fontSize: 12.5, color: C.text2, marginTop: 3 }}>{m.date} · {m.time} · {total(m)} участника</div>
-                      {(pUsers.length > 0 || m.externals.length > 0) && (
-                        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
-                          {pUsers.length > 0 && (
-                            <div style={{ display: "flex", alignItems: "center" }}>
-                              {pUsers.slice(0, 4).map((u, i) => (
-                                <div key={u.id} title={u.name} style={{ marginLeft: i === 0 ? 0 : -6, borderRadius: "50%", boxShadow: `0 0 0 2px ${C.card}` }}>
-                                  <Av i={u.av} c={u.col} sz={24} />
-                                </div>
-                              ))}
-                              {pUsers.length > 4 && <div style={{ marginLeft: -6, width: 24, height: 24, borderRadius: "50%", background: C.bg3, color: C.text2, fontSize: 10, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", boxShadow: `0 0 0 2px ${C.card}` }}>+{pUsers.length - 4}</div>}
-                            </div>
-                          )}
-                          {m.externals.slice(0, 2).map((e) => (
-                            <span key={e} style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "3px 8px", borderRadius: 999, background: C.warnBg, color: C.warnTx, fontSize: 11, fontWeight: 500, border: `1px solid ${C.warnBrd}` }}>
-                              <Mail size={10} />{e}
-                            </span>
-                          ))}
-                          {m.externals.length > 2 && <span style={{ fontSize: 11, color: C.text2 }}>+{m.externals.length - 2} email</span>}
-                        </div>
-                      )}
+                      <div style={{ fontSize: 12.5, color: C.text2, marginTop: 3 }}>
+                        {fmtMeetingTime(m)} · room <span style={{ fontFamily: "'DM Mono', monospace" }}>{m.livekit_room_id}</span>
+                      </div>
                     </div>
-                    <div style={{ flexShrink: 0 }}>
-                      {m.done ? <Bdg v="def">Завершена</Bdg>
-                        : <button onClick={() => setJoin(m)} style={{ background: C.acc, color: "white", padding: "8px 16px", borderRadius: 8, fontWeight: 500, fontSize: 13, border: "none", cursor: "pointer", fontFamily: "inherit" }}>Войти</button>}
+                    <div style={{ flexShrink: 0, display: "flex", gap: 6 }}>
+                      {ended ? <Bdg v="def">Завершена</Bdg>
+                        : <>
+                          <button onClick={() => setActive(m)} style={{ background: C.acc, color: "white", padding: "8px 16px", borderRadius: 8, fontWeight: 500, fontSize: 13, border: "none", cursor: "pointer", fontFamily: "inherit" }}>Войти</button>
+                          {isHost(m) && (
+                            <button onClick={() => { if (confirm("Завершить встречу?")) end.mutate(m.id); }}
+                              style={{ background: C.card, color: C.err, padding: "8px 12px", borderRadius: 8, fontWeight: 500, fontSize: 13, border: `1px solid ${C.errBrd}`, cursor: "pointer", fontFamily: "inherit" }}>
+                              Завершить
+                            </button>
+                          )}
+                        </>}
                     </div>
                   </div>
                 </div>
@@ -743,11 +735,11 @@ function VcsPage({ users }: { users: MockUser[] }) {
       {modal && (
         <div onClick={(e) => { if (e.target === e.currentTarget) closeModal(); }}
           style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 200, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "40px 20px", overflowY: "auto" }}>
-          <div style={{ background: C.card, borderRadius: 12, width: "100%", maxWidth: 560, boxShadow: "0 20px 50px rgba(0,0,0,0.15)", maxHeight: "calc(100vh - 80px)", display: "flex", flexDirection: "column", overflow: "hidden", border: `1px solid ${C.border}` }}>
+          <div style={{ background: C.card, borderRadius: 12, width: "100%", maxWidth: 520, boxShadow: "0 20px 50px rgba(0,0,0,0.15)", maxHeight: "calc(100vh - 80px)", display: "flex", flexDirection: "column", overflow: "hidden", border: `1px solid ${C.border}` }}>
             <div style={{ padding: "16px 22px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
               <div>
                 <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: C.text }}>{mode === "schedule" ? "Запланировать встречу" : "Новая встреча"}</h3>
-                <p style={{ margin: "3px 0 0", fontSize: 12.5, color: C.text2 }}>{mode === "schedule" ? "Выберите дату и пригласите участников" : "Начнётся сразу после создания"}</p>
+                <p style={{ margin: "3px 0 0", fontSize: 12.5, color: C.text2 }}>{mode === "schedule" ? "Запланируется на выбранное время" : "Начнётся сразу после создания"}</p>
               </div>
               <button onClick={closeModal} style={{ width: 32, height: 32, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", background: "transparent", color: C.text2, cursor: "pointer", border: "none" }}><X size={18} /></button>
             </div>
@@ -761,7 +753,7 @@ function VcsPage({ users }: { users: MockUser[] }) {
             </div>
             <div style={{ overflowY: "auto", padding: "18px 22px" }}>
               <Field label="Название">
-                <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Например: Обсуждение релиза" style={inp()} />
+                <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Например: Обсуждение релиза" style={inp()} autoFocus />
               </Field>
               {mode === "schedule" && (
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 10, marginBottom: 14 }}>
@@ -769,123 +761,37 @@ function VcsPage({ users }: { users: MockUser[] }) {
                   <Field label="Время"><input type="time" value={time} onChange={(e) => setTime(e.target.value)} style={inp()} /></Field>
                 </div>
               )}
-              <div style={{ marginBottom: 14, position: "relative" }}>
-                <Lbl>Коллеги</Lbl>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", border: `1px solid ${searchFocus ? C.acc : C.border}`, borderRadius: 8, background: C.card }}>
-                  <Search size={14} color={C.text3} />
-                  <input value={searchQ} onChange={(e) => setSearchQ(e.target.value)} onFocus={() => setSearchFocus(true)} onBlur={() => setTimeout(() => setSearchFocus(false), 200)}
-                    placeholder="Поиск сотрудников…"
-                    style={{ flex: 1, border: "none", outline: "none", fontSize: 13.5, color: C.text, background: "transparent", fontFamily: "inherit" }} />
-                </div>
-                {searchFocus && filtered.length > 0 && (
-                  <div style={{ position: "absolute", top: "100%", left: 0, right: 0, marginTop: 4, background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, boxShadow: "0 8px 20px rgba(0,0,0,0.1)", zIndex: 10, maxHeight: 210, overflowY: "auto" }}>
-                    {filtered.slice(0, 6).map((u) => (
-                      <button key={u.id} onClick={() => addInternal(u)}
-                        style={{ display: "flex", alignItems: "center", gap: 9, width: "100%", padding: "8px 10px", border: "none", background: "transparent", cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
-                        <Av i={u.av} c={u.col} sz={26} />
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 13, fontWeight: 500, color: C.text }}>{u.name}</div>
-                          <div style={{ fontSize: 11, color: C.text3 }}>{u.dept}</div>
-                        </div>
-                      </button>
-                    ))}
+              {[
+                { v: record, set: setRecord, t: "Запись встречи", d: "Композитная запись (mp4) сохраняется в MinIO. Включается на host'е через LiveKit Egress (E5.2)." },
+                { v: transcribe, set: setTranscribe, t: "Транскрибация", d: "После завершения запись отправится в GigaAM, расшифровка появится в модуле «Транскрибация»." },
+              ].map((opt, i) => (
+                <label key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", border: `1px solid ${opt.v ? C.acc : C.border}`, borderRadius: 10, cursor: "pointer", background: opt.v ? C.accBg : C.card, marginBottom: 8 }}>
+                  <div style={{ position: "relative", width: 36, height: 20, background: opt.v ? C.acc : C.border2, borderRadius: 10, flexShrink: 0 }}>
+                    <div style={{ position: "absolute", top: 2, left: opt.v ? 18 : 2, width: 16, height: 16, background: "white", borderRadius: "50%", transition: "left .15s", boxShadow: "0 1px 3px rgba(0,0,0,0.15)" }} />
                   </div>
-                )}
-                {searchFocus && searchQ && filtered.length === 0 && (
-                  <div style={{ position: "absolute", top: "100%", left: 0, right: 0, marginTop: 4, background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: "12px 14px", fontSize: 12.5, color: C.text3, zIndex: 10 }}>Никого не найдено</div>
-                )}
-                {internal.length > 0 && (
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
-                    {internal.map((id) => {
-                      const u = users.find((x) => x.id === id); if (!u) return null;
-                      return (
-                        <div key={id} style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 3px 3px 4px", background: C.bg3, border: `1px solid ${C.border}`, borderRadius: 999 }}>
-                          <Av i={u.av} c={u.col} sz={22} />
-                          <span style={{ fontSize: 12, color: C.text, fontWeight: 500, paddingRight: 4 }}>{u.name}</span>
-                          <button onClick={() => removeInternal(id)} style={{ width: 20, height: 20, borderRadius: "50%", background: "transparent", color: C.text3, cursor: "pointer", border: "none", display: "flex", alignItems: "center", justifyContent: "center" }}><X size={11} /></button>
-                        </div>
-                      );
-                    })}
+                  <input type="checkbox" checked={opt.v} onChange={(e) => opt.set(e.target.checked)} style={{ display: "none" }} />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 600, color: C.text }}>{opt.t}</div>
+                    <div style={{ fontSize: 12, color: C.text2, marginTop: 2, lineHeight: 1.4 }}>{opt.d}</div>
                   </div>
-                )}
+                </label>
+              ))}
+              <div style={{ marginTop: 12, padding: "10px 12px", background: C.warnBg, border: `1px solid ${C.warnBrd}`, borderRadius: 8, fontSize: 12, color: C.warnTx, lineHeight: 1.4 }}>
+                В этой версии ссылка на встречу — только у создателя. Приглашение коллег по email и поиск участников появятся после E2.4 (синхронизация пользователей с Bitrix24).
               </div>
-              <div style={{ marginBottom: 14 }}>
-                <Lbl>Внешние участники</Lbl>
-                <div style={{ display: "flex", gap: 6 }}>
-                  <input type="email" value={newEmail} onChange={(e) => { setNewEmail(e.target.value); setEmailErr(false); }} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addEmail(); } }}
-                    placeholder="email@example.com" style={{ ...inp(), borderColor: emailErr ? C.err : C.border }} />
-                  <button onClick={addEmail} disabled={!newEmail.trim()}
-                    style={{ padding: "0 14px", borderRadius: 8, border: "none", background: newEmail.trim() ? C.acc : C.bg3, color: newEmail.trim() ? "white" : C.text3, fontSize: 13, fontWeight: 500, cursor: newEmail.trim() ? "pointer" : "default", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 5 }}>
-                    <Plus size={14} />Добавить
-                  </button>
-                </div>
-                {emailErr && <div style={{ fontSize: 11, color: C.err, marginTop: 4 }}>Неверный email или уже добавлен</div>}
-                {externals.length > 0 && (
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
-                    {externals.map((e) => (
-                      <div key={e} style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 6px 4px 10px", background: C.warnBg, border: `1px solid ${C.warnBrd}`, borderRadius: 999 }}>
-                        <Mail size={11} color={C.warnTx} />
-                        <span style={{ fontSize: 12, color: C.warnTx, fontWeight: 500 }}>{e}</span>
-                        <button onClick={() => removeEmail(e)} style={{ width: 20, height: 20, borderRadius: "50%", background: "transparent", color: C.warnTx, cursor: "pointer", border: "none", display: "flex", alignItems: "center", justifyContent: "center" }}><X size={11} /></button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <div style={{ fontSize: 11, color: C.text3, marginTop: 6 }}>На указанные адреса придёт письмо со ссылкой на встречу</div>
-              </div>
-              <label style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", border: `1px solid ${transcribe ? C.acc : C.border}`, borderRadius: 10, cursor: "pointer", background: transcribe ? C.accBg : C.card }}>
-                <div style={{ position: "relative", width: 36, height: 20, background: transcribe ? C.acc : C.border2, borderRadius: 10, flexShrink: 0 }}>
-                  <div style={{ position: "absolute", top: 2, left: transcribe ? 18 : 2, width: 16, height: 16, background: "white", borderRadius: "50%", transition: "left .15s", boxShadow: "0 1px 3px rgba(0,0,0,0.15)" }} />
-                </div>
-                <input type="checkbox" checked={transcribe} onChange={(e) => setTranscribe(e.target.checked)} style={{ display: "none" }} />
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 13.5, fontWeight: 600, color: C.text }}>Транскрибация встречи</div>
-                  <div style={{ fontSize: 12, color: C.text2, marginTop: 2, lineHeight: 1.4 }}>Запись и расшифровка через GigaAM — результат появится в модуле «Транскрибация»</div>
-                </div>
-              </label>
             </div>
             <div style={{ padding: "14px 22px", borderTop: `1px solid ${C.border}`, display: "flex", gap: 10, justifyContent: "flex-end", background: C.card, flexShrink: 0 }}>
               <button onClick={closeModal} style={{ padding: "10px 18px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.card, color: C.text, fontWeight: 500, fontSize: 14, cursor: "pointer", fontFamily: "inherit" }}>Отмена</button>
-              <button onClick={createMeeting} disabled={!canCreate} style={{ padding: "10px 20px", borderRadius: 8, border: "none", background: canCreate ? C.acc : C.bg3, color: canCreate ? "white" : C.text3, fontWeight: 600, fontSize: 14, cursor: canCreate ? "pointer" : "default", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 7 }}>
-                {mode === "schedule" ? <><Mail size={14} />Создать и отправить приглашения</> : <><Video size={14} />Начать встречу</>}
+              <button onClick={() => void submit()} disabled={!canCreate || create.isPending}
+                style={{ padding: "10px 20px", borderRadius: 8, border: "none", background: canCreate && !create.isPending ? C.acc : C.bg3, color: canCreate && !create.isPending ? "white" : C.text3, fontWeight: 600, fontSize: 14, cursor: canCreate && !create.isPending ? "pointer" : "default", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 7 }}>
+                {mode === "schedule" ? <><Clock size={14} />Запланировать</> : <><Video size={14} />Начать встречу</>}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {join && (
-        <div onClick={(e) => { if (e.target === e.currentTarget) setJoin(null); }}
-          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200 }}>
-          <div style={{ background: C.card, borderRadius: 14, width: 460, overflow: "hidden", boxShadow: "0 20px 50px rgba(0,0,0,0.18)", border: `1px solid ${C.border}` }}>
-            <div style={{ background: C.bg3, height: 180, display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <div style={{ width: 72, height: 72, borderRadius: "50%", background: C.card, border: `1px solid ${C.border}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, fontWeight: 600, color: C.text2 }}>
-                {users[0]?.av ?? "?"}
-              </div>
-            </div>
-            <div style={{ padding: 20 }}>
-              <h3 style={{ margin: "0 0 4px", fontSize: 16, fontWeight: 600, color: C.text }}>Войти во встречу</h3>
-              <p style={{ margin: "0 0 4px", fontSize: 13.5, color: C.text, fontWeight: 500 }}>{join.title}</p>
-              <div style={{ fontSize: 12, color: C.text3, marginBottom: 16, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                <span>{join.date} · {join.time} · {total(join)} участника</span>
-                {join.transcribe && <Bdg v="blue">транскрибация</Bdg>}
-              </div>
-              <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
-                {[{ on: mic, On: Mic, Off: MicOff, lOn: "Микрофон вкл.", lOff: "Микрофон выкл.", fn: () => setMic((v) => !v) },
-                  { on: cam, On: Video, Off: VideoOff, lOn: "Камера вкл.", lOff: "Камера выкл.", fn: () => setCam((v) => !v) }].map((b, i) => (
-                    <button key={i} onClick={b.fn} style={{ flex: 1, padding: "10px", borderRadius: 10, border: `1px solid ${b.on ? C.border : C.errBrd}`, background: b.on ? C.card : C.errBg, color: b.on ? C.text : C.err, fontWeight: 500, fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center", gap: 7, cursor: "pointer", fontFamily: "inherit" }}>
-                      {b.on ? <b.On size={15} /> : <b.Off size={15} />}{b.on ? b.lOn : b.lOff}
-                    </button>
-                  ))}
-              </div>
-              <div style={{ display: "flex", gap: 10 }}>
-                <button onClick={() => setJoin(null)} style={{ flex: 1, padding: "11px", borderRadius: 10, border: `1px solid ${C.border}`, background: C.card, color: C.text, fontWeight: 500, cursor: "pointer", fontFamily: "inherit" }}>Отмена</button>
-                <button onClick={() => setJoin(null)} style={{ flex: 2, padding: "11px", borderRadius: 10, background: C.acc, color: "white", fontWeight: 600, fontSize: 14, border: "none", cursor: "pointer", fontFamily: "inherit" }}>Войти в конференцию</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {active && <MeetingRoom meeting={active} isHost={isHost(active)} onClose={() => setActive(null)} />}
     </div>
   );
 }
@@ -2521,7 +2427,7 @@ function ShellInner({ me }: { me: Me }) {
       </nav>
 
       <main style={{ flex: 1, overflow: "auto", display: "flex", flexDirection: "column" }}>
-        {page === "vcs"            && <VcsPage users={users} />}
+        {page === "vcs"            && <VcsPage me={me} />}
         {page === "analytics"      && <AnalyticsPage />}
         {page === "transcription"  && <TranscriptionPage />}
         {isAdmin && page === "settings" && <SystemSettingsPage users={users} />}
