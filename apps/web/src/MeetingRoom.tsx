@@ -102,8 +102,11 @@ export function MeetingRoom({ meeting, isHost, onClose }: Props) {
             token={creds.token}
             serverUrl={creds.wsURL}
             connect
-            video
-            audio
+            // video/audio НЕ выставляем здесь — иначе LK сразу делает
+            // getUserMedia({audio:true, video:true}), и если в системе нет
+            // камеры (или микрофона), весь захват падает с NotFoundError.
+            // Пользователь включит микрофон/камеру сам через контролы внизу;
+            // VideoConference UI сразу покажет правильное состояние "muted".
             data-lk-theme="default"
             style={{ height: "100%", width: "100%" }}
             onDisconnected={close}
