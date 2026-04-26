@@ -90,3 +90,19 @@
 - В логах LiveKit есть предупреждения по autodetect external IP и deprecated
   `prometheus_port`; стек работает, но конфиг LiveKit стоит привести к новой
   форме `prometheus.port` отдельной задачей.
+
+## 2026-04-26 — Документация NAT/firewall портов
+
+**Задача:** добавить в README GitHub-репозитория явное описание портов, которые
+нужно открыть/пробросить за NAT, чтобы Toolkit работал в production.
+
+**Сделано:**
+- В `README.md` добавлен раздел “Порты за NAT / firewall”.
+- Описаны публичные DNAT-порты для HTTPS, coturn, LiveKit UDP media и LiveKit TCP
+  fallback.
+- Отдельно перечислены порты, которые нельзя публиковать в Internet: MinIO,
+  Prometheus, Grafana, PostgreSQL, Redis, OpenSearch.
+- Добавлены минимальные команды проверки после проброса портов.
+
+**Проверка:**
+- Проверен markdown diff.

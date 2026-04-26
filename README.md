@@ -150,6 +150,45 @@ Toolkit собирает это в один портал так, чтобы:
 - **TLS-терминация:** на внешнем nginx-proxy с Let's Encrypt; внутренний канал — приватная сеть.
 - **HA:** не входит в MVP (целевой SLA 99,0%, RPO ≤ 24ч / RTO ≤ 2ч).
 
+### Порты за NAT / firewall
+
+Production-схема предполагает внешний reverse-proxy для HTTPS и отдельный app-сервер
+с Docker Compose. Для WebRTC-медиа одних `443/TCP` недостаточно: браузерам нужны UDP
+порты LiveKit и TURN.
+
+| Откуда | Порт / протокол | Куда DNAT / разрешить | Назначение |
+|---|---:|---|---|
+| Internet | `443/TCP` | reverse-proxy `:443` | HTTPS для SPA, REST API, OAuth и WebSocket-сигналинга `/rtc` |
+| reverse-proxy | `APP_BIND_PORT/TCP` (`18001` по умолчанию) | app-сервер `APP_BIND_ADDRESS:18001` | Внутренний HTTP до контейнера `web`; не публиковать напрямую в Internet |
+| Internet | `3478/UDP` | app-сервер `:3478` | STUN/TURN через coturn |
+| Internet | `3478/TCP` | app-сервер `:3478` | TURN TCP fallback |
+| Internet | `49152-49999/UDP` | app-сервер `:49152-49999` | UDP relay-порты coturn (`--min-port/--max-port`) |
+| Internet | `50000-60000/UDP` | app-сервер `:50000-60000` | LiveKit WebRTC media (`rtc.port_range_start/end`) |
+| Internet | `7881/TCP` | app-сервер `:7881` | LiveKit TCP ICE fallback; желательно открыть для сетей, где UDP режется |
+| admin/VPN | `22/TCP` | app-сервер `:22` | SSH-администрирование, только по allowlist |
+
+Не открывать в Internet:
+
+| Порт | Назначение | Доступ |
+|---:|---|---|
+| `9000/TCP`, `9001/TCP` | MinIO API/Console | Только приватная сеть/VPN |
+| `9090/TCP` | Prometheus | Только приватная сеть/VPN |
+| `3001/TCP` | Grafana | Только приватная сеть/VPN |
+| `5432/TCP` | PostgreSQL | Не публикуется наружу |
+| `6379/TCP` | Redis | Только `127.0.0.1` на app-сервере для LiveKit |
+| `9200/TCP` | OpenSearch | Не публикуется наружу |
+
+Минимальная проверка после проброса:
+
+```bash
+curl -I https://<TOOLKIT_DOMAIN>
+curl -fsS http://<APP_BIND_ADDRESS>:18001/healthz
+curl -fsS http://<APP_BIND_ADDRESS>:9090/-/healthy
+```
+
+Для внешней ВКС-проверки дополнительно убедитесь, что UDP `50000-60000` и
+`49152-49999` не блокируются граничным firewall после DNAT.
+
 ---
 
 ## Документы
