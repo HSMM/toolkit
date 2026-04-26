@@ -13,6 +13,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -105,7 +106,7 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 		r.Use(middleware.RequireAuth(jwtIssuer, subjectLoader, logger))
 		r.Use(middleware.RateLimitByUser(cfg.RateLimitUserPerMin, time.Minute))
 
-		r.Get("/me", handleMe())
+		r.Get("/me", handleMe(pool))
 
 		// WebSocket events (E3.3).
 		r.Mount("/ws", ws.NewHandler(hub, cfg.AllowedCORSOrigins))
@@ -191,15 +192,42 @@ func handleVersion() http.HandlerFunc {
 	}
 }
 
-// handleMe returns the calling subject's basic profile. First "real" handler
-// of /api/v1 — proves the auth middleware chain works end-to-end.
-func handleMe() http.HandlerFunc {
+// handleMe returns the calling subject's full profile (joined from "user"
+// table — full name, department, position, phone, avatar, extension, bitrix_id).
+func handleMe(pool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		s := auth.MustSubject(r.Context())
+
+		var (
+			bitrixID, fullName, phone string
+			department, position      string
+			avatarURL, extension      string
+		)
+		const q = `
+			SELECT COALESCE(bitrix_id, ''), COALESCE(full_name, ''), COALESCE(phone, ''),
+			       COALESCE(department, ''), COALESCE(position, ''),
+			       COALESCE(avatar_url, ''), COALESCE(extension, '')
+			FROM "user" WHERE id = $1
+		`
+		_ = pool.QueryRow(r.Context(), q, s.UserID).Scan(
+			&bitrixID, &fullName, &phone, &department, &position, &avatarURL, &extension,
+		)
+
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprintf(w,
-			`{"user_id":"%s","email":"%s","role":"%s","supervises":%d,"session_id":"%s"}`,
-			s.UserID, s.Email, s.Role, len(s.Supervises), s.SessionID)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"user_id":    s.UserID,
+			"email":      s.Email,
+			"role":       s.Role,
+			"supervises": len(s.Supervises),
+			"session_id": s.SessionID,
+			"bitrix_id":  bitrixID,
+			"full_name":  fullName,
+			"phone":      phone,
+			"department": department,
+			"position":   position,
+			"avatar_url": avatarURL,
+			"extension":  extension,
+		})
 	}
 }
 

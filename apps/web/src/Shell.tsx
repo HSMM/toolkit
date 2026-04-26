@@ -46,6 +46,12 @@ type MockUser = {
   id: number; name: string; email: string; dept: string;
   ext: number | null; role: "admin" | "user"; st: "active" | "blocked";
   login: string; av: string; col: string;
+  // Дополнительные поля профиля (заполняются для текущего пользователя из Me).
+  avatarUrl?: string;
+  position?: string;
+  phone?: string;
+  bitrixId?: string;
+  uid?: string; // user_id (UUID) — для отображения в профиле
 };
 
 const STATUSES = {
@@ -73,18 +79,25 @@ function avatarFromUser(u: { full_name?: string; name?: string; email: string })
 }
 
 function meAsMockUser(me: Me): MockUser {
-  const a = avatarFromUser({ email: me.email, name: me.email });
+  const display = me.full_name || me.email;
+  const a = avatarFromUser({ full_name: me.full_name, email: me.email, name: display });
+  const extNum = me.extension && /^\d+$/.test(me.extension) ? Number(me.extension) : null;
   return {
     id: 0,
-    name: me.email,
+    name: display,
     email: me.email,
-    dept: "—",
-    ext: null,
+    dept: me.department || "—",
+    ext: extNum,
     role: me.role,
     st: "active",
     login: "Сейчас",
     av: a.av,
     col: a.col,
+    avatarUrl: me.avatar_url,
+    position: me.position,
+    phone: me.phone,
+    bitrixId: me.bitrix_id,
+    uid: me.user_id,
   };
 }
 
@@ -147,13 +160,21 @@ function fmtRelTime(ts: number): string {
 // Primitives
 // ──────────────────────────────────────────────────────────────────────────
 
-function Av({ i, c, sz = 32 }: { i: string; c?: string; sz?: number }) {
+function Av({ i, c, sz = 32, src }: { i: string; c?: string; sz?: number; src?: string }) {
+  const [err, setErr] = useState(false);
+  const showImg = !!src && !err;
   return (
     <div style={{
       width: sz, height: sz, borderRadius: "50%", background: c || "#6366f1",
       display: "flex", alignItems: "center", justifyContent: "center",
       fontSize: sz > 40 ? 15 : sz > 30 ? 12 : 10, fontWeight: 600, color: "white", flexShrink: 0,
-    }}>{i}</div>
+      overflow: "hidden",
+    }}>
+      {showImg
+        ? <img src={src} alt="" onError={() => setErr(true)}
+            style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+        : i}
+    </div>
   );
 }
 
@@ -1789,7 +1810,7 @@ function AnalyticsPage() {
 // USERS, PHONE SETTINGS, SMTP SETTINGS — admin pages
 // ──────────────────────────────────────────────────────────────────────────
 
-function UsersPage({ users: initial }: { users: MockUser[] }) {
+function UsersPage({ users: initial, hideHeader }: { users: MockUser[]; hideHeader?: boolean }) {
   const [users, setUsers] = useState<MockUser[]>(initial);
   const [q, setQ] = useState("");
   const flip = (id: number, field: "role" | "st") => setUsers((u) => u.map((x) => x.id === id
@@ -1801,9 +1822,11 @@ function UsersPage({ users: initial }: { users: MockUser[] }) {
 
   return (
     <div style={{ minHeight: "100%", background: C.bg2 }}>
-      <PgHdr title="Управление пользователями" sub={`${users.length} ${users.length === 1 ? "сотрудник" : "сотрудников"} · синхронизация с Bitrix24`}
-        action={<button style={{ display: "flex", alignItems: "center", gap: 6, padding: "9px 14px", borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 13.5, color: C.text, fontWeight: 500, background: C.card, cursor: "pointer", fontFamily: "inherit" }}><RefreshCw size={13} />Синхронизировать</button>}
-      />
+      {!hideHeader && (
+        <PgHdr title="Управление пользователями" sub={`${users.length} ${users.length === 1 ? "сотрудник" : "сотрудников"} · синхронизация с Bitrix24`}
+          action={<button style={{ display: "flex", alignItems: "center", gap: 6, padding: "9px 14px", borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 13.5, color: C.text, fontWeight: 500, background: C.card, cursor: "pointer", fontFamily: "inherit" }}><RefreshCw size={13} />Синхронизировать</button>}
+        />
+      )}
       <div style={{ padding: 24 }}>
         <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
           <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 8 }}>
@@ -1864,7 +1887,7 @@ function UsersPage({ users: initial }: { users: MockUser[] }) {
   );
 }
 
-function PhoneSettingsPage() {
+function PhoneSettingsPage({ hideHeader }: { hideHeader?: boolean } = {}) {
   const [saved, setSaved] = useState(false);
   const [freeNums, setFreeNums] = useState<{ ext: string; pwd: string; saved: boolean }[]>([]);
   const [assigned] = useState<unknown[]>([]);
@@ -1891,16 +1914,20 @@ function PhoneSettingsPage() {
     </div>
   );
 
+  const saveBtn = (
+    <button onClick={save} style={{ display: "flex", alignItems: "center", gap: 7, background: saved ? C.acc : C.text, color: "white", padding: "9px 18px", borderRadius: 8, fontWeight: 600, fontSize: 14, border: "none", cursor: "pointer", fontFamily: "inherit" }}>
+      {saved ? <><Check size={15} />Сохранено</> : <><Save size={15} />Сохранить</>}
+    </button>
+  );
   return (
     <div style={{ minHeight: "100%", background: C.bg2 }}>
-      <PgHdr title="Настройки телефонии" sub="FreePBX WebRTC · WSS-подключение и внутренние номера"
-        action={
-          <button onClick={save} style={{ display: "flex", alignItems: "center", gap: 7, background: saved ? C.acc : C.text, color: "white", padding: "9px 18px", borderRadius: 8, fontWeight: 600, fontSize: 14, border: "none", cursor: "pointer", fontFamily: "inherit" }}>
-            {saved ? <><Check size={15} />Сохранено</> : <><Save size={15} />Сохранить</>}
-          </button>
-        }
-      />
+      {!hideHeader && (
+        <PgHdr title="Настройки телефонии" sub="FreePBX WebRTC · WSS-подключение и внутренние номера" action={saveBtn} />
+      )}
       <div style={{ padding: 24, maxWidth: 640 }}>
+        {hideHeader && (
+          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 14 }}>{saveBtn}</div>
+        )}
         <Sec title="Подключение к FreePBX" sub="WebRTC-шлюз · WSS-сигнализация">
           <Field label="WSS-адрес шлюза"><input placeholder="wss://pbx.example.com:8089/ws" style={{ ...inp(), fontFamily: "'DM Mono', monospace" }} /></Field>
           <button style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 13, color: C.text, background: C.card, cursor: "pointer", fontFamily: "inherit", marginTop: 4, fontWeight: 500 }}>
@@ -1966,7 +1993,162 @@ function PhoneSettingsPage() {
   );
 }
 
-function SmtpSettingsPage() {
+// ──────────────────────────────────────────────────────────────────────────
+// SYSTEM SETTINGS — единая админ-страница с табами
+// (Пользователи / Телефония / SMTP / AI)
+// ──────────────────────────────────────────────────────────────────────────
+
+type SettingsTab = "users" | "phone" | "smtp" | "ai";
+
+function SystemSettingsPage({ users }: { users: MockUser[] }) {
+  const [tab, setTab] = useState<SettingsTab>("users");
+
+  const tabs: { id: SettingsTab; label: string; Icon: LucideIcon }[] = [
+    { id: "users", label: "Пользователи", Icon: User },
+    { id: "phone", label: "Телефония",    Icon: Phone },
+    { id: "smtp",  label: "SMTP",         Icon: Send },
+    { id: "ai",    label: "AI",           Icon: Sparkles },
+  ];
+
+  return (
+    <div style={{ minHeight: "100%", background: C.bg2, display: "flex", flexDirection: "column" }}>
+      <PgHdr title="Настройки системы" sub="Пользователи · Телефония · SMTP · AI" />
+      <div style={{ padding: "0 24px", background: C.card, borderBottom: `1px solid ${C.border}`, display: "flex", gap: 4, flexShrink: 0 }}>
+        {tabs.map((x) => (
+          <button key={x.id} onClick={() => setTab(x.id)}
+            style={{
+              padding: "12px 14px", background: "transparent", border: "none",
+              borderBottom: `2px solid ${tab === x.id ? C.acc : "transparent"}`,
+              color: tab === x.id ? C.text : C.text2,
+              fontSize: 13.5, fontWeight: tab === x.id ? 600 : 500,
+              cursor: "pointer", fontFamily: "inherit",
+              display: "flex", alignItems: "center", gap: 7, marginBottom: -1,
+            }}>
+            <x.Icon size={15} />{x.label}
+          </button>
+        ))}
+      </div>
+      <div style={{ flex: 1, overflowY: "auto" }}>
+        {tab === "users" && <UsersPage users={users} hideHeader />}
+        {tab === "phone" && <PhoneSettingsPage hideHeader />}
+        {tab === "smtp"  && <SmtpSettingsPage hideHeader />}
+        {tab === "ai"    && <AISettingsPage hideHeader />}
+      </div>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// AI SETTINGS — провайдеры моделей (ASR / LLM) и параметры аналитики
+// ──────────────────────────────────────────────────────────────────────────
+
+function AISettingsPage({ hideHeader }: { hideHeader?: boolean } = {}) {
+  const [saved, setSaved] = useState(false);
+  const [asrProvider, setAsrProvider] = useState("gigaam");
+  const [llmProvider, setLlmProvider] = useState("none");
+  const [diarization, setDiarization] = useState(true);
+
+  const save = () => { setSaved(true); setTimeout(() => setSaved(false), 2500); };
+  const saveBtn = (
+    <button onClick={save} style={{ display: "flex", alignItems: "center", gap: 7, background: saved ? C.acc : C.text, color: "white", padding: "9px 18px", borderRadius: 8, fontWeight: 600, fontSize: 14, border: "none", cursor: "pointer", fontFamily: "inherit" }}>
+      {saved ? <><Check size={15} />Сохранено</> : <><Save size={15} />Сохранить</>}
+    </button>
+  );
+
+  const Sec = ({ title, sub, children }: { title: string; sub?: string; children: ReactNode }) => (
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, marginBottom: 16, overflow: "hidden" }}>
+      <div style={{ padding: "14px 20px", borderBottom: `1px solid ${C.border}` }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{title}</div>
+        {sub && <div style={{ fontSize: 12, color: C.text2, marginTop: 2 }}>{sub}</div>}
+      </div>
+      <div style={{ padding: "18px 20px" }}>{children}</div>
+    </div>
+  );
+
+  return (
+    <div style={{ minHeight: "100%", background: C.bg2 }}>
+      {!hideHeader && (
+        <PgHdr title="Настройки AI" sub="Провайдеры распознавания и языковых моделей" action={saveBtn} />
+      )}
+      <div style={{ padding: 24, maxWidth: 640 }}>
+        {hideHeader && (
+          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 14 }}>{saveBtn}</div>
+        )}
+
+        <Sec title="Распознавание речи (ASR)" sub="Провайдер для транскрибации звонков и встреч">
+          <Field label="Провайдер">
+            <select value={asrProvider} onChange={(e) => setAsrProvider(e.target.value)} style={{ ...inp(), cursor: "pointer" }}>
+              <option value="gigaam">GigaAM (Сбер) — self-hosted</option>
+              <option value="whisper">OpenAI Whisper — API</option>
+              <option value="vosk">Vosk — self-hosted</option>
+            </select>
+          </Field>
+          {asrProvider === "gigaam" && (
+            <>
+              <Field label="URL шлюза"><input placeholder="http://gigaam:8000" style={{ ...inp(), fontFamily: "'DM Mono', monospace" }} /></Field>
+              <Field label="API-токен"><input type="password" placeholder="••••••••" style={inp()} /></Field>
+            </>
+          )}
+          {asrProvider === "whisper" && (
+            <Field label="OpenAI API ключ"><input type="password" placeholder="sk-…" style={{ ...inp(), fontFamily: "'DM Mono', monospace" }} /></Field>
+          )}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0 0", borderTop: `1px solid ${C.border}`, marginTop: 6 }}>
+            <input id="ai-diar" type="checkbox" checked={diarization} onChange={(e) => setDiarization(e.target.checked)} />
+            <label htmlFor="ai-diar" style={{ fontSize: 13, color: C.text, cursor: "pointer" }}>
+              Диаризация спикеров
+              <span style={{ display: "block", fontSize: 11.5, color: C.text3, marginTop: 2 }}>
+                Разделение реплик по каналам (стерео-запись звонка) или по голосам.
+              </span>
+            </label>
+          </div>
+        </Sec>
+
+        <Sec title="Языковая модель (LLM)" sub="Используется для саммари, тегов и AI-аналитики звонков">
+          <Field label="Провайдер">
+            <select value={llmProvider} onChange={(e) => setLlmProvider(e.target.value)} style={{ ...inp(), cursor: "pointer" }}>
+              <option value="none">Не использовать</option>
+              <option value="openai">OpenAI (GPT-4o)</option>
+              <option value="anthropic">Anthropic (Claude)</option>
+              <option value="local">Локальная (Ollama / vLLM)</option>
+            </select>
+          </Field>
+          {llmProvider !== "none" && llmProvider !== "local" && (
+            <Field label="API ключ"><input type="password" placeholder="••••••••" style={{ ...inp(), fontFamily: "'DM Mono', monospace" }} /></Field>
+          )}
+          {llmProvider === "local" && (
+            <>
+              <Field label="URL модели"><input placeholder="http://ollama:11434" style={{ ...inp(), fontFamily: "'DM Mono', monospace" }} /></Field>
+              <Field label="Имя модели"><input placeholder="llama3.1:8b" style={{ ...inp(), fontFamily: "'DM Mono', monospace" }} /></Field>
+            </>
+          )}
+          {llmProvider === "none" && (
+            <div style={{ fontSize: 12, color: C.text3, lineHeight: 1.5 }}>
+              AI-функции (саммари, действия, теги) будут недоступны. Дислог и базовая статистика — по-прежнему работают.
+            </div>
+          )}
+        </Sec>
+
+        <Sec title="Аналитика по умолчанию" sub="Какие AI-блоки показывать в просмотре расшифровки">
+          {[
+            { id: "summary", label: "Краткое содержание разговора", on: true },
+            { id: "actions", label: "Действия и решения (action items)", on: true },
+            { id: "tags",    label: "Авто-теги: тема, продукт, тональность", on: true },
+            { id: "score",   label: "Оценка качества разговора (CSAT-прокси)", on: false },
+          ].map((x) => (
+            <div key={x.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0" }}>
+              <input id={`ai-${x.id}`} type="checkbox" defaultChecked={x.on} disabled={llmProvider === "none"} />
+              <label htmlFor={`ai-${x.id}`} style={{ fontSize: 13, color: llmProvider === "none" ? C.text3 : C.text, cursor: llmProvider === "none" ? "default" : "pointer" }}>
+                {x.label}
+              </label>
+            </div>
+          ))}
+        </Sec>
+      </div>
+    </div>
+  );
+}
+
+function SmtpSettingsPage({ hideHeader }: { hideHeader?: boolean } = {}) {
   const [saved, setSaved] = useState(false);
   const [testSt, setTestSt] = useState<"idle" | "sending" | "sent">("idle");
   const [enc, setEnc] = useState("starttls");
@@ -1989,13 +2171,21 @@ function SmtpSettingsPage() {
     </div>
   );
 
+  const saveBtn = (
+    <button onClick={save} style={{ display: "flex", alignItems: "center", gap: 7, background: saved ? C.acc : C.text, color: "white", padding: "9px 18px", borderRadius: 8, fontWeight: 600, fontSize: 14, border: "none", cursor: "pointer", fontFamily: "inherit" }}>
+      {saved ? <><Check size={15} />Сохранено</> : <><Save size={15} />Сохранить</>}
+    </button>
+  );
   return (
     <div style={{ minHeight: "100%", background: C.bg2 }}>
       <style>{`@keyframes spin2{to{transform:rotate(360deg)}}`}</style>
-      <PgHdr title="Настройки SMTP" sub="Отправка приглашений на встречи и уведомлений"
-        action={<button onClick={save} style={{ display: "flex", alignItems: "center", gap: 7, background: saved ? C.acc : C.text, color: "white", padding: "9px 18px", borderRadius: 8, fontWeight: 600, fontSize: 14, border: "none", cursor: "pointer", fontFamily: "inherit" }}>{saved ? <><Check size={15} />Сохранено</> : <><Save size={15} />Сохранить</>}</button>}
-      />
+      {!hideHeader && (
+        <PgHdr title="Настройки SMTP" sub="Отправка приглашений на встречи и уведомлений" action={saveBtn} />
+      )}
       <div style={{ padding: 24, maxWidth: 640 }}>
+        {hideHeader && (
+          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 14 }}>{saveBtn}</div>
+        )}
         <Sec title="Сервер SMTP" sub="Параметры подключения к почтовому серверу">
           <Field label="Хост"><input placeholder="smtp.example.com" style={{ ...inp(), fontFamily: "'DM Mono', monospace" }} /></Field>
           <div style={{ display: "grid", gridTemplateColumns: "140px 1fr", gap: 12, marginBottom: 14 }}>
@@ -2061,8 +2251,9 @@ function ProfileModal({ onClose, me }: { onClose: () => void; me: MockUser }) {
     return () => document.removeEventListener("keydown", h);
   }, [onClose]);
 
+  const uid = me.uid || `usr_${me.id}`;
   const copy = () => {
-    void navigator.clipboard?.writeText(`usr_${me.id}`);
+    void navigator.clipboard?.writeText(uid);
     setCopied(true); setTimeout(() => setCopied(false), 1800);
   };
 
@@ -2090,11 +2281,14 @@ function ProfileModal({ onClose, me }: { onClose: () => void; me: MockUser }) {
         <div style={{ overflowY: "auto", padding: "20px 22px" }}>
           <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 18, marginBottom: 14, display: "flex", alignItems: "center", gap: 16 }}>
             <div style={{ position: "relative", flexShrink: 0 }}>
-              <Av i={me.av} c={me.col} sz={64} />
+              <Av i={me.av} c={me.col} sz={64} src={me.avatarUrl} />
               <span style={{ position: "absolute", bottom: 0, right: 0, width: 16, height: 16, borderRadius: "50%", background: curStatus.col, border: `3px solid ${C.card}`, boxSizing: "content-box" }} />
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <h2 style={{ margin: "0 0 6px", fontSize: 18, fontWeight: 600, color: C.text }}>{me.name}</h2>
+              {me.position && (
+                <div style={{ fontSize: 13, color: C.text2, marginBottom: 7, fontWeight: 500 }}>{me.position}</div>
+              )}
               <div style={{ display: "flex", gap: 6, marginBottom: 7, flexWrap: "wrap", alignItems: "center" }}>
                 <Bdg v="adm">{me.role === "admin" ? "Администратор" : "Пользователь"}</Bdg>
                 <Bdg>{me.dept}</Bdg>
@@ -2112,13 +2306,16 @@ function ProfileModal({ onClose, me }: { onClose: () => void; me: MockUser }) {
           <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, marginBottom: 14, overflow: "hidden" }}>
             <div style={{ padding: "12px 18px", borderBottom: `1px solid ${C.border}`, fontSize: 13.5, fontWeight: 600, color: C.text }}>Учётная запись</div>
             <div style={{ padding: "2px 18px 12px" }}>
-              <Row label="ID пользователя" value={`usr_${me.id}`} mono action={
+              <Row label="ID пользователя" value={uid} mono action={
                 <button onClick={copy} style={{ width: 28, height: 28, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", background: copied ? C.accBg2 : "transparent", color: copied ? C.acc : C.text3, cursor: "pointer", border: "none" }}>
                   {copied ? <Check size={14} /> : <Copy size={13} />}
                 </button>
               } />
+              {me.bitrixId && <Row label="Bitrix24 ID" value={me.bitrixId} mono />}
               <Row label="Email" value={me.email} />
               <Row label="Отдел" value={me.dept} />
+              {me.position && <Row label="Должность" value={me.position} />}
+              {me.phone && <Row label="Телефон" value={me.phone} mono />}
               <Row label="Последний вход" value={<span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 6, height: 6, borderRadius: "50%", background: C.acc, display: "inline-block" }} />Активен сейчас</span>} />
             </div>
           </div>
@@ -2229,9 +2426,7 @@ const NAV: NavItemDef[] = [
   { id: "helpdesk",      label: "Хелпдэск",      Icon: HelpCircle,    stub: true },
 ];
 const ADM: NavItemDef[] = [
-  { id: "users",          label: "Пользователи",   Icon: User },
-  { id: "phone-settings", label: "Настройки АТС",  Icon: Settings },
-  { id: "smtp-settings",  label: "Настройки SMTP", Icon: Send },
+  { id: "settings", label: "Настройки системы", Icon: Settings },
 ];
 
 export function Shell({ me }: { me: Me }) {
@@ -2312,7 +2507,7 @@ function ShellInner({ me }: { me: Me }) {
         <button onClick={() => setProfileOpen(true)} title={!expanded ? "Мой профиль" : undefined}
           style={{ borderTop: `1px solid ${C.border}`, padding: "10px 12px", display: "flex", alignItems: "center", gap: 11, background: profileOpen ? C.bg3 : "transparent", width: "100%", border: "none", cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap", overflow: "hidden" }}>
           <div style={{ position: "relative", flexShrink: 0 }}>
-            <div style={{ width: 32, height: 32, borderRadius: "50%", background: meAsMock.col, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 600, color: "white" }}>{meAsMock.av}</div>
+            <Av i={meAsMock.av} c={meAsMock.col} sz={32} src={meAsMock.avatarUrl} />
             <span style={{ position: "absolute", bottom: -1, right: -1, width: 10, height: 10, borderRadius: "50%", background: curStatus.col, border: `2px solid ${C.bg2}`, boxSizing: "content-box" }} />
           </div>
           <div style={{ flex: 1, overflow: "hidden", textAlign: "left", opacity: expanded ? 1 : 0, transition: "opacity 120ms", transitionDelay: expanded ? "80ms" : "0ms" }}>
@@ -2329,9 +2524,7 @@ function ShellInner({ me }: { me: Me }) {
         {page === "vcs"            && <VcsPage users={users} />}
         {page === "analytics"      && <AnalyticsPage />}
         {page === "transcription"  && <TranscriptionPage />}
-        {isAdmin && page === "users"          && <UsersPage users={users} />}
-        {isAdmin && page === "phone-settings" && <PhoneSettingsPage />}
-        {isAdmin && page === "smtp-settings"  && <SmtpSettingsPage />}
+        {isAdmin && page === "settings" && <SystemSettingsPage users={users} />}
         {(["messengers", "contacts", "helpdesk"] as const).includes(page as any) && <StubPage page={page as "messengers" | "contacts" | "helpdesk"} />}
       </main>
 

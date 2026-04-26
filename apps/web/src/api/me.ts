@@ -10,6 +10,14 @@ export type Me = {
   role: "user" | "admin";
   supervises: number;
   session_id: string;
+  // Профиль из таблицы "user" (sync с Bitrix24)
+  bitrix_id?: string;
+  full_name?: string;
+  phone?: string;
+  department?: string;
+  position?: string;
+  avatar_url?: string;
+  extension?: string;
 };
 
 export function useMe() {
