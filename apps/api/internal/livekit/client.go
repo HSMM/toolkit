@@ -239,8 +239,9 @@ func (c *Client) StartRoomCompositeEgress(ctx context.Context, room, layout, fil
 	body := map[string]any{
 		"room_name": room,
 		"layout":    layout,
-		// preset H264_720P_30 даёт балансный bitrate; подходит и для 1-2 человек, и для 6-10.
-		"preset": "H264_720P_30",
+		// 1080p30 = ~4.5 Мбит/с, h.264 high; на уровне Jitsi/Zoom recording.
+		// Если CPU egress'а станет узким местом — снизим до 720P_30.
+		"preset": "H264_1080P_30",
 		"file_outputs": []any{
 			map[string]any{
 				"file_type": "MP4",

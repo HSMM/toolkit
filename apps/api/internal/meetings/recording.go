@@ -156,11 +156,13 @@ func (s *Service) OnEgressEnded(ctx context.Context, info *livekit.EgressInfo) e
 		return errors.New("OnEgressEnded: empty egress info")
 	}
 
-	// Поиск: или video, или audio.
+	// Поиск: или video, или audio. COALESCE — потому что после ENDED первой
+	// дорожки соответствующий current_*_egress_id уже NULL, и сравнение с $1
+	// возвращает NULL вместо false; *bool в Go не умеет в NULL.
 	const findQ = `
 		SELECT id,
-		       (current_egress_id       = $1) AS is_video,
-		       (current_audio_egress_id = $1) AS is_audio
+		       COALESCE(current_egress_id       = $1, FALSE) AS is_video,
+		       COALESCE(current_audio_egress_id = $1, FALSE) AS is_audio
 		FROM meeting
 		WHERE current_egress_id = $1 OR current_audio_egress_id = $1
 	`
