@@ -57,18 +57,20 @@ type CreateInput struct {
 }
 
 type Meeting struct {
-	ID             uuid.UUID  `json:"id"`
-	CreatedBy      uuid.UUID  `json:"created_by"`
-	Title          string     `json:"title"`
-	Description    string     `json:"description,omitempty"`
-	ScheduledAt    *time.Time `json:"scheduled_at,omitempty"`
-	StartedAt      *time.Time `json:"started_at,omitempty"`
-	EndedAt        *time.Time `json:"ended_at,omitempty"`
-	LiveKitRoomID  string     `json:"livekit_room_id"`
-	RecordEnabled  bool       `json:"record_enabled"`
-	AutoTranscribe bool       `json:"auto_transcribe"`
-	HasExternal    bool       `json:"has_external"`
-	CreatedAt      time.Time  `json:"created_at"`
+	ID                  uuid.UUID  `json:"id"`
+	CreatedBy           uuid.UUID  `json:"created_by"`
+	Title               string     `json:"title"`
+	Description         string     `json:"description,omitempty"`
+	ScheduledAt         *time.Time `json:"scheduled_at,omitempty"`
+	StartedAt           *time.Time `json:"started_at,omitempty"`
+	EndedAt             *time.Time `json:"ended_at,omitempty"`
+	LiveKitRoomID       string     `json:"livekit_room_id"`
+	RecordEnabled       bool       `json:"record_enabled"`
+	AutoTranscribe      bool       `json:"auto_transcribe"`
+	HasExternal         bool       `json:"has_external"`
+	RecordingActive     bool       `json:"recording_active"`
+	RecordingStartedAt  *time.Time `json:"recording_started_at,omitempty"`
+	CreatedAt           time.Time  `json:"created_at"`
 }
 
 type Participant struct {
@@ -160,7 +162,8 @@ func (s *Service) List(ctx context.Context, userID uuid.UUID, limit int) ([]*Mee
 	const q = `
 		SELECT m.id, m.created_by, m.title, COALESCE(m.description,''),
 		       m.scheduled_at, m.started_at, m.ended_at, m.livekit_room_id,
-		       m.record_enabled, m.auto_transcribe, m.has_external, m.created_at
+		       m.record_enabled, m.auto_transcribe, m.has_external,
+		       m.recording_active, m.recording_started_at, m.created_at
 		FROM meeting m
 		WHERE m.created_by = $1
 		   OR EXISTS (SELECT 1 FROM participant p WHERE p.meeting_id = m.id AND p.user_id = $1)
@@ -179,7 +182,8 @@ func (s *Service) List(ctx context.Context, userID uuid.UUID, limit int) ([]*Mee
 		m := &Meeting{}
 		if err := rows.Scan(&m.ID, &m.CreatedBy, &m.Title, &m.Description,
 			&m.ScheduledAt, &m.StartedAt, &m.EndedAt, &m.LiveKitRoomID,
-			&m.RecordEnabled, &m.AutoTranscribe, &m.HasExternal, &m.CreatedAt,
+			&m.RecordEnabled, &m.AutoTranscribe, &m.HasExternal,
+			&m.RecordingActive, &m.RecordingStartedAt, &m.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -591,14 +595,16 @@ func (s *Service) loadMeeting(ctx context.Context, id uuid.UUID) (*Meeting, erro
 	const q = `
 		SELECT id, created_by, title, COALESCE(description,''),
 		       scheduled_at, started_at, ended_at, livekit_room_id,
-		       record_enabled, auto_transcribe, has_external, created_at
+		       record_enabled, auto_transcribe, has_external,
+		       recording_active, recording_started_at, created_at
 		FROM meeting WHERE id = $1
 	`
 	m := &Meeting{}
 	err := s.db.QueryRow(ctx, q, id).Scan(
 		&m.ID, &m.CreatedBy, &m.Title, &m.Description,
 		&m.ScheduledAt, &m.StartedAt, &m.EndedAt, &m.LiveKitRoomID,
-		&m.RecordEnabled, &m.AutoTranscribe, &m.HasExternal, &m.CreatedAt,
+		&m.RecordEnabled, &m.AutoTranscribe, &m.HasExternal,
+		&m.RecordingActive, &m.RecordingStartedAt, &m.CreatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
