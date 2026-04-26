@@ -26,8 +26,12 @@ import (
 	"github.com/HSMM/toolkit/internal/auth"
 	"github.com/HSMM/toolkit/internal/config"
 	"github.com/HSMM/toolkit/internal/db"
+	"github.com/HSMM/toolkit/internal/gigaam"
+	"github.com/HSMM/toolkit/internal/queue"
 	"github.com/HSMM/toolkit/internal/server/middleware"
 	oauthhandlers "github.com/HSMM/toolkit/internal/server/oauth"
+	"github.com/HSMM/toolkit/internal/storage"
+	"github.com/HSMM/toolkit/internal/transcription"
 	"github.com/HSMM/toolkit/internal/ws"
 )
 
@@ -43,6 +47,35 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 	subjectLoader := auth.NewSubjectLoader(pool)
 	hub := ws.NewHub(logger)
 	oauthHandlers := oauthhandlers.New(cfg, pool, logger, jwtIssuer)
+
+	// Storage + queue + transcription handlers (E7).
+	// MinIO connect non-fatal: модуль /transcripts отдаст 503 если недоступен.
+	var transcriptionHandlers *transcription.Handlers
+	storeClient, sErr := storage.New(ctx, storage.Config{
+		Endpoint:  cfg.MinioEndpoint,
+		AccessKey: cfg.MinioAccessKey,
+		SecretKey: cfg.MinioSecretKey,
+		UseSSL:    cfg.MinioUseSSL,
+		Region:    cfg.MinioRegion,
+		Buckets: storage.Buckets{
+			Recordings: cfg.MinioBucketRecordings,
+			Reports:    cfg.MinioBucketReports,
+			Backups:    cfg.MinioBucketBackups,
+		},
+	})
+	if sErr != nil {
+		logger.Warn("storage init failed; /transcripts будет недоступен", "err", sErr)
+	} else {
+		jobsQ := queue.New(pool)
+		gc, gErr := gigaam.New(cfg.GigaAMAPIURL, cfg.GigaAMAPIToken)
+		if gErr != nil {
+			logger.Warn("gigaam client init failed; transcription submit будет недоступен", "err", gErr)
+		}
+		_ = gc // клиент для api не нужен (только в worker), но проверим конфиг
+		transcriptionHandlers = transcription.NewHandlers(
+			transcription.New(pool, storeClient, jobsQ, logger),
+		)
+	}
 
 	r := chi.NewRouter()
 
@@ -77,10 +110,14 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 		// WebSocket events (E3.3).
 		r.Mount("/ws", ws.NewHandler(hub, cfg.AllowedCORSOrigins))
 
+		// Транскрибация (E7).
+		if transcriptionHandlers != nil {
+			r.Mount("/transcripts", transcriptionHandlers.Routes())
+		}
+
 		// Domain modules — added as their handler packages land.
 		// r.Mount("/calls", calls.Routes(...))
 		// r.Mount("/meetings", meetings.Routes(...))
-		// r.Mount("/transcripts", transcripts.Routes(...))
 		// r.Mount("/contacts", contacts.Routes(...))
 	})
 

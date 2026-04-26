@@ -1,8 +1,6 @@
 // Package worker is the entry point of the `toolkit worker` mode.
-// It wires the database pool, the job queue, and registers all background-task
-// handlers (CDR import, GigaAM transcription, Bitrix24 sync, email, retention
-// cleanup). Handlers themselves live in their domain packages and are added
-// via init-style functions invoked from here as the codebase grows (E2/E5/E7/E10).
+// Wires DB pool, job queue, MinIO storage, GigaAM client; регистрирует
+// handlers очереди по доменам (E5/E7/E10).
 package worker
 
 import (
@@ -13,7 +11,10 @@ import (
 
 	"github.com/HSMM/toolkit/internal/config"
 	"github.com/HSMM/toolkit/internal/db"
+	"github.com/HSMM/toolkit/internal/gigaam"
 	"github.com/HSMM/toolkit/internal/queue"
+	"github.com/HSMM/toolkit/internal/storage"
+	"github.com/HSMM/toolkit/internal/transcription"
 )
 
 func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
@@ -26,16 +27,38 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 	q := queue.New(pool)
 	registry := queue.NewRegistry()
 
-	// Handlers are registered as their domains land:
-	//   E2.4: registry.Register("sync_users_bitrix24",     bitrix24.NewUsersSyncHandler(...))
-	//   E2.5: registry.Register("sync_contacts_bitrix24",  bitrix24.NewContactsSyncHandler(...))
-	//   E5.10: registry.Register("import_cdr_freepbx",     freepbx.NewCDRImportHandler(...))
-	//   E5.11: registry.Register("import_recording_freepbx", freepbx.NewRecordingImportHandler(...))
-	//   E6.13: registry.Register("upload_meeting_recording", livekit.NewUploadHandler(...))
-	//   E7.3:  registry.Register("transcribe_recording",   gigaam.NewTranscribeHandler(...))
-	//   E7.4:  registry.Register("transcribe_meeting",     gigaam.NewMeetingTranscribeHandler(...))
-	//   E10.1: registry.Register("send_email",             email.NewSendHandler(...))
-	//   retention cleanup task — registered separately as a periodic scheduler.
+	// Транскрибация (E7.3 — для пользовательских загрузок; E7.4 для встреч добавится отдельно).
+	if storeClient, sErr := storage.New(ctx, storage.Config{
+		Endpoint:  cfg.MinioEndpoint,
+		AccessKey: cfg.MinioAccessKey,
+		SecretKey: cfg.MinioSecretKey,
+		UseSSL:    cfg.MinioUseSSL,
+		Region:    cfg.MinioRegion,
+		Buckets: storage.Buckets{
+			Recordings: cfg.MinioBucketRecordings,
+			Reports:    cfg.MinioBucketReports,
+			Backups:    cfg.MinioBucketBackups,
+		},
+	}); sErr != nil {
+		logger.Warn("storage init failed; transcribe_recording handler не зарегистрирован", "err", sErr)
+	} else if cfg.GigaAMAPIURL == "" {
+		logger.Warn("GIGAAM_API_URL пуст; transcribe_recording handler не зарегистрирован")
+	} else {
+		gc, gErr := gigaam.New(cfg.GigaAMAPIURL, cfg.GigaAMAPIToken)
+		if gErr != nil {
+			logger.Warn("gigaam init failed; transcribe_recording handler не зарегистрирован", "err", gErr)
+		} else {
+			tw := transcription.NewWorker(pool, storeClient, gc, q, logger,
+				time.Duration(cfg.GigaAMPollInterval)*time.Second, 30*time.Minute)
+			registry.Register(transcription.JobKindTranscribeRecording, tw.Handle)
+		}
+	}
+
+	// Прочие handlers — регистрируются по мере появления:
+	//   E2.4: registry.Register("sync_users_bitrix24", ...)
+	//   E5.10: registry.Register("import_cdr_freepbx", ...)
+	//   E10.1: registry.Register("send_email", ...)
+
 	logger.Info("worker handlers registered", "count", len(registry.Kinds()), "kinds", registry.Kinds())
 
 	runner := queue.NewRunner(q, registry, logger, queue.RunnerOptions{

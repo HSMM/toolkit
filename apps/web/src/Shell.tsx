@@ -30,6 +30,11 @@ import {
 import { C, LOGO_URL } from "@/styles/tokens";
 import { useAuth } from "@/auth/AuthContext";
 import { type Me } from "@/api/me";
+import {
+  useTranscripts, useUploadTranscript,
+  useDeleteTranscript, useRetryTranscript,
+  type Transcript, type TranscriptStatus,
+} from "@/api/transcripts";
 
 // ──────────────────────────────────────────────────────────────────────────
 // Mock-данные. Будут вытеснены реальными API по мере наполнения эпиков.
@@ -863,90 +868,104 @@ function VcsPage({ users }: { users: MockUser[] }) {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
-// TRANSCRIPTION
+// TRANSCRIPTION (E7) — реальный API, polling статусов, viewer сегментов
 // ──────────────────────────────────────────────────────────────────────────
 
-type RecordingItem = {
-  id: string; kind: "vcs" | "file" | "call";
-  title: string; sub: string; dur: string; date: string;
-  st: "upl" | "proc" | "done";
-  prog: number;
-};
+const ALLOWED_AUDIO = [".wav", ".ogg", ".mp3", ".m4a", ".mp4", ".wma", ".flac", ".aac"];
+const MAX_UPLOAD_MB = 500;
+
+function fmtBytes(b: number): string {
+  const mb = b / 1_048_576;
+  if (mb < 1) return `${(b / 1024).toFixed(0)} КБ`;
+  return `${mb.toFixed(1)} МБ`;
+}
+
+function fmtUploadedAt(iso: string): string {
+  const d = new Date(iso);
+  return d.toLocaleDateString("ru-RU") + " " + d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+}
+
+function statusBadge(s: TranscriptStatus): React.ReactElement | null {
+  switch (s) {
+    case "queued":     return <Bdg v="proc">В очереди</Bdg>;
+    case "processing": return <Bdg v="proc">Обработка…</Bdg>;
+    case "completed":  return <Bdg v="ok">Готово</Bdg>;
+    case "partial":    return <Bdg v="warn">Частично</Bdg>;
+    case "failed":     return <Bdg v="err">Ошибка</Bdg>;
+    case "pending":    return <Bdg v="def">Создан</Bdg>;
+    default:           return null;
+  }
+}
+
+function fmtSeg(ms: number): string {
+  const total = Math.floor(ms / 1000);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return h > 0
+    ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
+    : `${m}:${String(s).padStart(2, "0")}`;
+}
 
 function TranscriptionPage() {
-  const { push } = useApp();
-  const [recs, setRecs] = useState<RecordingItem[]>([]);
-  const [sel, setSel] = useState<RecordingItem | null>(null);
+  const list = useTranscripts();
+  const upload = useUploadTranscript();
+  const del = useDeleteTranscript();
+  const retry = useRetryTranscript();
+
+  const [selId, setSelId] = useState<string | null>(null);
   const [drag, setDrag] = useState(false);
   const [err, setErr] = useState("");
-  const [deleted, setDeleted] = useState<{ rec: RecordingItem; idx: number } | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
-  const delTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const ALLOWED = [".wav", ".ogg", ".mp3", ".m4a", ".mp4", ".wma"];
-  const MAX_MB = 500;
+  const items: Transcript[] = list.data?.items ?? [];
+  const sel = items.find((t) => t.id === selId) ?? null;
 
-  const fmtSize = (b: number) => { const mb = b / 1_048_576; return mb < 1 ? `${(b / 1024).toFixed(0)} КБ` : `${mb.toFixed(1)} МБ`; };
-  const showErr = (m: string) => { setErr(m); setTimeout(() => setErr(""), 4000); };
+  const showErr = (m: string) => { setErr(m); setTimeout(() => setErr(""), 5000); };
 
   const handleFile = (file: File | undefined) => {
     if (!file) return;
     const ext = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
-    if (!ALLOWED.includes(ext)) { showErr(`Формат «${ext || "без расширения"}» не поддерживается. Допустимо: ${ALLOWED.join(", ")}`); return; }
-    if (file.size > MAX_MB * 1_048_576) { showErr(`Файл ${fmtSize(file.size)} превышает лимит ${MAX_MB} МБ`); return; }
-    const id = `f${Date.now()}`;
-    const now = new Date();
-    const dateStr = now.toLocaleDateString("ru-RU") + " " + now.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
-    const rec: RecordingItem = { id, kind: "file", title: file.name, sub: `${ext.slice(1).toUpperCase()} · ${fmtSize(file.size)}`, dur: "—", date: dateStr, st: "upl", prog: 0 };
-    setRecs((r) => [rec, ...r]); setSel(rec);
-    let p = 0;
-    const iv = setInterval(() => {
-      p += 3 + Math.random() * 7;
-      if (p >= 100) {
-        clearInterval(iv);
-        setRecs((r) => r.map((x) => x.id === id ? { ...x, st: "proc", prog: 100 } : x));
-        setTimeout(() => {
-          setRecs((r) => r.map((x) => x.id === id ? { ...x, st: "done", dur: "—" } : x));
-          push({ type: "transcription", title: "Транскрибация готова", desc: `Файл «${file.name}» обработан и доступен в списке` });
-        }, 6000);
-      } else {
-        setRecs((r) => r.map((x) => x.id === id ? { ...x, prog: Math.min(p, 99) } : x));
-      }
-    }, 220);
+    if (!ALLOWED_AUDIO.includes(ext)) {
+      showErr(`Формат «${ext || "без расширения"}» не поддерживается. Допустимо: ${ALLOWED_AUDIO.join(", ")}`);
+      return;
+    }
+    if (file.size > MAX_UPLOAD_MB * 1_048_576) {
+      showErr(`Файл ${fmtBytes(file.size)} превышает лимит ${MAX_UPLOAD_MB} МБ`);
+      return;
+    }
+    upload.mutate(file, {
+      onSuccess: (res) => { setSelId(res.transcript_id); },
+      onError: (e) => { showErr(e instanceof Error ? e.message : "Ошибка загрузки"); },
+    });
   };
 
-  useEffect(() => {
+  const onDelete = () => {
     if (!sel) return;
-    const cur = recs.find((r) => r.id === sel.id);
-    if (cur && cur !== sel) setSel(cur);
-    if (!cur && recs.length === 0) setSel(null);
-  }, [recs, sel]);
+    if (!window.confirm(`Удалить «${sel.filename}»? Файл и расшифровка будут удалены безвозвратно.`)) return;
+    const idx = items.findIndex((t) => t.id === sel.id);
+    del.mutate(sel.id, {
+      onSuccess: () => {
+        const next = items.filter((t) => t.id !== sel.id);
+        setSelId(next.length > 0 ? (next[Math.min(idx, next.length - 1)]?.id ?? null) : null);
+      },
+      onError: (e) => { showErr(e instanceof Error ? e.message : "Ошибка удаления"); },
+    });
+  };
 
-  const delRec = () => {
+  const onRetry = () => {
     if (!sel) return;
-    const idx = recs.findIndex((r) => r.id === sel.id);
-    if (idx === -1) return;
-    if (delTimerRef.current) clearTimeout(delTimerRef.current);
-    setDeleted({ rec: sel, idx });
-    const newRecs = recs.filter((x) => x.id !== sel.id);
-    setRecs(newRecs);
-    setSel(newRecs.length > 0 ? (newRecs[Math.min(idx, newRecs.length - 1)] ?? null) : null);
-    delTimerRef.current = setTimeout(() => setDeleted(null), 5000);
+    retry.mutate(sel.id, {
+      onError: (e) => { showErr(e instanceof Error ? e.message : "Не удалось перезапустить"); },
+    });
   };
 
-  const undoDel = () => {
-    if (!deleted) return;
-    if (delTimerRef.current) clearTimeout(delTimerRef.current);
-    setRecs((r) => { const copy = [...r]; copy.splice(deleted.idx, 0, deleted.rec); return copy; });
-    setSel(deleted.rec); setDeleted(null);
-  };
-
-  const busy = sel && (sel.st === "upl" || sel.st === "proc");
+  const isBusy = sel && (sel.status === "queued" || sel.status === "processing" || sel.status === "pending");
 
   return (
     <div style={{ height: "100%", background: C.bg2, display: "flex", flexDirection: "column" }}>
       <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
-      <PgHdr title="Транскрибация" sub="GigaAM API · self-hosted · post-call и загрузка файлов" />
+      <PgHdr title="Транскрибация" sub="GigaAM ASR · загрузка файлов и расшифровка" />
       {err && (
         <div style={{ background: C.errBg, borderBottom: `1px solid ${C.errBrd}`, padding: "10px 22px", color: C.errTx, fontSize: 13, display: "flex", alignItems: "center", gap: 10 }}>
           <X size={15} /><span style={{ flex: 1 }}>{err}</span>
@@ -954,109 +973,133 @@ function TranscriptionPage() {
         </div>
       )}
       <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
-        <div style={{ width: 300, background: C.card, borderRight: `1px solid ${C.border}`, overflowY: "auto", flexShrink: 0 }}>
+        <div style={{ width: 320, background: C.card, borderRight: `1px solid ${C.border}`, overflowY: "auto", flexShrink: 0 }}>
           <div style={{ padding: "14px 14px 12px", borderBottom: `1px solid ${C.border}` }}>
-            <div onClick={() => fileRef.current?.click()}
+            <div onClick={() => { if (!upload.isPending) fileRef.current?.click(); }}
               onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
               onDragLeave={() => setDrag(false)}
               onDrop={(e) => { e.preventDefault(); setDrag(false); handleFile(e.dataTransfer.files[0]); }}
-              style={{ border: `2px dashed ${drag ? C.acc : C.border2}`, borderRadius: 10, padding: "15px 10px", textAlign: "center", cursor: "pointer", background: drag ? C.accBg : C.bg2 }}>
+              style={{ border: `2px dashed ${drag ? C.acc : C.border2}`, borderRadius: 10, padding: "15px 10px", textAlign: "center", cursor: upload.isPending ? "default" : "pointer", background: drag ? C.accBg : C.bg2, opacity: upload.isPending ? 0.6 : 1 }}>
               <Upload size={19} color={drag ? C.acc : C.text2} style={{ marginBottom: 7 }} />
-              <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 3 }}>{drag ? "Отпустите файл" : "Загрузить аудио"}</div>
-              <div style={{ fontSize: 10.5, color: C.text3, lineHeight: 1.55 }}>WAV, OGG, MP3, M4A, MP4, WMA<br />до {MAX_MB} МБ · моно / стерео</div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 3 }}>
+                {upload.isPending ? "Загружаем…" : drag ? "Отпустите файл" : "Загрузить аудио"}
+              </div>
+              <div style={{ fontSize: 10.5, color: C.text3, lineHeight: 1.55 }}>WAV, OGG, MP3, M4A, MP4, WMA, FLAC, AAC<br />до {MAX_UPLOAD_MB} МБ · моно / стерео</div>
             </div>
-            <input ref={fileRef} type="file" accept=".wav,.ogg,.mp3,.m4a,.mp4,.wma,audio/*,video/mp4" style={{ display: "none" }}
+            <input ref={fileRef} type="file" accept={ALLOWED_AUDIO.join(",") + ",audio/*,video/mp4"} style={{ display: "none" }}
               onChange={(e) => { handleFile(e.target.files?.[0]); e.target.value = ""; }} />
           </div>
-          {recs.length === 0 ? (
+          {list.isLoading ? (
+            <div style={{ padding: "32px 20px", textAlign: "center", color: C.text3, fontSize: 13 }}>Загрузка списка…</div>
+          ) : list.isError ? (
+            <div style={{ padding: "20px", color: C.err, fontSize: 13 }}>Ошибка: {String(list.error)}</div>
+          ) : items.length === 0 ? (
             <div style={{ padding: "32px 20px", textAlign: "center" }}>
               <FileAudio size={22} color={C.text3} style={{ marginBottom: 8 }} />
               <div style={{ fontSize: 12.5, color: C.text2, fontWeight: 500 }}>Список пуст</div>
-              <div style={{ fontSize: 11.5, color: C.text3, marginTop: 3, lineHeight: 1.5 }}>Загрузите файл или проведите звонок с записью</div>
+              <div style={{ fontSize: 11.5, color: C.text3, marginTop: 3, lineHeight: 1.5 }}>Загрузите аудио — оно отправится на расшифровку</div>
             </div>
-          ) : recs.map((r) => {
-            const bg = r.kind === "vcs" ? C.purpBg : r.kind === "file" ? C.warnBg : C.accBg;
-            const ic = r.kind === "vcs" ? C.purp : r.kind === "file" ? C.warn : C.acc;
-            const Icon = r.kind === "vcs" ? Video : r.kind === "file" ? FileAudio : Phone;
-            return (
-              <div key={r.id} onClick={() => setSel(r)}
-                style={{ padding: "13px 16px", borderBottom: `1px solid ${C.border}`, cursor: "pointer", background: sel?.id === r.id ? C.accBg : "transparent", borderLeft: sel?.id === r.id ? `3px solid ${C.acc}` : "3px solid transparent" }}>
-                <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
-                  <div style={{ width: 30, height: 30, borderRadius: 8, background: bg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 1 }}>
-                    <Icon size={14} color={ic} />
+          ) : items.map((t) => (
+            <div key={t.id} onClick={() => setSelId(t.id)}
+              style={{ padding: "13px 16px", borderBottom: `1px solid ${C.border}`, cursor: "pointer", background: selId === t.id ? C.accBg : "transparent", borderLeft: selId === t.id ? `3px solid ${C.acc}` : "3px solid transparent" }}>
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+                <div style={{ width: 30, height: 30, borderRadius: 8, background: C.warnBg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 1 }}>
+                  <FileAudio size={14} color={C.warn} />
+                </div>
+                <div style={{ flex: 1, overflow: "hidden" }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{t.filename || "(без имени)"}</div>
+                  <div style={{ fontSize: 11, color: C.text3, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {fmtUploadedAt(t.uploaded_at)} · {fmtBytes(t.size_bytes)}
                   </div>
-                  <div style={{ flex: 1, overflow: "hidden" }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.title}</div>
-                    <div style={{ fontSize: 11, color: C.text3, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.date} · {r.dur}</div>
-                    {r.st === "upl" ? (
-                      <div style={{ marginTop: 6 }}>
-                        <div style={{ height: 3, background: C.border, borderRadius: 2, overflow: "hidden" }}>
-                          <div style={{ height: "100%", width: `${r.prog}%`, background: C.acc }} />
-                        </div>
-                        <div style={{ fontSize: 10, color: C.acc, fontWeight: 600, marginTop: 3 }}>Загрузка… {Math.round(r.prog)}%</div>
-                      </div>
-                    ) : (
-                      <div style={{ marginTop: 5 }}>
-                        {r.st === "done" && <Bdg v="ok">Готово</Bdg>}
-                        {r.st === "proc" && <Bdg v="proc">Обработка…</Bdg>}
-                      </div>
-                    )}
-                  </div>
+                  <div style={{ marginTop: 5 }}>{statusBadge(t.status)}</div>
                 </div>
               </div>
-            );
-          })}
+            </div>
+          ))}
         </div>
+
         <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
           {!sel ? (
             <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
               <Empty Icon={FileAudio} title="Выберите запись или загрузите файл" sub="Все транскрибированные звонки, встречи и загруженные файлы будут появляться здесь." />
             </div>
-          ) : <>
-            <div style={{ padding: "14px 22px", background: C.card, borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontSize: 14, fontWeight: 600, color: C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{sel.title}</div>
-                <div style={{ fontSize: 12, color: C.text2, marginTop: 2 }}>{sel.date} · {sel.dur} · {sel.sub}</div>
-              </div>
-              <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
-                <button disabled={!!busy} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 13, color: busy ? C.text3 : C.text2, fontWeight: 500, background: C.card, cursor: busy ? "default" : "pointer", fontFamily: "inherit", opacity: busy ? 0.55 : 1 }}>
-                  <Download size={13} />Скачать
-                </button>
-                <button onClick={delRec} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 13, color: C.text2, fontWeight: 500, background: C.card, cursor: "pointer", fontFamily: "inherit" }}>
-                  <Trash2 size={13} />В корзину
-                </button>
-              </div>
-            </div>
-            {busy ? (
-              <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: C.bg2, padding: 24 }}>
-                <div style={{ textAlign: "center", maxWidth: 380 }}>
-                  <div style={{ width: 54, height: 54, margin: "0 auto 18px", borderRadius: "50%", border: `3px solid ${C.border}`, borderTopColor: C.acc, animation: "spin .9s linear infinite" }} />
-                  <div style={{ fontSize: 15, fontWeight: 600, color: C.text, marginBottom: 6 }}>{sel.st === "upl" ? "Загрузка файла" : "Обработка в GigaAM"}</div>
-                  <div style={{ fontSize: 13, color: C.text2, lineHeight: 1.6 }}>
-                    {sel.st === "upl"
-                      ? `Загружено ${Math.round(sel.prog || 0)}% · после загрузки файл автоматически отправится на транскрибацию`
-                      : "Транскрибация занимает примерно 1/10 длительности аудио. Можно закрыть страницу — результат появится в списке."}
+          ) : (
+            <>
+              <div style={{ padding: "14px 22px", background: C.card, borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{sel.filename}</div>
+                  <div style={{ fontSize: 12, color: C.text2, marginTop: 2 }}>
+                    {fmtUploadedAt(sel.uploaded_at)} · {fmtBytes(sel.size_bytes)} · {sel.mime_type || "audio"}
+                    {sel.execution_time_ms ? ` · обработка ${(sel.execution_time_ms / 1000).toFixed(1)}с` : ""}
                   </div>
                 </div>
+                <div style={{ display: "flex", gap: 8, flexShrink: 0, alignItems: "center" }}>
+                  {statusBadge(sel.status)}
+                  {(sel.status === "failed" || sel.status === "partial") && (
+                    <button onClick={onRetry} disabled={retry.isPending}
+                      style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 13, color: C.text, fontWeight: 500, background: C.card, cursor: retry.isPending ? "default" : "pointer", fontFamily: "inherit" }}>
+                      <RefreshCw size={13} />Повторить
+                    </button>
+                  )}
+                  <button onClick={onDelete} disabled={del.isPending}
+                    style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 13, color: C.text2, fontWeight: 500, background: C.card, cursor: del.isPending ? "default" : "pointer", fontFamily: "inherit" }}>
+                    <Trash2 size={13} />Удалить
+                  </button>
+                </div>
               </div>
-            ) : (
-              <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: C.bg2 }}>
-                <Empty Icon={FileText} title="Транскрипт недоступен" sub="Для этой записи нет расшифровки. Попробуйте повторно отправить на обработку." />
-              </div>
-            )}
-          </>}
+
+              {isBusy ? (
+                <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: C.bg2, padding: 24 }}>
+                  <div style={{ textAlign: "center", maxWidth: 380 }}>
+                    <div style={{ width: 54, height: 54, margin: "0 auto 18px", borderRadius: "50%", border: `3px solid ${C.border}`, borderTopColor: C.acc, animation: "spin .9s linear infinite" }} />
+                    <div style={{ fontSize: 15, fontWeight: 600, color: C.text, marginBottom: 6 }}>
+                      {sel.status === "queued" ? "В очереди" : "Обработка в GigaAM"}
+                    </div>
+                    <div style={{ fontSize: 13, color: C.text2, lineHeight: 1.6 }}>
+                      {sel.gigaam_task_id
+                        ? `Опрашиваем GigaAM (task ${sel.gigaam_task_id.slice(0, 8)}…). Можно закрыть страницу — результат появится в списке.`
+                        : "Файл загружен, ждём обработки. Worker отправит запрос в GigaAM в ближайшую секунду."}
+                    </div>
+                  </div>
+                </div>
+              ) : sel.status === "failed" ? (
+                <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: C.bg2, padding: 24 }}>
+                  <div style={{ textAlign: "center", maxWidth: 480 }}>
+                    <div style={{ width: 56, height: 56, borderRadius: 14, background: C.errBg, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}>
+                      <X size={26} color={C.err} />
+                    </div>
+                    <div style={{ fontSize: 15, fontWeight: 600, color: C.text, marginBottom: 6 }}>Ошибка транскрибации</div>
+                    {sel.error_message && (
+                      <div style={{ fontSize: 12.5, color: C.text2, lineHeight: 1.55, fontFamily: "'DM Mono', monospace", background: C.bg3, padding: "10px 14px", borderRadius: 8, marginTop: 12, textAlign: "left", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                        {sel.error_message}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : sel.segments && sel.segments.length > 0 ? (
+                <div style={{ flex: 1, overflowY: "auto", padding: "20px 24px", background: C.bg2 }}>
+                  {sel.segments.map((s) => (
+                    <div key={s.id} style={{ display: "flex", gap: 14, marginBottom: 12, padding: "12px 14px", background: C.card, border: `1px solid ${C.border}`, borderRadius: 10 }}>
+                      <div style={{ flexShrink: 0, fontSize: 11, color: C.text3, fontFamily: "'DM Mono', monospace", marginTop: 2, minWidth: 70 }}>
+                        {fmtSeg(s.start_ms)}<br />
+                        <span style={{ color: C.text3 }}>→ {fmtSeg(s.end_ms)}</span>
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 11, color: C.text3, marginBottom: 4 }}>{s.speaker_ref}</div>
+                        <div style={{ fontSize: 14, color: C.text, lineHeight: 1.55 }}>{s.text || <span style={{ color: C.text3, fontStyle: "italic" }}>(пусто)</span>}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: C.bg2 }}>
+                  <Empty Icon={FileText} title="Транскрипт пуст" sub="GigaAM не вернул сегментов. Возможно, в аудио нет распознаваемой речи." />
+                </div>
+              )}
+            </>
+          )}
         </div>
       </div>
-      {deleted && (
-        <div style={{ position: "fixed", bottom: 22, right: 22, background: C.text, color: "white", padding: "11px 12px 11px 16px", borderRadius: 10, boxShadow: "0 14px 32px rgba(0,0,0,0.25)", display: "flex", alignItems: "center", gap: 14, fontSize: 13, zIndex: 150, maxWidth: "calc(100vw - 44px)" }}>
-          <Trash2 size={15} color={C.errBrd} />
-          <span>Перемещено в корзину</span>
-          <button onClick={undoDel} style={{ background: "none", border: "none", color: C.acc, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", padding: "4px 8px", borderRadius: 5 }}>Отменить</button>
-          <button onClick={() => setDeleted(null)} style={{ width: 24, height: 24, borderRadius: 5, background: "transparent", color: C.text3, cursor: "pointer", border: "none", display: "flex", alignItems: "center", justifyContent: "center", padding: 0 }}>
-            <X size={13} />
-          </button>
-        </div>
-      )}
     </div>
   );
 }

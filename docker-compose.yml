@@ -184,9 +184,19 @@ services:
       BITRIX_CLIENT_ID: ${BITRIX_CLIENT_ID}
       BITRIX_CLIENT_SECRET: ${BITRIX_CLIENT_SECRET}
       BITRIX_APP_TOKEN: ${BITRIX_APP_TOKEN}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET_RECORDINGS: ${MINIO_BUCKET_RECORDINGS}
+      MINIO_BUCKET_REPORTS: ${MINIO_BUCKET_REPORTS}
+      MINIO_BUCKET_BACKUPS: ${MINIO_BUCKET_BACKUPS}
+      GIGAAM_API_URL: ${GIGAAM_API_URL}
+      GIGAAM_API_TOKEN: ${GIGAAM_API_TOKEN}
       LOG_LEVEL: info
     depends_on:
       migrate:
+        condition: service_completed_successfully
+      minio-init:
         condition: service_completed_successfully
     networks: [edge, internal]
     restart: unless-stopped
@@ -204,9 +214,18 @@ services:
       BITRIX_CLIENT_ID: ${BITRIX_CLIENT_ID}
       BITRIX_CLIENT_SECRET: ${BITRIX_CLIENT_SECRET}
       BITRIX_APP_TOKEN: ${BITRIX_APP_TOKEN}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET_RECORDINGS: ${MINIO_BUCKET_RECORDINGS}
+      GIGAAM_API_URL: ${GIGAAM_API_URL}
+      GIGAAM_API_TOKEN: ${GIGAAM_API_TOKEN}
+      GIGAAM_POLL_INTERVAL_SECONDS: ${GIGAAM_POLL_INTERVAL_SECONDS}
       LOG_LEVEL: info
     depends_on:
       migrate:
+        condition: service_completed_successfully
+      minio-init:
         condition: service_completed_successfully
     networks: [internal]
     restart: unless-stopped

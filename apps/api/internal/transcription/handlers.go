@@ -1,0 +1,166 @@
+package transcription
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
+
+	"github.com/HSMM/toolkit/internal/auth"
+)
+
+// Handlers — REST-эндпоинты модуля транскрибации.
+type Handlers struct {
+	svc *Service
+}
+
+func NewHandlers(svc *Service) *Handlers { return &Handlers{svc: svc} }
+
+// Routes — chi-роутер, монтируется под /api/v1/transcripts.
+func (h *Handlers) Routes() http.Handler {
+	r := chi.NewRouter()
+	r.Get("/",        h.list)
+	r.Post("/upload", h.upload)
+	r.Get("/{id}",    h.get)
+	r.Post("/{id}/retry", h.retry)
+	r.Delete("/{id}", h.delete)
+	return r
+}
+
+func (h *Handlers) upload(w http.ResponseWriter, r *http.Request) {
+	subj := auth.MustSubject(r.Context())
+
+	// Лимит размера запроса (multipart-форма) — c небольшим запасом.
+	r.Body = http.MaxBytesReader(w, r.Body, MaxUploadBytes+8*1024*1024)
+
+	if err := r.ParseMultipartForm(64 << 20); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_multipart", err.Error())
+		return
+	}
+	defer func() {
+		if r.MultipartForm != nil {
+			_ = r.MultipartForm.RemoveAll()
+		}
+	}()
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "no_file", "form field 'file' is required")
+		return
+	}
+	defer file.Close()
+
+	res, err := h.svc.Upload(r.Context(), UploadInput{
+		UploaderID:  subj.UserID,
+		Filename:    header.Filename,
+		ContentType: header.Header.Get("Content-Type"),
+		Size:        header.Size,
+		Body:        file,
+	})
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "upload_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"transcript_id": res.TranscriptID,
+		"recording_id":  res.RecordingID,
+		"status":        StatusQueued,
+	})
+}
+
+func (h *Handlers) list(w http.ResponseWriter, r *http.Request) {
+	subj := auth.MustSubject(r.Context())
+	items, err := h.svc.ListByUser(r.Context(), subj.UserID, 100)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "list_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (h *Handlers) get(w http.ResponseWriter, r *http.Request) {
+	subj := auth.MustSubject(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_id", "invalid uuid")
+		return
+	}
+	view, err := h.svc.Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "not_found", "transcript not found")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "get_failed", err.Error())
+		return
+	}
+	// MVP-проверка доступа: владелец upload'а или admin.
+	if !subj.IsAdmin() && view.UploadedBy != subj.UserID {
+		writeErr(w, http.StatusForbidden, "forbidden", "")
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+func (h *Handlers) retry(w http.ResponseWriter, r *http.Request) {
+	subj := auth.MustSubject(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_id", "invalid uuid")
+		return
+	}
+	view, err := h.svc.Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "not_found", "")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "lookup_failed", err.Error())
+		return
+	}
+	if !subj.IsAdmin() && view.UploadedBy != subj.UserID {
+		writeErr(w, http.StatusForbidden, "forbidden", "")
+		return
+	}
+	if err := h.svc.Retry(r.Context(), id); err != nil {
+		if errors.Is(err, ErrNotRetryable) {
+			writeErr(w, http.StatusConflict, "not_retryable", "transcript not in failed/partial state")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "retry_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"status": StatusQueued})
+}
+
+func (h *Handlers) delete(w http.ResponseWriter, r *http.Request) {
+	subj := auth.MustSubject(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_id", "invalid uuid")
+		return
+	}
+	if err := h.svc.Delete(r.Context(), id, subj.UserID); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "not_found", "transcript not found or not yours")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "delete_failed", err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func writeJSON(w http.ResponseWriter, code int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func writeErr(w http.ResponseWriter, code int, errCode, message string) {
+	writeJSON(w, code, map[string]any{
+		"error": map[string]string{"code": errCode, "message": message},
+	})
+}

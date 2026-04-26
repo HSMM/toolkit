@@ -16,6 +16,7 @@ export class ApiError extends Error {
 
 type RequestOptions = {
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  /** Если FormData — отправляется как multipart, Content-Type не выставляется (браузер сам). */
   body?: unknown;
   signal?: AbortSignal;
   headers?: Record<string, string>;
@@ -51,8 +52,13 @@ export async function api<T = unknown>(
 
   let body: BodyInit | undefined;
   if (opts.body !== undefined) {
-    headers["Content-Type"] = "application/json";
-    body = JSON.stringify(opts.body);
+    if (opts.body instanceof FormData) {
+      // multipart — Content-Type выставит fetch автоматически (с boundary).
+      body = opts.body;
+    } else {
+      headers["Content-Type"] = "application/json";
+      body = JSON.stringify(opts.body);
+    }
   }
 
   const res = await fetch(path, {

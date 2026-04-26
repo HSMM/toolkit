@@ -39,6 +39,16 @@ type Config struct {
 	GigaAMMaxRetries      int
 	GigaAMConcurrentLimit int
 
+	// MinIO / S3-совместимое хранилище
+	MinioEndpoint         string // host:port (без scheme) или https://host
+	MinioAccessKey        string
+	MinioSecretKey        string
+	MinioUseSSL           bool
+	MinioRegion           string
+	MinioBucketRecordings string
+	MinioBucketReports    string
+	MinioBucketBackups    string
+
 	// SMTP
 	SMTPHost     string
 	SMTPPort     int
@@ -70,6 +80,14 @@ func Load() (*Config, error) {
 		FreePBXExtPwd:      getenv("FREEPBX_EXTENSION_PASSWORD", ""),
 		GigaAMAPIURL:       getenv("GIGAAM_API_URL", ""),
 		GigaAMAPIToken:     getenv("GIGAAM_API_TOKEN", ""),
+		MinioEndpoint:         getenv("MINIO_ENDPOINT", "minio:9000"),
+		MinioAccessKey:        getenv("MINIO_ROOT_USER", ""),
+		MinioSecretKey:        getenv("MINIO_ROOT_PASSWORD", ""),
+		MinioRegion:           getenv("MINIO_REGION", "us-east-1"),
+		MinioBucketRecordings: getenv("MINIO_BUCKET_RECORDINGS", "recordings"),
+		MinioBucketReports:    getenv("MINIO_BUCKET_REPORTS", "reports"),
+		MinioBucketBackups:    getenv("MINIO_BUCKET_BACKUPS", "backups"),
+		MinioUseSSL:           getenv("MINIO_USE_SSL", "") == "true",
 		SMTPHost:           getenv("SMTP_HOST", ""),
 		SMTPUser:           getenv("SMTP_USER", ""),
 		SMTPPassword:       getenv("SMTP_PASSWORD", ""),
