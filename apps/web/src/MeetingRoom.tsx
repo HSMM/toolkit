@@ -12,9 +12,12 @@ import {
   RoomAudioRenderer,
 } from "@livekit/components-react";
 import { useEffect, useState } from "react";
-import { X, Loader2 } from "lucide-react";
+import { X, Loader2, Check, UserPlus } from "lucide-react";
 import { C } from "@/styles/tokens";
-import { useJoinMeeting, useEndMeeting, useLeaveMeeting, type Meeting } from "@/api/meetings";
+import {
+  useJoinMeeting, useEndMeeting, useLeaveMeeting, useMeetingPoll, useAdmitGuest,
+  type Meeting, type Participant,
+} from "@/api/meetings";
 
 type Props = {
   meeting: Meeting;
@@ -115,6 +118,57 @@ export function MeetingRoom({ meeting, isHost, onClose }: Props) {
             <RoomAudioRenderer />
           </LiveKitRoom>
         )}
+
+        {/* Хост видит панель ожидающих гостей. Поллится каждые 3с. */}
+        {isHost && <PendingGuestsPanel meetingId={meeting.id} />}
+      </div>
+    </div>
+  );
+}
+
+function PendingGuestsPanel({ meetingId }: { meetingId: string }) {
+  const q = useMeetingPoll(meetingId, 3000);
+  const admit = useAdmitGuest();
+  const pending: Participant[] = (q.data?.participants ?? []).filter((p) => p.admit_state === "pending");
+  if (pending.length === 0) return null;
+
+  return (
+    <div style={{
+      position: "absolute", top: 16, right: 16, width: 320, maxHeight: "70vh", overflowY: "auto",
+      background: "#1a1a1d", border: "1px solid #2a2a2e", borderRadius: 12,
+      boxShadow: "0 12px 30px rgba(0,0,0,0.45)", color: "#e5e7eb", zIndex: 5,
+    }}>
+      <div style={{ padding: "12px 16px", borderBottom: "1px solid #2a2a2e", display: "flex", alignItems: "center", gap: 8 }}>
+        <UserPlus size={16} color={C.acc} />
+        <span style={{ fontSize: 13, fontWeight: 600 }}>Ожидают входа</span>
+        <span style={{ marginLeft: "auto", fontSize: 11, color: "#9ca3af", padding: "2px 7px", borderRadius: 999, background: "#2a2a2e" }}>{pending.length}</span>
+      </div>
+      <div style={{ padding: 8 }}>
+        {pending.map((p) => {
+          const name = p.external_name || p.display_name || "Гость";
+          const busy = admit.isPending && admit.variables?.participantId === p.id;
+          return (
+            <div key={p.id} style={{ padding: "10px 10px", borderRadius: 8, display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={{ width: 32, height: 32, borderRadius: "50%", background: C.acc, color: "white", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 600, flexShrink: 0 }}>
+                {(name[0] || "?").toUpperCase()}
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{name}</div>
+                <div style={{ fontSize: 11, color: "#9ca3af" }}>гость · ждёт сейчас</div>
+              </div>
+              <button onClick={() => admit.mutate({ meetingId, participantId: p.id, allow: true })} disabled={busy}
+                title="Допустить"
+                style={{ width: 30, height: 30, borderRadius: 6, border: "none", background: C.acc, color: "white", cursor: busy ? "default" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", opacity: busy ? 0.6 : 1 }}>
+                <Check size={15} />
+              </button>
+              <button onClick={() => admit.mutate({ meetingId, participantId: p.id, allow: false })} disabled={busy}
+                title="Отклонить"
+                style={{ width: 30, height: 30, borderRadius: 6, border: "1px solid #ef4444", background: "transparent", color: "#ef4444", cursor: busy ? "default" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", opacity: busy ? 0.6 : 1 }}>
+                <X size={15} />
+              </button>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

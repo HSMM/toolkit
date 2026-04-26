@@ -26,6 +26,7 @@ func (h *Handlers) Routes() http.Handler {
 	r.Post("/{id}/leave", h.leave)
 	r.Post("/{id}/end", h.end)
 	r.Post("/{id}/share", h.share)
+	r.Post("/{id}/admit", h.admit) // host решает по pending-гостям
 	return r
 }
 
@@ -33,7 +34,8 @@ func (h *Handlers) Routes() http.Handler {
 func (h *Handlers) GuestRoutes() http.Handler {
 	r := chi.NewRouter()
 	r.Get("/{token}", h.guestLookup)
-	r.Post("/{token}/join", h.guestJoin)
+	r.Post("/{token}/request", h.guestRequest)         // создать pending-заявку
+	r.Get("/{token}/status/{requestID}", h.guestStatus) // long-poll: pending|admitted|rejected|ended
 	return r
 }
 
@@ -162,25 +164,68 @@ func (h *Handlers) guestLookup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, info)
 }
 
-type guestJoinReq struct {
+type guestRequestReq struct {
 	DisplayName string `json:"display_name"`
 }
 
-func (h *Handlers) guestJoin(w http.ResponseWriter, r *http.Request) {
+func (h *Handlers) guestRequest(w http.ResponseWriter, r *http.Request) {
 	tok := chi.URLParam(r, "token")
-	var req guestJoinReq
+	var req guestRequestReq
 	if r.ContentLength > 0 {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeErr(w, http.StatusBadRequest, "bad_json", err.Error())
 			return
 		}
 	}
-	res, err := h.svc.GuestJoin(r.Context(), tok, req.DisplayName)
+	id, err := h.svc.GuestRequestEntry(r.Context(), tok, req.DisplayName)
 	if err != nil {
 		writeServiceErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, res)
+	writeJSON(w, http.StatusAccepted, map[string]any{"request_id": id})
+}
+
+func (h *Handlers) guestStatus(w http.ResponseWriter, r *http.Request) {
+	tok := chi.URLParam(r, "token")
+	rid, err := uuid.Parse(chi.URLParam(r, "requestID"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_id", "invalid request id")
+		return
+	}
+	st, err := h.svc.GuestPollStatus(r.Context(), tok, rid)
+	if err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, st)
+}
+
+type admitReq struct {
+	ParticipantID uuid.UUID `json:"participant_id"`
+	Allow         bool      `json:"allow"`
+}
+
+func (h *Handlers) admit(w http.ResponseWriter, r *http.Request) {
+	subj := auth.MustSubject(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_id", "invalid meeting id")
+		return
+	}
+	var req admitReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	if req.ParticipantID == uuid.Nil {
+		writeErr(w, http.StatusBadRequest, "bad_pid", "participant_id required")
+		return
+	}
+	if err := h.svc.AdmitGuest(r.Context(), subj, id, req.ParticipantID, req.Allow); err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

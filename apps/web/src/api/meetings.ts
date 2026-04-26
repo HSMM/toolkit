@@ -26,6 +26,7 @@ export type Participant = {
   external_email?: string;
   livekit_identity: string;
   role: "host" | "participant" | "guest";
+  admit_state: "pending" | "admitted" | "rejected";
   joined_at?: string;
   left_at?: string;
   display_name?: string;
@@ -103,5 +104,29 @@ export function useShareMeeting() {
   return useMutation({
     mutationFn: (id: string) =>
       api<{ token: string }>(`/api/v1/meetings/${id}/share`, { method: "POST" }),
+  });
+}
+
+// Поллит детальную карточку встречи (включая participants[]) —
+// host использует для отслеживания pending-гостей.
+export function useMeetingPoll(id: string | null, refetchMs = 3000) {
+  return useQuery({
+    queryKey: ["meeting", id],
+    enabled: !!id,
+    refetchInterval: refetchMs,
+    queryFn: ({ signal }) =>
+      api<{ meeting: Meeting; participants: Participant[] }>(`/api/v1/meetings/${id}`, { signal }),
+  });
+}
+
+export function useAdmitGuest() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { meetingId: string; participantId: string; allow: boolean }) =>
+      api<void>(`/api/v1/meetings/${args.meetingId}/admit`, {
+        method: "POST",
+        body: { participant_id: args.participantId, allow: args.allow },
+      }),
+    onSuccess: (_d, vars) => { void qc.invalidateQueries({ queryKey: ["meeting", vars.meetingId] }); },
   });
 }

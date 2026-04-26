@@ -77,6 +77,7 @@ type Participant struct {
 	ExternalEmail  string     `json:"external_email,omitempty"`
 	Identity       string     `json:"livekit_identity"`
 	Role           string     `json:"role"`
+	AdmitState     string     `json:"admit_state"` // "pending" | "admitted" | "rejected"
 	JoinedAt       *time.Time `json:"joined_at,omitempty"`
 	LeftAt         *time.Time `json:"left_at,omitempty"`
 	// Заполняется при join: фактическое имя сотрудника (для UI).
@@ -401,11 +402,11 @@ func (s *Service) GuestLookup(ctx context.Context, token string) (*GuestMeetingI
 	}, nil
 }
 
-// GuestJoin — публичный (no auth): по token + display_name создаёт participant
-// (is_guest=true) и выпускает LiveKit-токен. Каждый /join создаёт нового
-// participant'а (новая identity), чтобы несколько гостей могли использовать
-// одну и ту же ссылку. Стартует встречу (started_at) если та была запланирована.
-func (s *Service) GuestJoin(ctx context.Context, token, displayName string) (*JoinResult, error) {
+// GuestRequestEntry — публичный (no auth): создаёт pending-participant и
+// возвращает request_id, по которому гость потом поллит статус. Сама встреча
+// при этом НЕ стартует (started_at выставится только когда host реально
+// допустит первого участника, либо когда host сам зайдёт).
+func (s *Service) GuestRequestEntry(ctx context.Context, token, displayName string) (uuid.UUID, error) {
 	displayName = strings.TrimSpace(displayName)
 	if displayName == "" {
 		displayName = "Гость"
@@ -416,62 +417,143 @@ func (s *Service) GuestJoin(ctx context.Context, token, displayName string) (*Jo
 
 	info, err := s.GuestLookup(ctx, token)
 	if err != nil {
-		return nil, err
+		return uuid.Nil, err
 	}
-	m, err := s.loadMeeting(ctx, info.MeetingID)
+
+	identity := "g_" + strings.ReplaceAll(uuid.NewString()[:12], "-", "")
+	tokHash := sha256.Sum256([]byte(token))
+
+	var requestID uuid.UUID
+	const q = `
+		INSERT INTO participant
+		    (meeting_id, is_guest, external_name, guest_token_hash, livekit_identity, role, admit_state)
+		VALUES ($1, TRUE, $2, $3, $4, 'guest', 'pending')
+		RETURNING id
+	`
+	if err := s.db.QueryRow(ctx, q,
+		info.MeetingID, displayName, hex.EncodeToString(tokHash[:]), identity,
+	).Scan(&requestID); err != nil {
+		return uuid.Nil, fmt.Errorf("insert guest request: %w", err)
+	}
+	return requestID, nil
+}
+
+// GuestPollStatus — публичный (no auth): возвращает текущий статус заявки гостя.
+// Если admitted — также выпускает LiveKit-токен (одноразово на каждый poll —
+// LK сам ОК с этим). Если pending — клиент продолжает поллить. Если rejected
+// или встреча завершена — возвращает соответствующий state, токена не будет.
+type GuestStatus struct {
+	State string      `json:"state"`              // "pending" | "admitted" | "rejected" | "ended"
+	Join  *JoinResult `json:"join,omitempty"`     // present iff state=admitted
+}
+
+func (s *Service) GuestPollStatus(ctx context.Context, token string, requestID uuid.UUID) (*GuestStatus, error) {
+	// Сверяем token + requestID, чтобы posting random uuid'ов из чужих ссылок
+	// не работало.
+	tokHash := sha256.Sum256([]byte(token))
+	const q = `
+		SELECT p.admit_state, p.external_name, p.livekit_identity,
+		       m.id, m.livekit_room_id, m.ended_at
+		FROM participant p
+		JOIN meeting m ON m.id = p.meeting_id
+		WHERE p.id = $1 AND p.guest_token_hash = $2
+	`
+	var (
+		state, extName, identity, roomID string
+		meetingID                        uuid.UUID
+		endedAt                          *time.Time
+	)
+	err := s.db.QueryRow(ctx, q, requestID, hex.EncodeToString(tokHash[:])).Scan(
+		&state, &extName, &identity, &meetingID, &roomID, &endedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
 	if err != nil {
 		return nil, err
 	}
+	if endedAt != nil {
+		return &GuestStatus{State: "ended"}, nil
+	}
+	switch state {
+	case "rejected":
+		return &GuestStatus{State: "rejected"}, nil
+	case "pending":
+		return &GuestStatus{State: "pending"}, nil
+	case "admitted":
+		lkTok, err := s.lk.MintJoinToken(livekit.JoinTokenOptions{
+			Room: roomID, Identity: identity, Name: extName,
+			CanPub: true, CanSub: true, CanData: true,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("mint guest token: %w", err)
+		}
+		return &GuestStatus{
+			State: "admitted",
+			Join:  &JoinResult{Token: lkTok, WSURL: s.publicWS, Room: roomID, Identity: identity, Role: "guest"},
+		}, nil
+	default:
+		return nil, fmt.Errorf("unexpected admit_state: %s", state)
+	}
+}
 
-	// Идентити гостя — уникальная per-join: g_<short uuid>.
-	guestID := uuid.New()
-	identity := "g_" + strings.ReplaceAll(guestID.String()[:12], "-", "")
-	tokHash := sha256.Sum256([]byte(token))
+// AdmitGuest — host или admin принимает решение по pending-гостю.
+// allow=true → admitted (+ joined_at, + помечаем встречу has_external,
+// + стартуем started_at если ещё не).
+// allow=false → rejected (гость на след. поллинге увидит отказ).
+func (s *Service) AdmitGuest(ctx context.Context, subj *auth.Subject, meetingID, participantID uuid.UUID, allow bool) error {
+	m, err := s.loadMeeting(ctx, meetingID)
+	if err != nil {
+		return err
+	}
+	if !(subj.Role == auth.RoleAdmin || subj.UserID == m.CreatedBy) {
+		return ErrForbidden
+	}
+	if m.EndedAt != nil {
+		return ErrEnded
+	}
 
 	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer tx.Rollback(ctx)
 
-	if m.StartedAt == nil {
-		if _, err := tx.Exec(ctx, `UPDATE meeting SET started_at = NOW() WHERE id = $1 AND started_at IS NULL`, m.ID); err != nil {
-			return nil, fmt.Errorf("start meeting: %w", err)
-		}
+	// Проверяем что participant принадлежит этой встрече и сейчас pending.
+	var curState string
+	err = tx.QueryRow(ctx, `SELECT admit_state FROM participant WHERE id = $1 AND meeting_id = $2`, participantID, m.ID).Scan(&curState)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
 	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO participant (meeting_id, is_guest, external_name, guest_token_hash, livekit_identity, role, joined_at)
-		VALUES ($1, TRUE, $2, $3, $4, 'guest', NOW())
-	`, m.ID, displayName, hex.EncodeToString(tokHash[:]), identity); err != nil {
-		return nil, fmt.Errorf("insert guest participant: %w", err)
+	if err != nil {
+		return err
 	}
-	// Помечаем встречу как имеющую внешних участников (для алертов СБ — ТЗ 4.1).
-	if _, err := tx.Exec(ctx, `UPDATE meeting SET has_external = TRUE WHERE id = $1 AND has_external = FALSE`, m.ID); err != nil {
-		return nil, fmt.Errorf("set has_external: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, err
+	if curState != "pending" {
+		// Идемпотентно: уже разрулено.
+		return nil
 	}
 
-	lkTok, err := s.lk.MintJoinToken(livekit.JoinTokenOptions{
-		Room:     m.LiveKitRoomID,
-		Identity: identity,
-		Name:     displayName,
-		CanPub:   true,
-		CanSub:   true,
-		CanData:  true,
-		Admin:    false,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("mint guest token: %w", err)
+	if allow {
+		if _, err := tx.Exec(ctx, `
+			UPDATE participant SET admit_state = 'admitted', joined_at = NOW()
+			 WHERE id = $1
+		`, participantID); err != nil {
+			return fmt.Errorf("admit: %w", err)
+		}
+		if m.StartedAt == nil {
+			if _, err := tx.Exec(ctx, `UPDATE meeting SET started_at = NOW() WHERE id = $1 AND started_at IS NULL`, m.ID); err != nil {
+				return fmt.Errorf("start meeting on admit: %w", err)
+			}
+		}
+		if _, err := tx.Exec(ctx, `UPDATE meeting SET has_external = TRUE WHERE id = $1 AND has_external = FALSE`, m.ID); err != nil {
+			return fmt.Errorf("set has_external: %w", err)
+		}
+	} else {
+		if _, err := tx.Exec(ctx, `UPDATE participant SET admit_state = 'rejected' WHERE id = $1`, participantID); err != nil {
+			return fmt.Errorf("reject: %w", err)
+		}
 	}
-	return &JoinResult{
-		Token:    lkTok,
-		WSURL:    s.publicWS,
-		Room:     m.LiveKitRoomID,
-		Identity: identity,
-		Role:     "guest",
-	}, nil
+	return tx.Commit(ctx)
 }
 
 func randomURLToken(nBytes int) (string, error) {
@@ -509,12 +591,12 @@ func (s *Service) loadParticipants(ctx context.Context, meetingID uuid.UUID) ([]
 	const q = `
 		SELECT p.id, p.meeting_id, p.user_id, p.is_guest,
 		       COALESCE(p.external_name,''), COALESCE(p.external_email,''),
-		       p.livekit_identity, p.role, p.joined_at, p.left_at,
+		       p.livekit_identity, p.role, p.admit_state, p.joined_at, p.left_at,
 		       COALESCE(u.full_name, u.email, '') AS display_name
 		FROM participant p
 		LEFT JOIN "user" u ON u.id = p.user_id
 		WHERE p.meeting_id = $1
-		ORDER BY (p.role = 'host') DESC, p.created_at ASC
+		ORDER BY (p.admit_state = 'pending') DESC, (p.role = 'host') DESC, p.created_at ASC
 	`
 	rows, err := s.db.Query(ctx, q, meetingID)
 	if err != nil {
@@ -526,7 +608,7 @@ func (s *Service) loadParticipants(ctx context.Context, meetingID uuid.UUID) ([]
 		p := &Participant{}
 		if err := rows.Scan(&p.ID, &p.MeetingID, &p.UserID, &p.IsGuest,
 			&p.ExternalName, &p.ExternalEmail,
-			&p.Identity, &p.Role, &p.JoinedAt, &p.LeftAt, &p.DisplayName,
+			&p.Identity, &p.Role, &p.AdmitState, &p.JoinedAt, &p.LeftAt, &p.DisplayName,
 		); err != nil {
 			return nil, err
 		}
