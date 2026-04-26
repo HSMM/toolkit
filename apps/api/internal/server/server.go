@@ -119,6 +119,7 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 					Endpoint: s3Endpoint, Region: cfg.MinioRegion,
 					Bucket: cfg.MinioBucketRecordings, ForcePathStyle: true,
 				},
+				Storage:           storeClient,
 				VideoFilepathTmpl: "meetings/{room_name}/{time}.mp4",
 				AudioFilepathTmpl: "meetings/{room_name}/{time}.ogg",
 			})

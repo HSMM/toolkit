@@ -1,6 +1,6 @@
 // API клиент для модуля /api/v1/meetings (E5).
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api } from "./client";
+import { api, apiFetch } from "./client";
 
 export type Meeting = {
   id: string;
@@ -137,6 +137,43 @@ export function useStopRecording() {
       api<void>(`/api/v1/meetings/${meetingId}/recording/stop`, { method: "POST" }),
     onSuccess: (_d, id) => { void qc.invalidateQueries({ queryKey: ["meeting", id] }); },
   });
+}
+
+export type RecordingFile = {
+  id: string;
+  kind: "meeting_composite" | "meeting_audio" | "meeting_per_track";
+  mime_type: string;
+  size_bytes: number;
+  duration_ms: number;
+  created_at: string;
+  filename: string;
+};
+
+export function useMeetingRecordings(meetingId: string | null) {
+  return useQuery({
+    queryKey: ["meeting-recordings", meetingId],
+    enabled: !!meetingId,
+    queryFn: ({ signal }) =>
+      api<{ items: RecordingFile[] }>(`/api/v1/meetings/${meetingId}/recordings`, { signal })
+        .then((r) => r.items),
+    staleTime: 15_000,
+  });
+}
+
+// downloadMeetingRecording — фетчит файл через apiFetch (с JWT) и
+// триггерит браузерный «Сохранить как».
+export async function downloadMeetingRecording(meetingId: string, recordingId: string, suggestedName: string) {
+  const r = await apiFetch(`/api/v1/meetings/${meetingId}/recordings/${recordingId}/download`);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const blob = await r.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = suggestedName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export function useAdmitGuest() {

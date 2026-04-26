@@ -15,24 +15,31 @@ package meetings
 // Per-track для каждого участника откладывается до решения по диаризации.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
+	"path"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/HSMM/toolkit/internal/auth"
 	"github.com/HSMM/toolkit/internal/livekit"
+	"github.com/HSMM/toolkit/internal/storage"
 )
 
 type RecordingDeps struct {
 	S3                livekit.S3Config
-	VideoFilepathTmpl string // "meetings/{room_name}/{time}.mp4"
-	AudioFilepathTmpl string // "meetings/{room_name}/{time}.ogg"
+	Storage           *storage.Client // для скачивания готовых файлов через api
+	VideoFilepathTmpl string          // "meetings/{room_name}/{time}.mp4"
+	AudioFilepathTmpl string          // "meetings/{room_name}/{time}.ogg"
 }
 
 func (s *Service) AttachRecording(deps RecordingDeps) {
@@ -307,3 +314,151 @@ func splitS3Path(filename, location, defaultBucket string) (bucket, key string) 
 func (s *Service) logf(format string, args ...any) {
 	_ = format; _ = args
 }
+
+// ─── список и скачивание готовых файлов ─────────────────────────────────
+
+// RecordingFile — публичная карточка записи для UI (без чувствительных полей).
+type RecordingFile struct {
+	ID         uuid.UUID `json:"id"`
+	Kind       string    `json:"kind"`        // meeting_composite | meeting_audio | meeting_per_track
+	MimeType   string    `json:"mime_type"`
+	SizeBytes  int64     `json:"size_bytes"`
+	DurationMs int64     `json:"duration_ms"`
+	CreatedAt  time.Time `json:"created_at"`
+	// Имя для Save-As (генерится из kind + meeting + timestamp).
+	Filename string `json:"filename"`
+}
+
+// ListRecordings — все записи встречи. Доступ: admin, host (creator) или
+// participant встречи.
+func (s *Service) ListRecordings(ctx context.Context, subj *auth.Subject, meetingID uuid.UUID) ([]RecordingFile, error) {
+	m, err := s.loadMeeting(ctx, meetingID)
+	if err != nil {
+		return nil, err
+	}
+	parts, err := s.loadParticipants(ctx, meetingID)
+	if err != nil {
+		return nil, err
+	}
+	if !canViewMeeting(subj, m, parts) {
+		return nil, ErrForbidden
+	}
+
+	const q = `
+		SELECT id, kind, mime_type, COALESCE(size_bytes,0), COALESCE(duration_ms,0),
+		       created_at, s3_key
+		FROM recording
+		WHERE meeting_id = $1 AND kind IN ('meeting_composite','meeting_audio','meeting_per_track')
+		ORDER BY (kind = 'meeting_composite') DESC, created_at DESC
+	`
+	rows, err := s.db.Query(ctx, q, meetingID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]RecordingFile, 0, 4)
+	for rows.Next() {
+		var (
+			rec    RecordingFile
+			s3Key  string
+		)
+		if err := rows.Scan(&rec.ID, &rec.Kind, &rec.MimeType, &rec.SizeBytes, &rec.DurationMs, &rec.CreatedAt, &s3Key); err != nil {
+			return nil, err
+		}
+		rec.Filename = friendlyFilename(m, rec.Kind, s3Key)
+		out = append(out, rec)
+	}
+	return out, rows.Err()
+}
+
+// StreamRecording — стримит файл из MinIO (с Range-поддержкой) и заголовком
+// Content-Disposition: attachment, чтобы браузер сразу предлагал «Сохранить как».
+func (s *Service) StreamRecording(ctx context.Context, subj *auth.Subject, w http.ResponseWriter, r *http.Request, meetingID, recordingID uuid.UUID) error {
+	if s.recDeps == nil || s.recDeps.Storage == nil {
+		return ErrRecordingNotConfigured
+	}
+	m, err := s.loadMeeting(ctx, meetingID)
+	if err != nil {
+		return err
+	}
+	parts, err := s.loadParticipants(ctx, meetingID)
+	if err != nil {
+		return err
+	}
+	if !canViewMeeting(subj, m, parts) {
+		return ErrForbidden
+	}
+
+	const q = `
+		SELECT s3_key, mime_type, kind, COALESCE(size_bytes,0), created_at
+		FROM recording WHERE id = $1 AND meeting_id = $2
+	`
+	var (
+		s3Key, mime, kind string
+		size              int64
+		createdAt         time.Time
+	)
+	err = s.db.QueryRow(ctx, q, recordingID, meetingID).Scan(&s3Key, &mime, &kind, &size, &createdAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+
+	rc, err := s.recDeps.Storage.GetRecording(ctx, s3Key)
+	if err != nil {
+		return fmt.Errorf("storage get: %w", err)
+	}
+	defer rc.Close()
+	rs, ok := rc.(io.ReadSeeker)
+	if !ok {
+		// Fallback: вычитываем целиком в память (Egress-файлы небольшие, но
+		// до GB-видео не должно дойти).
+		buf, rerr := io.ReadAll(rc)
+		if rerr != nil {
+			return fmt.Errorf("read all: %w", rerr)
+		}
+		rs = bytes.NewReader(buf)
+	}
+
+	filename := friendlyFilename(m, kind, s3Key)
+	w.Header().Set("Content-Type", mime)
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	http.ServeContent(w, r, filename, createdAt, rs)
+	return nil
+}
+
+func friendlyFilename(m *Meeting, kind, s3Key string) string {
+	ext := strings.ToLower(path.Ext(s3Key))
+	if ext == "" {
+		switch kind {
+		case "meeting_audio":
+			ext = ".ogg"
+		default:
+			ext = ".mp4"
+		}
+	}
+	ts := m.CreatedAt.Format("2006-01-02_1504")
+	if m.RecordingStartedAt != nil {
+		ts = m.RecordingStartedAt.Format("2006-01-02_1504")
+	}
+	title := strings.Map(func(r rune) rune {
+		if r == ' ' || r == '-' || r == '_' || (r >= '0' && r <= '9') ||
+			(r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= 'А' && r <= 'я') || r == 'Ё' || r == 'ё' {
+			return r
+		}
+		return '_'
+	}, m.Title)
+	if title == "" {
+		title = "meeting"
+	}
+	suffix := ""
+	if kind == "meeting_audio" {
+		suffix = "_audio"
+	}
+	return fmt.Sprintf("%s_%s%s%s", ts, title, suffix, ext)
+}
+
+

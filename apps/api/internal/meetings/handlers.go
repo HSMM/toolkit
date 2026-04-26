@@ -29,6 +29,8 @@ func (h *Handlers) Routes() http.Handler {
 	r.Post("/{id}/admit", h.admit) // host решает по pending-гостям
 	r.Post("/{id}/recording/start", h.recordingStart)
 	r.Post("/{id}/recording/stop", h.recordingStop)
+	r.Get("/{id}/recordings", h.recordingsList)
+	r.Get("/{id}/recordings/{recId}/download", h.recordingDownload)
 	return r
 }
 
@@ -246,6 +248,47 @@ func (h *Handlers) recordingStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
+}
+
+func (h *Handlers) recordingsList(w http.ResponseWriter, r *http.Request) {
+	subj := auth.MustSubject(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_id", "invalid meeting id")
+		return
+	}
+	items, err := h.svc.ListRecordings(r.Context(), subj, id)
+	if err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (h *Handlers) recordingDownload(w http.ResponseWriter, r *http.Request) {
+	subj := auth.MustSubject(r.Context())
+	mid, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_id", "invalid meeting id")
+		return
+	}
+	rid, err := uuid.Parse(chi.URLParam(r, "recId"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_rec_id", "invalid recording id")
+		return
+	}
+	if err := h.svc.StreamRecording(r.Context(), subj, w, r, mid, rid); err != nil {
+		// Если headers ещё не выписаны — отдадим JSON. Если уже стримили — просто выйдем.
+		if errors.Is(err, ErrRecordingNotConfigured) {
+			writeErr(w, http.StatusServiceUnavailable, "recording_unavailable", err.Error())
+			return
+		}
+		if errors.Is(err, ErrNotFound) || errors.Is(err, ErrForbidden) {
+			writeServiceErr(w, err)
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "stream_failed", err.Error())
+	}
 }
 
 func (h *Handlers) recordingStop(w http.ResponseWriter, r *http.Request) {

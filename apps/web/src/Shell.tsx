@@ -33,7 +33,8 @@ import { useAuth } from "@/auth/AuthContext";
 import { type Me } from "@/api/me";
 import {
   useMeetings, useCreateMeeting, useEndMeeting, useShareMeeting,
-  type Meeting as ApiMeeting,
+  useMeetingRecordings, downloadMeetingRecording,
+  type Meeting as ApiMeeting, type RecordingFile,
 } from "@/api/meetings";
 import { MeetingRoom } from "@/MeetingRoom";
 import {
@@ -633,6 +634,64 @@ function MeetingDuration({ startedAt, endedAt }: { startedAt: string; endedAt?: 
   return <>{fmtDuration(end - start)}</>;
 }
 
+function RecordingsMenu({ meetingId }: { meetingId: string }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const q = useMeetingRecordings(open ? meetingId : null);
+
+  const labelFor = (r: RecordingFile): { icon: typeof Video; text: string; sub: string } => {
+    if (r.kind === "meeting_composite") return { icon: Video, text: "Видео встречи", sub: "MP4 · видео + аудио" };
+    if (r.kind === "meeting_audio")     return { icon: Mic,   text: "Аудио встречи", sub: "OGG · только звук" };
+    return { icon: FileAudio, text: "Дорожка участника", sub: r.mime_type };
+  };
+
+  const dl = async (r: RecordingFile) => {
+    setBusy(r.id);
+    try { await downloadMeetingRecording(meetingId, r.id, r.filename); }
+    catch (e) { alert("Не удалось скачать: " + (e instanceof Error ? e.message : String(e))); }
+    finally { setBusy(null); }
+  };
+
+  return (
+    <div style={{ position: "relative" }}>
+      <button onClick={() => setOpen((v) => !v)} title="Скачать запись"
+        style={{ background: C.card, color: C.text2, padding: "8px 12px", borderRadius: 8, fontWeight: 500, fontSize: 13, border: `1px solid ${C.border}`, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 5 }}>
+        <Download size={13} />Записи
+      </button>
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 30 }} />
+          <div style={{ position: "absolute", top: "calc(100% + 6px)", right: 0, minWidth: 280, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, boxShadow: "0 8px 24px rgba(0,0,0,0.12)", zIndex: 40, padding: 6 }}>
+            {q.isLoading ? (
+              <div style={{ padding: "12px 14px", color: C.text3, fontSize: 12.5 }}>Загрузка…</div>
+            ) : (q.data ?? []).length === 0 ? (
+              <div style={{ padding: "12px 14px", color: C.text3, fontSize: 12.5 }}>
+                Записи ещё не появились. Это может занять минуту после остановки записи.
+              </div>
+            ) : (q.data ?? []).map((r) => {
+              const L = labelFor(r);
+              const sizeMb = (r.size_bytes / 1_048_576).toFixed(1);
+              return (
+                <button key={r.id} onClick={() => void dl(r)} disabled={busy === r.id}
+                  style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "9px 10px", border: "none", borderRadius: 7, background: "transparent", cursor: busy === r.id ? "default" : "pointer", textAlign: "left", fontFamily: "inherit", opacity: busy === r.id ? 0.6 : 1 }}>
+                  <div style={{ width: 32, height: 32, borderRadius: 8, background: C.accBg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                    <L.icon size={15} color={C.acc} />
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 500, color: C.text }}>{L.text}</div>
+                    <div style={{ fontSize: 11, color: C.text3 }}>{L.sub} · {sizeMb} МБ</div>
+                  </div>
+                  {busy === r.id ? <RefreshCw size={14} color={C.text3} className="lk-spin" /> : <Download size={14} color={C.text2} />}
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function VcsPage({ me, onOpenTranscriptions }: { me: Me; onOpenTranscriptions?: (meetingId: string) => void }) {
   const { push } = useApp();
   const meetingsQ = useMeetings();
@@ -768,6 +827,9 @@ function VcsPage({ me, onOpenTranscriptions }: { me: Me; onOpenTranscriptions?: 
                       {ended ? (
                         <>
                           <Bdg v="def">Завершена</Bdg>
+                          {m.recording_started_at && (
+                            <RecordingsMenu meetingId={m.id} />
+                          )}
                           {m.recording_started_at && onOpenTranscriptions && (
                             <button onClick={() => onOpenTranscriptions(m.id)} title="Открыть расшифровки этой встречи"
                               style={{ background: C.accBg, color: C.accTx, padding: "8px 12px", borderRadius: 8, fontWeight: 500, fontSize: 13, border: `1px solid ${C.accBrd}`, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 5 }}>
