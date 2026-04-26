@@ -120,34 +120,37 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 		r.Post("/logout", oauthHandlers.Logout)
 	})
 
-	// Публичный гостевой доступ к встречам — без RequireAuth, только token из URL.
-	if meetingsHandlers != nil {
-		r.Mount("/api/v1/guests", meetingsHandlers.GuestRoutes())
-	}
-
-	// --- Authenticated API ---
+	// --- /api/v1: публичные guest-роуты + Group с RequireAuth для остального ---
 	r.Route("/api/v1", func(r chi.Router) {
-		r.Use(middleware.RequireAuth(jwtIssuer, subjectLoader, logger))
-		r.Use(middleware.RateLimitByUser(cfg.RateLimitUserPerMin, time.Minute))
-
-		r.Get("/me", handleMe(pool))
-
-		// WebSocket events (E3.3).
-		r.Mount("/ws", ws.NewHandler(hub, cfg.AllowedCORSOrigins))
-
-		// Транскрибация (E7).
-		if transcriptionHandlers != nil {
-			r.Mount("/transcripts", transcriptionHandlers.Routes())
-		}
-
-		// ВКС (E5).
+		// Публичный гостевой доступ к встречам — без RequireAuth, только token из URL.
 		if meetingsHandlers != nil {
-			r.Mount("/meetings", meetingsHandlers.Routes())
+			r.Mount("/guests", meetingsHandlers.GuestRoutes())
 		}
 
-		// Domain modules — added as their handler packages land.
-		// r.Mount("/calls", calls.Routes(...))
-		// r.Mount("/contacts", contacts.Routes(...))
+		// Authenticated API.
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.RequireAuth(jwtIssuer, subjectLoader, logger))
+			r.Use(middleware.RateLimitByUser(cfg.RateLimitUserPerMin, time.Minute))
+
+			r.Get("/me", handleMe(pool))
+
+			// WebSocket events (E3.3).
+			r.Mount("/ws", ws.NewHandler(hub, cfg.AllowedCORSOrigins))
+
+			// Транскрибация (E7).
+			if transcriptionHandlers != nil {
+				r.Mount("/transcripts", transcriptionHandlers.Routes())
+			}
+
+			// ВКС (E5).
+			if meetingsHandlers != nil {
+				r.Mount("/meetings", meetingsHandlers.Routes())
+			}
+
+			// Domain modules — added as their handler packages land.
+			// r.Mount("/calls", calls.Routes(...))
+			// r.Mount("/contacts", contacts.Routes(...))
+		})
 	})
 
 	// --- Admin-only endpoints (E8) ---
