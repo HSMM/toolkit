@@ -75,7 +75,16 @@ func (h *Handlers) upload(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) list(w http.ResponseWriter, r *http.Request) {
 	subj := auth.MustSubject(r.Context())
-	items, err := h.svc.ListByUser(r.Context(), subj.UserID, 100)
+	var meetingFilter *uuid.UUID
+	if mq := r.URL.Query().Get("meeting"); mq != "" {
+		mid, err := uuid.Parse(mq)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "bad_meeting_id", "invalid meeting uuid")
+			return
+		}
+		meetingFilter = &mid
+	}
+	items, err := h.svc.ListByUser(r.Context(), subj.UserID, 100, meetingFilter)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "list_failed", err.Error())
 		return

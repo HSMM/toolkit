@@ -41,10 +41,11 @@ export type Transcript = {
 
 // ────────────────────────────────────────────────────────────────────
 
-export function useTranscripts() {
+export function useTranscripts(opts?: { meetingId?: string }) {
+  const params = opts?.meetingId ? `?meeting=${encodeURIComponent(opts.meetingId)}` : "";
   return useQuery({
-    queryKey: ["transcripts"],
-    queryFn: ({ signal }) => api<{ items: Transcript[] }>("/api/v1/transcripts", { signal }),
+    queryKey: ["transcripts", opts?.meetingId ?? "all"],
+    queryFn: ({ signal }) => api<{ items: Transcript[] }>(`/api/v1/transcripts${params}`, { signal }),
     // Polling: пока есть незаконченные транскрипты — освежаем список.
     refetchInterval: (q) => {
       const items = q.state.data?.items ?? [];

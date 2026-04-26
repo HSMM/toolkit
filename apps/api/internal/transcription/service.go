@@ -230,25 +230,46 @@ type SegmentDTO struct {
 	Version    int       `json:"version"`
 }
 
-// ListByUser — последние N транскриптов, загруженных пользователем.
-func (s *Service) ListByUser(ctx context.Context, userID uuid.UUID, limit int) ([]View, error) {
+// ListByUser — транскрипции, доступные пользователю:
+//   • uploads: где он сам загружал файл (kind='upload', uploaded_by=user)
+//   • meeting per-track: где он создатель встречи или participant
+// Если meetingFilter != nil — фильтрует только по указанной встрече
+// (с тем же RBAC: user должен иметь доступ к встрече).
+func (s *Service) ListByUser(ctx context.Context, userID uuid.UUID, limit int, meetingFilter *uuid.UUID) ([]View, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	const q = `
+	args := []any{userID, limit}
+	meetingClause := ""
+	if meetingFilter != nil {
+		meetingClause = " AND r.meeting_id = $3"
+		args = append(args, *meetingFilter)
+	}
+	q := `
 		SELECT t.id, t.recording_id,
-		       COALESCE(r.original_filename, ''), COALESCE(r.size_bytes, 0), COALESCE(r.mime_type, ''),
+		       COALESCE(r.original_filename, COALESCE(p.external_name, '')) AS display_name,
+		       COALESCE(r.size_bytes, 0), COALESCE(r.mime_type, ''),
 		       r.uploaded_by, r.created_at,
 		       t.status, t.engine, COALESCE(t.engine_version, ''),
 		       COALESCE(t.gigaam_task_id, ''), COALESCE(t.execution_time_ms, 0),
 		       COALESCE(t.error_message, ''), t.attempts, t.completed_at
 		FROM transcript t
 		JOIN recording  r ON r.id = t.recording_id
-		WHERE r.kind = 'upload' AND r.uploaded_by = $1
+		LEFT JOIN participant p ON p.id = r.participant_id
+		WHERE (
+		    (r.kind = 'upload' AND r.uploaded_by = $1)
+		    OR
+		    (r.kind = 'meeting_per_track' AND EXISTS (
+		        SELECT 1 FROM meeting m
+		        WHERE m.id = r.meeting_id
+		          AND (m.created_by = $1 OR EXISTS (
+		              SELECT 1 FROM participant pp WHERE pp.meeting_id = m.id AND pp.user_id = $1))
+		    ))
+		)` + meetingClause + `
 		ORDER BY r.created_at DESC
 		LIMIT $2
 	`
-	rows, err := s.pool.Query(ctx, q, userID, limit)
+	rows, err := s.pool.Query(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}

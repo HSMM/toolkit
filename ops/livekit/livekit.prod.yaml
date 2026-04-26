@@ -13,6 +13,14 @@ rtc:
 redis:
   address: 127.0.0.1:6379        # host network — redis на том же хосте
 
+# Webhook'и о room/participant/egress событиях шлются на api Toolkit'а.
+# api проверяет HMAC через тот же LIVEKIT_API_SECRET (см. livekit.VerifyAndParseWebhook).
+# Endpoint доступен публично через NPM (как и весь /api/*).
+webhook:
+  api_key: devkey                # должен совпадать с api_keys[].key выше / LIVEKIT_API_KEY
+  urls:
+    - https://toolkit.softservice.by/livekit/webhook
+
 logging:
   level: info
   json: true                     # машиночитаемые логи для Loki

@@ -633,7 +633,7 @@ function MeetingDuration({ startedAt, endedAt }: { startedAt: string; endedAt?: 
   return <>{fmtDuration(end - start)}</>;
 }
 
-function VcsPage({ me }: { me: Me }) {
+function VcsPage({ me, onOpenTranscriptions }: { me: Me; onOpenTranscriptions?: (meetingId: string) => void }) {
   const { push } = useApp();
   const meetingsQ = useMeetings();
   const create = useCreateMeeting();
@@ -748,7 +748,12 @@ function VcsPage({ me }: { me: Me }) {
                           </span>
                         )}
                         {m.auto_transcribe && <Bdg v="blue">С транскрибацией</Bdg>}
-                        {m.record_enabled && <Bdg v="proc">Запись</Bdg>}
+                        {m.recording_active
+                          ? <span style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "3px 7px", borderRadius: 999, background: C.errBg, color: C.err, fontSize: 11, fontWeight: 600, border: `1px solid ${C.errBrd}` }}>
+                              <span style={{ width: 6, height: 6, borderRadius: "50%", background: C.err, animation: "lk-pulse 1.2s ease-in-out infinite" }} />
+                              Идёт запись
+                            </span>
+                          : (m.record_enabled && <Bdg v="proc">Запись</Bdg>)}
                       </div>
                       <div style={{ fontSize: 12.5, color: C.text2, marginTop: 3 }}>
                         {fmtMeetingTime(m)}
@@ -759,8 +764,17 @@ function VcsPage({ me }: { me: Me }) {
                       </div>
                     </div>
                     <div style={{ flexShrink: 0, display: "flex", gap: 6, alignItems: "center" }}>
-                      {ended ? <Bdg v="def">Завершена</Bdg>
-                        : <>
+                      {ended ? (
+                        <>
+                          <Bdg v="def">Завершена</Bdg>
+                          {m.recording_started_at && onOpenTranscriptions && (
+                            <button onClick={() => onOpenTranscriptions(m.id)} title="Открыть расшифровки этой встречи"
+                              style={{ background: C.accBg, color: C.accTx, padding: "8px 12px", borderRadius: 8, fontWeight: 500, fontSize: 13, border: `1px solid ${C.accBrd}`, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 5 }}>
+                              <FileText size={13} />Расшифровки
+                            </button>
+                          )}
+                        </>
+                      ) : <>
                           {isHost(m) && (
                             <button onClick={() => void shareLink(m)} title="Скопировать ссылку для гостя"
                               style={{ background: C.card, color: copiedFor === m.id ? C.acc : C.text2, padding: "8px 10px", borderRadius: 8, fontSize: 13, border: `1px solid ${C.border}`, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 5 }}>
@@ -907,8 +921,8 @@ function fmtSeg(ms: number): string {
     : `${m}:${String(s).padStart(2, "0")}`;
 }
 
-function TranscriptionPage() {
-  const list = useTranscripts();
+function TranscriptionPage({ meetingFilter }: { meetingFilter?: string } = {}) {
+  const list = useTranscripts(meetingFilter ? { meetingId: meetingFilter } : undefined);
   const upload = useUploadTranscript();
   const del = useDeleteTranscript();
   const retry = useRetryTranscript();
@@ -2397,6 +2411,13 @@ export function Shell({ me }: { me: Me }) {
 
 function ShellInner({ me }: { me: Me }) {
   const [page, setPage] = useState<string>("vcs");
+  // Когда переходим на transcription по «Открыть расшифровки» с конкретной
+  // встречи — фильтруем список по meeting_id.
+  const [transcriptMeetingFilter, setTranscriptMeetingFilter] = useState<string | undefined>();
+  const goToTranscriptions = (meetingId?: string) => {
+    setTranscriptMeetingFilter(meetingId);
+    setPage("transcription");
+  };
   const [profileOpen, setProfileOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -2424,6 +2445,7 @@ function ShellInner({ me }: { me: Me }) {
         ::-webkit-scrollbar-track { background:transparent; }
         ::-webkit-scrollbar-thumb { background:${C.border2}; border-radius:3px; }
         ::-webkit-scrollbar-thumb:hover { background:${C.text3}; }
+        @keyframes lk-pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
       `}</style>
 
       <nav onMouseEnter={onEnter} onMouseLeave={onLeave}
@@ -2479,9 +2501,9 @@ function ShellInner({ me }: { me: Me }) {
       </nav>
 
       <main style={{ flex: 1, overflow: "auto", display: "flex", flexDirection: "column" }}>
-        {page === "vcs"            && <VcsPage me={me} />}
+        {page === "vcs"            && <VcsPage me={me} onOpenTranscriptions={goToTranscriptions} />}
         {page === "analytics"      && <AnalyticsPage />}
-        {page === "transcription"  && <TranscriptionPage />}
+        {page === "transcription"  && <TranscriptionPage meetingFilter={transcriptMeetingFilter} />}
         {isAdmin && page === "settings" && <SystemSettingsPage users={users} />}
         {(["messengers", "contacts", "helpdesk"] as const).includes(page as any) && <StubPage page={page as "messengers" | "contacts" | "helpdesk"} />}
       </main>

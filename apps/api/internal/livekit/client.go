@@ -64,6 +64,7 @@ type videoGrant struct {
 	RoomCreate     bool   `json:"roomCreate,omitempty"`
 	RoomAdmin      bool   `json:"roomAdmin,omitempty"`
 	RoomList       bool   `json:"roomList,omitempty"`
+	RoomRecord     bool   `json:"roomRecord,omitempty"` // нужно для Egress Twirp-вызовов
 	CanPublish     *bool  `json:"canPublish,omitempty"`
 	CanSubscribe   *bool  `json:"canSubscribe,omitempty"`
 	CanPublishData *bool  `json:"canPublishData,omitempty"`
@@ -139,6 +140,7 @@ func (c *Client) mintAdminToken(room string) (string, error) {
 			RoomCreate: true,
 			RoomAdmin:  true,
 			RoomList:   true,
+			RoomRecord: true, // для StartParticipantEgress / StopEgress
 		},
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    c.apiKey,
@@ -156,11 +158,93 @@ func (c *Client) mintAdminToken(room string) (string, error) {
 // EndRoom принудительно завершает комнату. Все участники получают disconnect.
 // Идемпотентно: если комнаты нет — вернёт OK, не ошибку.
 func (c *Client) EndRoom(ctx context.Context, room string) error {
-	return c.twirp(ctx, room, "DeleteRoom", map[string]string{"room": room}, nil)
+	return c.twirp(ctx, "RoomService", room, "DeleteRoom", map[string]string{"room": room}, nil)
 }
 
-// twirp выполняет Twirp-вызов /twirp/livekit.RoomService/<method>.
-func (c *Client) twirp(ctx context.Context, room, method string, in any, out any) error {
+// LKParticipant — минимальный срез из ListParticipants (нам нужны только identity).
+type LKParticipant struct {
+	Identity string `json:"identity"`
+	State    string `json:"state"` // ACTIVE | JOINED | DISCONNECTED — нас интересует ACTIVE
+}
+
+// ListParticipants возвращает текущих participant'ов в комнате (по живой картинке LK,
+// независимо от participant table в нашей БД).
+func (c *Client) ListParticipants(ctx context.Context, room string) ([]LKParticipant, error) {
+	var resp struct {
+		Participants []LKParticipant `json:"participants"`
+	}
+	if err := c.twirp(ctx, "RoomService", room, "ListParticipants",
+		map[string]string{"room": room}, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Participants, nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Egress (E5.2): per-participant audio-only запись с заливкой в S3 (MinIO).
+// Используется ParticipantEgress, чтобы получить ОДИН файл на участника
+// со всеми его аудио-треками микшированными.
+// ─────────────────────────────────────────────────────────────────────────
+
+// S3Config описывает S3-совместимое хранилище (MinIO в нашем случае).
+type S3Config struct {
+	AccessKey      string
+	Secret         string
+	Endpoint       string // http://minio:9000 (LiveKit резолвит в docker-сети)
+	Region         string
+	Bucket         string
+	ForcePathStyle bool
+}
+
+// StartParticipantAudioEgress стартует ParticipantEgress только для audio
+// (audio_only=true). Файл — OGG (Opus); путь содержит {publisher_identity}
+// и {time}, чтобы файл был уникален и узнаваем.
+//
+// Возвращает egress_id, который мы сохраняем в participant.current_egress_id.
+func (c *Client) StartParticipantAudioEgress(ctx context.Context, room, identity, filepath string, s3 S3Config) (string, error) {
+	body := map[string]any{
+		"room_name":  room,
+		"identity":   identity,
+		"audio_only": true,
+		"file_outputs": []any{
+			map[string]any{
+				"file_type": "OGG",
+				"filepath":  filepath,
+				"s3": map[string]any{
+					"access_key":       s3.AccessKey,
+					"secret":           s3.Secret,
+					"endpoint":         s3.Endpoint,
+					"region":           s3.Region,
+					"bucket":           s3.Bucket,
+					"force_path_style": s3.ForcePathStyle,
+				},
+			},
+		},
+	}
+	var resp egressInfoMin
+	if err := c.twirp(ctx, "Egress", room, "StartParticipantEgress", body, &resp); err != nil {
+		return "", err
+	}
+	return resp.EgressID, nil
+}
+
+// StopEgress останавливает запись по id. Идемпотентно — already-stopped возвращает OK.
+func (c *Client) StopEgress(ctx context.Context, egressID string) error {
+	if egressID == "" {
+		return errors.New("egress id required")
+	}
+	return c.twirp(ctx, "Egress", "", "StopEgress", map[string]string{"egress_id": egressID}, nil)
+}
+
+// egressInfoMin — нам из ответа нужен только id (статус увидим в webhook).
+type egressInfoMin struct {
+	EgressID string `json:"egress_id"`
+	Status   string `json:"status"`
+}
+
+// twirp выполняет Twirp-вызов /twirp/livekit.<Service>/<method>.
+// Service: "RoomService" | "Egress".
+func (c *Client) twirp(ctx context.Context, service, room, method string, in any, out any) error {
 	tok, err := c.mintAdminToken(room)
 	if err != nil {
 		return fmt.Errorf("mint admin token: %w", err)
@@ -169,7 +253,7 @@ func (c *Client) twirp(ctx context.Context, room, method string, in any, out any
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}
-	url := fmt.Sprintf("%s/twirp/livekit.RoomService/%s", c.baseURL, method)
+	url := fmt.Sprintf("%s/twirp/livekit.%s/%s", c.baseURL, service, method)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return err

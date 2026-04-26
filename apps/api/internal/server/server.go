@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -52,20 +53,28 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 	oauthHandlers := oauthhandlers.New(cfg, pool, logger, jwtIssuer)
 
 	// LiveKit + meetings (E5).
-	var meetingsHandlers *meetings.Handlers
-	lkClient, lkErr := livekitclient.New(livekitclient.Config{
-		APIKey:    cfg.LiveKitAPIKey,
-		APISecret: cfg.LiveKitAPISecret,
-		URL:       cfg.LiveKitURL,
-	})
-	if lkErr != nil {
-		logger.Warn("livekit init failed; /meetings будет недоступен", "err", lkErr)
-	} else {
-		publicWS := cfg.LiveKitPublicWS
-		if publicWS == "" {
-			logger.Warn("LIVEKIT_PUBLIC_WS_URL пуст — фронт не сможет подключиться к комнате")
+	var (
+		meetingsHandlers *meetings.Handlers
+		meetingsService  *meetings.Service
+		lkClient         *livekitclient.Client
+	)
+	{
+		var err error
+		lkClient, err = livekitclient.New(livekitclient.Config{
+			APIKey:    cfg.LiveKitAPIKey,
+			APISecret: cfg.LiveKitAPISecret,
+			URL:       cfg.LiveKitURL,
+		})
+		if err != nil {
+			logger.Warn("livekit init failed; /meetings будет недоступен", "err", err)
+		} else {
+			publicWS := cfg.LiveKitPublicWS
+			if publicWS == "" {
+				logger.Warn("LIVEKIT_PUBLIC_WS_URL пуст — фронт не сможет подключиться к комнате")
+			}
+			meetingsService = meetings.New(pool, lkClient, publicWS)
+			meetingsHandlers = meetings.NewHandlers(meetingsService)
 		}
-		meetingsHandlers = meetings.NewHandlers(meetings.New(pool, lkClient, publicWS))
 	}
 
 	// Storage + queue + transcription handlers (E7).
@@ -95,6 +104,24 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 		transcriptionHandlers = transcription.NewHandlers(
 			transcription.New(pool, storeClient, jobsQ, logger),
 		)
+
+		// Подключаем recording к meetings service: LiveKit Egress будет лить
+		// файлы в тот же MinIO бакет recordings (LK-egress контейнер ходит в
+		// minio:9000 по docker-сети [internal]).
+		if meetingsService != nil {
+			s3Endpoint := cfg.MinioEndpoint
+			if !strings.HasPrefix(s3Endpoint, "http") {
+				s3Endpoint = "http://" + s3Endpoint
+			}
+			meetingsService.AttachRecording(meetings.RecordingDeps{
+				S3: livekitclient.S3Config{
+					AccessKey: cfg.MinioAccessKey, Secret: cfg.MinioSecretKey,
+					Endpoint: s3Endpoint, Region: cfg.MinioRegion,
+					Bucket: cfg.MinioBucketRecordings, ForcePathStyle: true,
+				},
+				BucketKeyTmpl: "meetings/{room_name}/{publisher_identity}-{time}.ogg",
+			})
+		}
 	}
 
 	r := chi.NewRouter()
@@ -111,6 +138,11 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 	r.Get("/healthz", handleHealth(pool))
 	r.Get("/readyz", handleHealth(pool))
 	r.Get("/version", handleVersion())
+
+	// LiveKit webhook — публичный, проверка HMAC внутри handler'а.
+	if lkClient != nil && meetingsService != nil {
+		r.Post("/livekit/webhook", handleLiveKitWebhook(lkClient, meetingsService, logger))
+	}
 
 	r.Route("/oauth", func(r chi.Router) {
 		r.Get("/login", oauthHandlers.Login)
@@ -270,4 +302,38 @@ func stubHandler(label string) http.HandlerFunc {
 		w.WriteHeader(http.StatusNotImplemented)
 		_, _ = fmt.Fprintf(w, `{"error":{"code":"not_implemented","message":%q}}`, label)
 	}
+}
+
+// handleLiveKitWebhook принимает события LiveKit (publicный, no auth, но с
+// HMAC-проверкой через VerifyAndParseWebhook). На egress_ended вызывает
+// meetings.OnEgressEnded — там создаётся recording row и enqueue'ится
+// transcribe job. Остальные события сейчас игнорируем (но логируем).
+func handleLiveKitWebhook(lk *livekitclient.Client, ms *meetings.Service, logger *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ev, err := lk.VerifyAndParseWebhook(r)
+		if err != nil {
+			logger.Warn("livekit webhook reject", "err", err)
+			http.Error(w, "invalid", http.StatusUnauthorized)
+			return
+		}
+		switch ev.Event {
+		case "egress_ended":
+			if err := ms.OnEgressEnded(r.Context(), ev.EgressInfo); err != nil {
+				logger.Error("OnEgressEnded", "err", err, "egress_id", egressID(ev))
+				http.Error(w, "processing failed", http.StatusInternalServerError)
+				return
+			}
+			logger.Info("egress_ended processed", "egress_id", egressID(ev))
+		default:
+			logger.Debug("livekit webhook", "event", ev.Event)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func egressID(ev *livekitclient.WebhookEvent) string {
+	if ev == nil || ev.EgressInfo == nil {
+		return ""
+	}
+	return ev.EgressInfo.EgressID
 }

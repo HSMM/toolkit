@@ -12,10 +12,11 @@ import {
   RoomAudioRenderer,
 } from "@livekit/components-react";
 import { useEffect, useState } from "react";
-import { X, Loader2, Check, UserPlus } from "lucide-react";
+import { X, Loader2, Check, UserPlus, Circle, Square } from "lucide-react";
 import { C } from "@/styles/tokens";
 import {
   useJoinMeeting, useEndMeeting, useLeaveMeeting, useMeetingPoll, useAdmitGuest,
+  useStartRecording, useStopRecording,
   type Meeting, type Participant,
 } from "@/api/meetings";
 
@@ -70,6 +71,7 @@ export function MeetingRoom({ meeting, isHost, onClose }: Props) {
             {meeting.livekit_room_id}
           </div>
         </div>
+        {isHost && <RecordingButton meetingId={meeting.id} />}
         {isHost && (
           <button onClick={endForAll}
             style={{ padding: "7px 14px", borderRadius: 8, border: "1px solid #ef4444", background: "transparent",
@@ -123,6 +125,36 @@ export function MeetingRoom({ meeting, isHost, onClose }: Props) {
         {isHost && <PendingGuestsPanel meetingId={meeting.id} />}
       </div>
     </div>
+  );
+}
+
+// RecordingButton — для host: «● Начать запись» / «■ Остановить запись».
+// Состояние active берётся из useMeetingPoll — это тот же query, что и
+// PendingGuestsPanel, так что лишних запросов нет.
+function RecordingButton({ meetingId }: { meetingId: string }) {
+  const q = useMeetingPoll(meetingId, 3000);
+  const start = useStartRecording();
+  const stop = useStopRecording();
+  const active = q.data?.meeting?.recording_active === true;
+  const busy = start.isPending || stop.isPending;
+
+  return (
+    <button
+      onClick={() => active ? stop.mutate(meetingId) : start.mutate(meetingId)}
+      disabled={busy}
+      title={active ? "Остановить запись встречи" : "Начать запись встречи"}
+      style={{
+        padding: "7px 14px", borderRadius: 8, border: "none",
+        background: active ? "rgba(239, 68, 68, 0.15)" : "rgba(255,255,255,0.08)",
+        color: active ? "#fca5a5" : "#e5e7eb",
+        fontWeight: 600, fontSize: 13, cursor: busy ? "default" : "pointer",
+        fontFamily: "inherit", display: "flex", alignItems: "center", gap: 7,
+        opacity: busy ? 0.6 : 1,
+      }}>
+      {active
+        ? <><Square size={14} fill="#ef4444" stroke="#ef4444" />Остановить запись</>
+        : <><Circle size={14} fill="#ef4444" stroke="#ef4444" />Начать запись</>}
+    </button>
   );
 }
 

@@ -27,6 +27,8 @@ func (h *Handlers) Routes() http.Handler {
 	r.Post("/{id}/end", h.end)
 	r.Post("/{id}/share", h.share)
 	r.Post("/{id}/admit", h.admit) // host решает по pending-гостям
+	r.Post("/{id}/recording/start", h.recordingStart)
+	r.Post("/{id}/recording/stop", h.recordingStop)
 	return r
 }
 
@@ -226,6 +228,42 @@ func (h *Handlers) admit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handlers) recordingStart(w http.ResponseWriter, r *http.Request) {
+	subj := auth.MustSubject(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_id", "invalid meeting id")
+		return
+	}
+	if err := h.svc.StartRecording(r.Context(), subj, id); err != nil {
+		if errors.Is(err, ErrRecordingNotConfigured) {
+			writeErr(w, http.StatusServiceUnavailable, "recording_unavailable", err.Error())
+			return
+		}
+		writeServiceErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
+func (h *Handlers) recordingStop(w http.ResponseWriter, r *http.Request) {
+	subj := auth.MustSubject(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_id", "invalid meeting id")
+		return
+	}
+	if err := h.svc.StopRecording(r.Context(), subj, id); err != nil {
+		if errors.Is(err, ErrRecordingNotConfigured) {
+			writeErr(w, http.StatusServiceUnavailable, "recording_unavailable", err.Error())
+			return
+		}
+		writeServiceErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

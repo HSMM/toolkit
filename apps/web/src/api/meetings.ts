@@ -14,6 +14,8 @@ export type Meeting = {
   record_enabled: boolean;
   auto_transcribe: boolean;
   has_external: boolean;
+  recording_active?: boolean;
+  recording_started_at?: string;
   created_at: string;
 };
 
@@ -116,6 +118,24 @@ export function useMeetingPoll(id: string | null, refetchMs = 3000) {
     refetchInterval: refetchMs,
     queryFn: ({ signal }) =>
       api<{ meeting: Meeting; participants: Participant[] }>(`/api/v1/meetings/${id}`, { signal }),
+  });
+}
+
+export function useStartRecording() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (meetingId: string) =>
+      api<void>(`/api/v1/meetings/${meetingId}/recording/start`, { method: "POST" }),
+    onSuccess: (_d, id) => { void qc.invalidateQueries({ queryKey: ["meeting", id] }); },
+  });
+}
+
+export function useStopRecording() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (meetingId: string) =>
+      api<void>(`/api/v1/meetings/${meetingId}/recording/stop`, { method: "POST" }),
+    onSuccess: (_d, id) => { void qc.invalidateQueries({ queryKey: ["meeting", id] }); },
   });
 }
 

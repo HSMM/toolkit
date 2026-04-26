@@ -33,6 +33,9 @@ type Service struct {
 	lk *livekit.Client
 	// publicWS — wss://… для браузера (передаётся клиенту).
 	publicWS string
+	// recDeps — настроены в server.go через AttachRecording (E5.2). Если nil,
+	// все методы записи возвращают ErrRecordingNotConfigured.
+	recDeps *RecordingDeps
 }
 
 func New(db *pgxpool.Pool, lk *livekit.Client, publicWS string) *Service {
@@ -275,6 +278,11 @@ func (s *Service) Join(ctx context.Context, subj *auth.Subject, meetingID uuid.U
 	if err != nil {
 		return nil, fmt.Errorf("mint token: %w", err)
 	}
+
+	// Если на встрече уже идёт запись — автоматом стартуем egress для этого
+	// пользователя (best-effort, ошибка только в лог).
+	go s.MaybeStartEgressForParticipant(context.Background(), m.ID, identity)
+
 	return &JoinResult{
 		Token:    tok,
 		WSURL:    s.publicWS,
@@ -553,7 +561,18 @@ func (s *Service) AdmitGuest(ctx context.Context, subj *auth.Subject, meetingID,
 			return fmt.Errorf("reject: %w", err)
 		}
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	// Если admit и идёт запись — стартанём egress для этого гостя.
+	if allow {
+		var identity string
+		_ = s.db.QueryRow(ctx, `SELECT livekit_identity FROM participant WHERE id=$1`, participantID).Scan(&identity)
+		if identity != "" {
+			go s.MaybeStartEgressForParticipant(context.Background(), m.ID, identity)
+		}
+	}
+	return nil
 }
 
 func randomURLToken(nBytes int) (string, error) {
