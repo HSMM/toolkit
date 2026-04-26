@@ -19,7 +19,7 @@ redis:
 webhook:
   api_key: devkey                # должен совпадать с api_keys[].key выше / LIVEKIT_API_KEY
   urls:
-    - https://toolkit.softservice.by/livekit/webhook
+    - https://toolkit.softservice.by/api/v1/livekit/webhook
 
 logging:
   level: info

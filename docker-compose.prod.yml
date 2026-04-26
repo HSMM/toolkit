@@ -42,9 +42,11 @@ services:
       - ./ops/livekit/livekit.prod.yaml:/etc/livekit.yaml:ro
 
   livekit-egress:
-    volumes:
-      - ./ops/livekit/egress.yaml:/etc/egress.yaml:ro
+    volumes: !override
+      - ./ops/livekit/egress.prod.yaml:/etc/egress.yaml:ro
       - /opt/toolkit/data/egress:/out
+    extra_hosts:
+      - "host.docker.internal:host-gateway"           # egress → ws://host.docker.internal:7880 (LiveKit в host network)
 
   coturn:
     network_mode: host

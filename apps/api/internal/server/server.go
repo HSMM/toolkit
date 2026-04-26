@@ -142,10 +142,6 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 	r.Get("/readyz", handleHealth(pool))
 	r.Get("/version", handleVersion())
 
-	// LiveKit webhook — публичный, проверка HMAC внутри handler'а.
-	if lkClient != nil && meetingsService != nil {
-		r.Post("/livekit/webhook", handleLiveKitWebhook(lkClient, meetingsService, logger))
-	}
 
 	r.Route("/oauth", func(r chi.Router) {
 		r.Get("/login", oauthHandlers.Login)
@@ -160,6 +156,12 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 		// Публичный гостевой доступ к встречам — без RequireAuth, только token из URL.
 		if meetingsHandlers != nil {
 			r.Mount("/guests", meetingsHandlers.GuestRoutes())
+		}
+
+		// LiveKit webhook — публичный (HMAC проверяется внутри handler'а).
+		// Под /api/v1 чтобы NPM проксировал через стандартный /api/v1 mapping.
+		if lkClient != nil && meetingsService != nil {
+			r.Post("/livekit/webhook", handleLiveKitWebhook(lkClient, meetingsService, logger))
 		}
 
 		// Authenticated API.
