@@ -18,7 +18,7 @@ file_outputs:
 insecure_outputs: true
 
 logging:
-  level: info
+  level: debug                   # временно для диагностики «Start signal not received»
   json: true                     # машиночитаемые логи для Loki
 
 template_port: 7980
