@@ -4,6 +4,87 @@
 диагностику прод-инцидентов и важные решения, чтобы история была видна не только
 в чате и `git log`.
 
+## 2026-04-27 (ночь) — Settings, OS notifications, WebRTC softphone, cleanup
+
+**Задача:** добиться рабочего MVP-состояния — system settings (доступ к
+модулям, SMTP, телефония), OS-уведомления, WebRTC-софтфон через JsSIP,
+zero-mock на ключевых страницах.
+
+**Сделано:**
+
+- **TD-фиксы из ревью HEAD~10**:
+  - `transcript_recording_active_uniq` partial-index (миграция 000013) +
+    `OnEgressEnded` через `SELECT ... FOR UPDATE` с ON CONFLICT по unique —
+    идемпотентность при ретрае egress webhook'а; transcribe job ставится
+    только на реальный INSERT.
+  - `StartRecording` обёрнут в транзакцию с `FOR UPDATE` — защита от
+    двойного auto-start при быстром реджойне host'а.
+  - `OnEgressEnded` без `return error` после Commit (не провоцируем retry).
+  - удалён `ops/livekit/egress.prod.yaml` (заменён на `EGRESS_CONFIG_BODY`
+    в compose.prod.yml ещё раньше).
+
+- **«Настройки системы» расширены:**
+  - **Пользователи** — реальный `/api/v1/admin/users` (миграция/seed уже
+    были; убраны mock-flip role/status кнопки).
+  - **Доступ к модулям** — миграция 000014 KV `system_setting`; backend
+    `internal/sysset` (ReadRoutes для всех authenticated, WriteRoutes для
+    admin); фронт фильтрует NAV для non-admin, при попадании на скрытый
+    модуль редирект на первый доступный.
+  - **Телефония** разделена на 2 таба: «WebRTC шлюз» (FreePBX WSS +
+    extension'ы) и «AMI (мониторинг)» (хост/порт/user/secret + кнопка
+    проверки связи; реальная проверка отключена до полноценной интеграции).
+  - **SMTP** — реальная персистенция через тот же `system_setting`
+    (`smtp_config` ключ); пароль не возвращается в GET; пустой пароль в
+    PUT не перезаписывает существующий; тест-эндпоинт возвращает 501.
+  - **AI** — без изменений (settings stub).
+
+- **Аналитика → Мониторинг АТС**, перенесена из основного NAV в
+  ADM-меню (видна только админу). Заголовок и подзаголовок обновлены.
+
+- **OS-уведомления (Web Notifications API).** AppCtx расширен `osPerm` +
+  `requestOSPerm`; `push()` дублирует уведомления в notification center
+  ОС когда вкладка не в фокусе. NotificationBell показывает CTA «Включить»
+  если permission=default и warning если denied. Иконка — наш logo.
+
+- **WebRTC софтфон** (`apps/web/src/softphone/useSoftphone.ts`).
+  Хук-обёртка над `jssip`: state-machine (`not_configured / connecting /
+  registered / registration_failed / incoming / outgoing / active / ended`),
+  методы `start/stop/dial/answer/hangup/toggleMute/toggleHold`, привязка
+  remote-стрима к `<audio autoplay>`. SoftphoneWidget переписан на
+  реальный API: dialer работает по живому SIP, входящий звонок показывает
+  popup + OS-notification, активный разговор тикает таймер, доступны
+  mute/hold/hangup. Если креды не сохранены — встроенная мини-форма
+  (WSS URL + extension + пароль), сохраняет в sessionStorage.
+  *Не протестировано с реальным FreePBX — нет тестового extension.*
+
+- **Cleanup:**
+  - удалены упоминания эпиков (E1.x..E8.x) из всех комментариев и UI-строк;
+    «MVP scope» → нейтральная формулировка.
+  - StubPage badge «Этап 2» → «В разработке».
+  - dead `MaybeStartEgressForParticipant` и его 2 вызова убраны раньше.
+
+- **Документы:**
+  - `README.md` обновлён ранее (статусы по эпикам, порт-таблица NAT с UDP
+    7882 multiplexed).
+  - `DEPLOYMENT.md` — таблица плейсхолдеров.
+
+**Что НЕ сделано (оставлено на следующий заход):**
+- E2.4 — Bitrix24 sync пользователей (нужен scheduled job + Bitrix client
+  расширение; пока admin-список отражает только тех, кто хоть раз залогинился).
+- E6 — реальная интеграция с FreePBX подтверждённая тестовым extension'ом.
+- E8 — политики записи, GDPR-запросы, audit-log UI.
+- Полная русификация LiveKit-комнаты (нативного i18n у LiveKit нет; нужен
+  custom assembly из примитивов TrackToggle / DisconnectButton / ChatToggle).
+- TURN — coturn в инфре есть, но `COTURN_EXTERNAL_IP` placeholder + relay
+  диапазон не открыт на firewall'е. Поскольку TCP 7881 + UDP 7882 покрывают
+  большинство сетей, пока приоритета нет.
+
+**Известные эксплуатационные нюансы:**
+- Если правится `ops/livekit/livekit.prod.yaml` или env, требуется ручной
+  рестарт `livekit` контейнера (compose не пересобирает image сам).
+- Egress prod-конфиг полностью внутри `docker-compose.prod.yml` через
+  `EGRESS_CONFIG_BODY`; редактируйте там, а не в `egress.yaml`.
+
 ## 2026-04-27 — E5: ВКС end-to-end (комнаты, lobby, запись, скачивание)
 
 **Задача:** дотянуть видеоконференции до уровня MVP — реальные LiveKit-комнаты

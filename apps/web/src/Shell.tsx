@@ -43,6 +43,7 @@ import {
   useModuleAccess, useUpdateModuleAccess,
   useSmtpConfig, useUpdateSmtpConfig,
 } from "@/api/system-settings";
+import { useSoftphone, loadSoftphoneConfig, saveSoftphoneConfig } from "@/softphone/useSoftphone";
 import {
   useTranscripts, useTranscript, useUploadTranscript,
   useDeleteTranscript, useRetryTranscript,
@@ -523,43 +524,55 @@ function NavItem({ item, active, expanded, onClick }: {
 // SOFTPHONE WIDGET (плавающий, в правом нижнем углу)
 // ──────────────────────────────────────────────────────────────────────────
 
-type CallState = "idle" | "calling" | "active";
-
 function SoftphoneWidget() {
-  const { phoneOpen, setPhoneOpen } = useApp();
+  const { phoneOpen, setPhoneOpen, push } = useApp();
   const [val, setVal] = useState("");
-  const [cs, setCs] = useState<CallState>("idle");
-  const [sec, setSec] = useState(0);
-  const [muted, setMuted] = useState(false);
-  const [held, setHeld] = useState(false);
   const [minimized, setMinimized] = useState(false);
-  const tmr = useRef<ReturnType<typeof setInterval> | null>(null);
-  const call = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [now, setNow] = useState(() => Date.now());
 
-  const fmt = (s: number) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+  const phone = useSoftphone({
+    onIncoming: (from) => {
+      push({ type: "call", title: "Входящий звонок", desc: `Номер: ${from}` });
+    },
+    onError: (msg) => {
+      push({ type: "system", title: "Ошибка софтфона", desc: msg });
+    },
+  });
 
-  const startCall = () => {
-    if (!val) return;
-    setCs("calling");
-    call.current = setTimeout(() => {
-      setCs("active"); setSec(0);
-      tmr.current = setInterval(() => setSec((s) => s + 1), 1000);
-    }, 1600);
-  };
-
-  const hangUp = () => {
-    if (call.current) clearTimeout(call.current);
-    if (tmr.current) clearInterval(tmr.current);
-    setCs("idle"); setSec(0); setMuted(false); setHeld(false); setVal("");
-  };
-
-  useEffect(() => () => {
-    if (call.current) clearTimeout(call.current);
-    if (tmr.current) clearInterval(tmr.current);
+  // Авто-старт UA если есть сохранённая конфигурация (sessionStorage / window).
+  useEffect(() => {
+    const cfg = loadSoftphoneConfig();
+    if (cfg) phone.start(cfg);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Тикер для таймера активного разговора.
+  useEffect(() => {
+    if (phone.state.kind !== "active") return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [phone.state.kind]);
+
+  const fmt = (ms: number) => {
+    const s = Math.max(0, Math.floor(ms / 1000));
+    return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+  };
+
   const pad = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"];
-  const inCall = cs !== "idle";
+  const st = phone.state;
+  const inCall = st.kind === "incoming" || st.kind === "outgoing" || st.kind === "active";
+  const statusDot = (() => {
+    switch (st.kind) {
+      case "registered":          return { col: C.acc,  txt: "Готов к звонкам" };
+      case "active":              return { col: C.acc,  txt: `В разговоре · ${fmt(now - st.startedAt)}` };
+      case "incoming":            return { col: C.warn, txt: `Входящий от ${st.from}` };
+      case "outgoing":            return { col: C.acc,  txt: `Звоним ${st.to}…` };
+      case "connecting":          return { col: C.warn, txt: "Подключение…" };
+      case "registration_failed": return { col: C.err,  txt: "Ошибка регистрации" };
+      case "ended":               return { col: C.text3, txt: `Звонок завершён (${st.reason})` };
+      case "not_configured":      return { col: C.text3, txt: "Не настроено" };
+    }
+  })();
 
   return (
     <div style={{
@@ -577,24 +590,14 @@ function SoftphoneWidget() {
             <Phone size={12} color={inCall ? C.acc : C.text2} />
           </div>
           <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>Софтфон</span>
-          {inCall && (
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, color: C.acc, fontWeight: 600, marginLeft: 4 }}>
-              <span style={{ width: 6, height: 6, borderRadius: "50%", background: C.acc }} />
-              {cs === "active" ? fmt(sec) : "вызов…"}
-            </span>
-          )}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
           <button onClick={() => setMinimized((m) => !m)} title={minimized ? "Развернуть" : "Свернуть"}
-            style={{ width: 26, height: 26, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", background: "transparent", color: C.text2, cursor: "pointer", border: "none" }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = C.bg3; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
+            style={{ width: 26, height: 26, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", background: "transparent", color: C.text2, cursor: "pointer", border: "none" }}>
             <Minus size={14} />
           </button>
           <button onClick={() => setPhoneOpen(false)} title="Закрыть"
-            style={{ width: 26, height: 26, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", background: "transparent", color: C.text2, cursor: "pointer", border: "none" }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = C.bg3; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
+            style={{ width: 26, height: 26, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", background: "transparent", color: C.text2, cursor: "pointer", border: "none" }}>
             <X size={14} />
           </button>
         </div>
@@ -603,78 +606,140 @@ function SoftphoneWidget() {
       {!minimized && <>
         <div style={{ padding: "10px 14px 8px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-            <div style={{ width: 7, height: 7, borderRadius: "50%", background: C.text3 }} />
-            <span style={{ color: C.text2, fontSize: 11.5, fontWeight: 500 }}>Номер не назначен</span>
+            <div style={{ width: 7, height: 7, borderRadius: "50%", background: statusDot.col }} />
+            <span style={{ color: C.text2, fontSize: 11.5, fontWeight: 500 }}>{statusDot.txt}</span>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 5, color: C.text3, fontSize: 11 }}>
             <Wifi size={11} /><span>FreePBX</span>
           </div>
         </div>
 
-        <div style={{ padding: "22px 18px 12px", textAlign: "center", minHeight: 108 }}>
-          {cs === "idle" && (
-            <div>
+        {st.kind === "not_configured" && (
+          <div style={{ padding: "20px 18px", textAlign: "center" }}>
+            <div style={{ fontSize: 12.5, color: C.text2, lineHeight: 1.5, marginBottom: 14 }}>
+              Софтфон не подключён. Введите параметры FreePBX в Настройках телефонии или вызовите окно ниже.
+            </div>
+            <SoftphoneConfigForm onConnect={(cfg) => { saveSoftphoneConfig(cfg); phone.start(cfg); }} />
+          </div>
+        )}
+
+        {st.kind === "registration_failed" && (
+          <div style={{ padding: "14px 18px" }}>
+            <div style={{ fontSize: 12, color: C.err, marginBottom: 10 }}>Не удалось подключиться: {st.cause}</div>
+            <button onClick={() => { const c = loadSoftphoneConfig(); if (c) phone.start(c); }}
+              style={{ width: "100%", padding: "9px", borderRadius: 8, background: C.acc, color: "white", border: "none", fontWeight: 600, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>
+              Повторить
+            </button>
+            <button onClick={() => { saveSoftphoneConfig(null); phone.stop(); }}
+              style={{ width: "100%", padding: "8px", marginTop: 6, borderRadius: 8, background: "transparent", color: C.text2, border: `1px solid ${C.border}`, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
+              Сбросить настройки
+            </button>
+          </div>
+        )}
+
+        {(st.kind === "registered" || st.kind === "ended") && (
+          <>
+            <div style={{ padding: "22px 18px 12px", textAlign: "center", minHeight: 76 }}>
               <div style={{ fontFamily: "'DM Mono', monospace", fontSize: val ? 28 : 14, fontWeight: 500, color: val ? C.text : C.text3, letterSpacing: "0.02em", minHeight: 40, display: "flex", alignItems: "center", justifyContent: "center" }}>
                 {val || "Введите номер"}
               </div>
               {val && <button onClick={() => setVal((v) => v.slice(0, -1))} style={{ marginTop: 4, color: C.text2, fontSize: 12, background: "none", border: "none", cursor: "pointer", fontFamily: "inherit" }}>← удалить</button>}
             </div>
-          )}
-          {cs === "calling" && (
-            <div>
-              <div style={{ fontSize: 13, color: C.text2, marginBottom: 6 }}>Вызов…</div>
-              <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 22, fontWeight: 500, color: C.text }}>{val}</div>
-              <div style={{ marginTop: 10, display: "flex", justifyContent: "center", gap: 5 }}>
-                {[0, 1, 2].map((i) => <div key={i} style={{ width: 7, height: 7, borderRadius: "50%", background: C.acc, animation: `blink 1.2s ease-in-out ${i * 0.22}s infinite` }} />)}
-              </div>
+            <div style={{ padding: "0 18px 14px", display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
+              {pad.map((k) => (
+                <button key={k} onClick={() => setVal((v) => v + k)}
+                  style={{ padding: "12px 0", borderRadius: 10, background: C.bg3, color: C.text, fontSize: 17, fontWeight: 500, border: `1px solid ${C.border}`, cursor: "pointer", fontFamily: "'DM Mono', monospace" }}>
+                  {k}
+                </button>
+              ))}
             </div>
-          )}
-          {cs === "active" && (
-            <div>
-              <div style={{ fontSize: 11.5, color: C.acc, fontWeight: 600, marginBottom: 4, display: "flex", alignItems: "center", justifyContent: "center", gap: 5 }}>
-                <span style={{ width: 6, height: 6, borderRadius: "50%", background: C.acc }} />В разговоре
-              </div>
-              <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 20, fontWeight: 500, color: C.text }}>{val}</div>
-              <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 22, color: C.text2, fontWeight: 500, marginTop: 4 }}>{fmt(sec)}</div>
+            <div style={{ padding: "0 18px 18px", display: "flex", justifyContent: "center" }}>
+              <button onClick={() => { phone.dial(val); setVal(""); }} disabled={!val}
+                style={{ width: 56, height: 56, borderRadius: "50%", background: val ? C.acc : C.bg3, border: "none", display: "flex", alignItems: "center", justifyContent: "center", cursor: val ? "pointer" : "default", boxShadow: val ? `0 4px 16px ${C.acc}40` : "none" }}>
+                <Phone size={22} color={val ? "white" : C.text3} />
+              </button>
             </div>
-          )}
-        </div>
-
-        {cs === "idle" && (
-          <div style={{ padding: "0 18px 14px", display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
-            {pad.map((k) => (
-              <button key={k} onClick={() => setVal((v) => v + k)}
-                style={{ padding: "12px 0", borderRadius: 10, background: C.bg3, color: C.text, fontSize: 17, fontWeight: 500, border: `1px solid ${C.border}`, cursor: "pointer", fontFamily: "'DM Mono', monospace" }}>
-                {k}
-              </button>
-            ))}
-          </div>
-        )}
-        {cs === "active" && (
-          <div style={{ padding: "0 18px 14px", display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
-            {[
-              { icon: muted ? MicOff : Mic, lbl: muted ? "Вкл." : "Без звука", on: muted, fn: () => setMuted((m) => !m) },
-              { icon: Monitor, lbl: "Запись", on: false, fn: () => { } },
-              { icon: Phone, lbl: held ? "Снять" : "Удерж.", on: held, fn: () => setHeld((h) => !h) },
-            ].map((b, i) => (
-              <button key={i} onClick={b.fn}
-                style={{ padding: "10px 0", borderRadius: 10, background: b.on ? C.text : C.bg3, color: b.on ? "white" : C.text2, display: "flex", flexDirection: "column", alignItems: "center", gap: 4, border: `1px solid ${b.on ? C.text : C.border}`, cursor: "pointer", fontFamily: "inherit", fontSize: 10.5, fontWeight: 500 }}>
-                <b.icon size={16} /><span>{b.lbl}</span>
-              </button>
-            ))}
-          </div>
+          </>
         )}
 
-        <div style={{ padding: "0 18px 18px", display: "flex", justifyContent: "center" }}>
-          {cs === "idle"
-            ? <button onClick={startCall} disabled={!val} style={{ width: 56, height: 56, borderRadius: "50%", background: val ? C.acc : C.bg3, border: "none", display: "flex", alignItems: "center", justifyContent: "center", cursor: val ? "pointer" : "default", boxShadow: val ? `0 4px 16px ${C.acc}40` : "none" }}>
-              <Phone size={22} color={val ? "white" : C.text3} />
-            </button>
-            : <button onClick={hangUp} style={{ width: 56, height: 56, borderRadius: "50%", background: C.err, border: "none", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", boxShadow: `0 4px 16px ${C.err}40` }}>
+        {st.kind === "outgoing" && (
+          <div style={{ padding: "30px 18px 22px", textAlign: "center" }}>
+            <div style={{ fontSize: 13, color: C.text2, marginBottom: 6 }}>Звоним…</div>
+            <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 22, fontWeight: 500, color: C.text }}>{st.to}</div>
+            <div style={{ marginTop: 14, marginBottom: 10, display: "flex", justifyContent: "center", gap: 5 }}>
+              {[0, 1, 2].map((i) => <div key={i} style={{ width: 7, height: 7, borderRadius: "50%", background: C.acc, animation: `blink 1.2s ease-in-out ${i * 0.22}s infinite` }} />)}
+            </div>
+            <button onClick={phone.hangup} style={{ width: 56, height: 56, borderRadius: "50%", background: C.err, border: "none", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
               <PhoneOff size={22} color="white" />
-            </button>}
-        </div>
+            </button>
+          </div>
+        )}
+
+        {st.kind === "incoming" && (
+          <div style={{ padding: "26px 18px 22px", textAlign: "center" }}>
+            <div style={{ fontSize: 12, color: C.warn, fontWeight: 600, marginBottom: 8 }}>Входящий звонок</div>
+            <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 22, fontWeight: 500, color: C.text, marginBottom: 16 }}>{st.from}</div>
+            <div style={{ display: "flex", justifyContent: "center", gap: 14 }}>
+              <button onClick={phone.hangup} style={{ width: 52, height: 52, borderRadius: "50%", background: C.err, border: "none", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }} title="Отклонить">
+                <PhoneOff size={20} color="white" />
+              </button>
+              <button onClick={phone.answer} style={{ width: 52, height: 52, borderRadius: "50%", background: C.acc, border: "none", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }} title="Принять">
+                <Phone size={20} color="white" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {st.kind === "active" && (
+          <>
+            <div style={{ padding: "22px 18px 8px", textAlign: "center" }}>
+              <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 20, fontWeight: 500, color: C.text }}>{st.peer}</div>
+              <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 22, color: C.text2, fontWeight: 500, marginTop: 4 }}>{fmt(now - st.startedAt)}</div>
+            </div>
+            <div style={{ padding: "0 18px 14px", display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
+              {[
+                { icon: st.muted ? MicOff : Mic, lbl: st.muted ? "Вкл." : "Без звука", on: st.muted, fn: phone.toggleMute },
+                { icon: Monitor, lbl: "Запись", on: false, fn: () => { /* TODO record */ } },
+                { icon: Phone, lbl: st.held ? "Снять" : "Удерж.", on: st.held, fn: phone.toggleHold },
+              ].map((b, i) => (
+                <button key={i} onClick={b.fn}
+                  style={{ padding: "10px 0", borderRadius: 10, background: b.on ? C.text : C.bg3, color: b.on ? "white" : C.text2, display: "flex", flexDirection: "column", alignItems: "center", gap: 4, border: `1px solid ${b.on ? C.text : C.border}`, cursor: "pointer", fontFamily: "inherit", fontSize: 10.5, fontWeight: 500 }}>
+                  <b.icon size={16} /><span>{b.lbl}</span>
+                </button>
+              ))}
+            </div>
+            <div style={{ padding: "0 18px 18px", display: "flex", justifyContent: "center" }}>
+              <button onClick={phone.hangup} style={{ width: 56, height: 56, borderRadius: "50%", background: C.err, border: "none", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", boxShadow: `0 4px 16px ${C.err}40` }}>
+                <PhoneOff size={22} color="white" />
+              </button>
+            </div>
+          </>
+        )}
       </>}
+    </div>
+  );
+}
+
+// Маленькая форма ввода кредов SIP. Сохраняет в sessionStorage; backend
+// для постоянного хранения кредов появится позже.
+function SoftphoneConfigForm({ onConnect }: { onConnect: (cfg: import("@/softphone/useSoftphone").SoftphoneConfig) => void }) {
+  const [wssUrl, setWssUrl] = useState("");
+  const [extension, setExtension] = useState("");
+  const [password, setPassword] = useState("");
+  const ok = wssUrl.trim() && extension.trim() && password.trim();
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8, textAlign: "left" }}>
+      <input value={wssUrl} onChange={(e) => setWssUrl(e.target.value)} placeholder="wss://pbx.example.com:8089/ws"
+        style={{ ...inp(), fontSize: 12, fontFamily: "'DM Mono', monospace" }} />
+      <input value={extension} onChange={(e) => setExtension(e.target.value)} placeholder="Внутренний номер (1012)"
+        style={{ ...inp(), fontSize: 12, fontFamily: "'DM Mono', monospace" }} />
+      <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Пароль SIP"
+        style={{ ...inp(), fontSize: 12 }} />
+      <button onClick={() => ok && onConnect({ wssUrl: wssUrl.trim(), extension: extension.trim(), password })}
+        disabled={!ok}
+        style={{ padding: "9px", borderRadius: 8, border: "none", background: ok ? C.acc : C.bg3, color: ok ? "white" : C.text3, fontWeight: 600, fontSize: 13, cursor: ok ? "pointer" : "default", fontFamily: "inherit" }}>
+        Подключиться
+      </button>
     </div>
   );
 }
