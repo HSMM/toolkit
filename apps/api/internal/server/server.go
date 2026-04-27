@@ -31,6 +31,7 @@ import (
 	"github.com/HSMM/toolkit/internal/gigaam"
 	livekitclient "github.com/HSMM/toolkit/internal/livekit"
 	"github.com/HSMM/toolkit/internal/meetings"
+	"github.com/HSMM/toolkit/internal/phonereq"
 	"github.com/HSMM/toolkit/internal/queue"
 	"github.com/HSMM/toolkit/internal/server/middleware"
 	oauthhandlers "github.com/HSMM/toolkit/internal/server/oauth"
@@ -190,6 +191,10 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 			sysHandlers := sysset.NewHandlers(pool)
 			r.Mount("/system-settings", sysHandlers.ReadRoutes())
 
+			// Заявки на внутренние номера. User-side (создать/отозвать/мою-последнюю).
+			phoneReqHandlers := phonereq.NewHandlers(phonereq.NewService(pool, hub, logger))
+			r.Mount("/phone/extension-requests", phoneReqHandlers.MyRoutes())
+
 			// Admin-only endpoints, доступные через /api/v1/admin/* (NPM
 			// проксирует /api/v1 → api). Старая /admin/* группа (внизу)
 			// тоже остаётся — для прямых запросов к api без NPM-проксирования.
@@ -203,6 +208,7 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 				})
 				r.Mount("/admin/users", adminUsers.Routes())
 				r.Mount("/admin/system-settings", sysHandlers.WriteRoutes())
+				r.Mount("/admin/phone/extension-requests", phoneReqHandlers.AdminRoutes())
 			})
 		})
 	})

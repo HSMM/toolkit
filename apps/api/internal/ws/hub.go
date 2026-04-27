@@ -5,9 +5,11 @@
 // upgrade). The hub broadcasts user-scoped events (e.g. "incoming_call",
 // "transcript_ready") to all open sockets of that user across devices/tabs.
 //
-// Why per-user, not per-channel: in MVP every event is naturally scoped
-// to one user's view (own calls, own meetings, own transcripts). Broader
-// pub/sub topics (e.g. "all admins") can be layered on later if needed.
+// In addition to per-user Publish, the hub supports per-role broadcast
+// (PublishToRole) — used for events that should be delivered to every
+// online admin (e.g. "phone_extension_request_created"). Roles are taken
+// from the authenticated subject at WS upgrade time and indexed alongside
+// userID; reconnect after role change is required to refresh the index.
 package ws
 
 import (
@@ -38,6 +40,7 @@ type Event struct {
 type client struct {
 	id     uuid.UUID
 	userID uuid.UUID
+	role   string
 	conn   *websocket.Conn
 	send   chan Event
 	closed chan struct{}
@@ -45,15 +48,17 @@ type client struct {
 
 // Hub multiplexes events to per-user subscribers. Safe for concurrent use.
 type Hub struct {
-	mu      sync.RWMutex
-	clients map[uuid.UUID]map[uuid.UUID]*client // userID -> connID -> client
-	logger  *slog.Logger
+	mu       sync.RWMutex
+	clients  map[uuid.UUID]map[uuid.UUID]*client // userID -> connID -> client
+	byRole   map[string]map[uuid.UUID]*client    // role  -> connID -> client
+	logger   *slog.Logger
 }
 
 // NewHub constructs a Hub.
 func NewHub(logger *slog.Logger) *Hub {
 	return &Hub{
 		clients: map[uuid.UUID]map[uuid.UUID]*client{},
+		byRole:  map[string]map[uuid.UUID]*client{},
 		logger:  logger,
 	}
 }
@@ -65,16 +70,28 @@ func (h *Hub) register(c *client) func() {
 		h.clients[c.userID] = map[uuid.UUID]*client{}
 	}
 	h.clients[c.userID][c.id] = c
+	if c.role != "" {
+		if h.byRole[c.role] == nil {
+			h.byRole[c.role] = map[uuid.UUID]*client{}
+		}
+		h.byRole[c.role][c.id] = c
+	}
 	count := len(h.clients[c.userID])
 	h.mu.Unlock()
 
-	h.logger.Debug("ws client registered", "user_id", c.userID, "conn_id", c.id, "user_total", count)
+	h.logger.Debug("ws client registered", "user_id", c.userID, "conn_id", c.id, "role", c.role, "user_total", count)
 
 	return func() {
 		h.mu.Lock()
 		delete(h.clients[c.userID], c.id)
 		if len(h.clients[c.userID]) == 0 {
 			delete(h.clients, c.userID)
+		}
+		if c.role != "" && h.byRole[c.role] != nil {
+			delete(h.byRole[c.role], c.id)
+			if len(h.byRole[c.role]) == 0 {
+				delete(h.byRole, c.role)
+			}
 		}
 		h.mu.Unlock()
 		close(c.closed)
@@ -99,6 +116,36 @@ func (h *Hub) Publish(target uuid.UUID, e Event) int {
 		default:
 			h.logger.Warn("ws send buffer full, dropping event",
 				"user_id", target, "conn_id", c.id, "event_type", e.Type)
+		}
+	}
+	h.mu.RUnlock()
+	return delivered
+}
+
+// PublishToRole broadcasts an event to every connected client with the given
+// role. Non-blocking, same drop-on-full semantics as Publish. Empty role is
+// a no-op.
+//
+// Note: role is captured at WS upgrade time. If a user's role changes
+// (admin promote/demote), they must reconnect for the change to be picked
+// up by this index.
+func (h *Hub) PublishToRole(role string, e Event) int {
+	if role == "" {
+		return 0
+	}
+	if e.IssuedAt.IsZero() {
+		e.IssuedAt = time.Now().UTC()
+	}
+	h.mu.RLock()
+	conns := h.byRole[role]
+	delivered := 0
+	for _, c := range conns {
+		select {
+		case c.send <- e:
+			delivered++
+		default:
+			h.logger.Warn("ws send buffer full on role broadcast",
+				"role", role, "user_id", c.userID, "conn_id", c.id, "event_type", e.Type)
 		}
 	}
 	h.mu.RUnlock()

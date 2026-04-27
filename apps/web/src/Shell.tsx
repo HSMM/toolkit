@@ -49,6 +49,12 @@ import {
 import { useSoftphone, loadSoftphoneConfig, saveSoftphoneConfig } from "@/softphone/useSoftphone";
 import { useSetUserRole, useSetUserStatus, useSyncBitrixUsers } from "@/api/admin";
 import {
+  useMyExtensionRequest, useCreateExtensionRequest, useCancelMyExtensionRequest,
+  useAdminExtensionRequests, useApproveExtensionRequest, useRejectExtensionRequest,
+  type AdminListFilter, type AdminPhoneExtensionRequest,
+} from "@/api/phone-requests";
+import { useWsEvent } from "@/ws/useWs";
+import {
   useTranscripts, useTranscript, useUploadTranscript,
   useDeleteTranscript, useRetryTranscript,
   useTranscriptAnalytics, useAudioBlob, downloadTxt, fetchTxt,
@@ -546,13 +552,19 @@ function SoftphoneWidget() {
   // Тянем креды с бэкенда (extension, привязанный к текущему user'у админом).
   // Sessionstorage остаётся как локальный override / fallback на dev.
   const creds = useMyPhoneCredentials();
+  // Заявка пользователя на закрепление номера (если extension не назначен).
+  const myReq = useMyExtensionRequest();
+  const createReq = useCreateExtensionRequest();
+  const cancelReq = useCancelMyExtensionRequest();
 
-  // Автостарт. Приоритет: backend creds → sessionStorage. Перезапускаем UA
-  // когда пришли свежие креды (например админ только что изменил пароль).
+  // Автостарт. Приоритет: backend creds (если есть И wss_url, И extension)
+  // → sessionStorage. Если creds пришли с пустым wss_url — НЕ запускаем UA
+  // (это патологическое состояние, см. ТЗ §1.1: extension назначен, но
+  // адрес АТС админ ещё не указал; виджет покажет соответствующее сообщение).
   const startedKeyRef = useRef<string>("");
   useEffect(() => {
     let cfg: import("@/softphone/useSoftphone").SoftphoneConfig | null = null;
-    if (creds.data) {
+    if (creds.data && creds.data.wss_url && creds.data.extension) {
       cfg = {
         wssUrl: creds.data.wss_url,
         extension: creds.data.extension,
@@ -569,6 +581,37 @@ function SoftphoneWidget() {
     phone.start(cfg);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [creds.data, creds.isLoading]);
+
+  // WebSocket: реакция на одобрение/отклонение заявки.
+  // На approve — invalidate'им my-phone-credentials, виджет автоматически
+  // подтянет новые креды и стартует JsSIP. На reject — обновляем заявку,
+  // виджет покажет причину отказа.
+  useWsEvent<{
+    request_id: string;
+    status: "approved" | "rejected";
+    assigned_extension?: string;
+    reject_reason?: string;
+  }>("phone_extension_request_resolved", (e) => {
+    const p = e.payload;
+    if (!p) return;
+    if (p.status === "approved") {
+      push({
+        type: "call",
+        title: "Внутренний номер назначен",
+        desc: p.assigned_extension
+          ? `Ваш номер: ${p.assigned_extension}`
+          : "Софтфон готов к работе",
+      });
+    } else {
+      push({
+        type: "system",
+        title: "Заявка на номер отклонена",
+        desc: p.reject_reason || "Без указания причины",
+      });
+    }
+    void creds.refetch();
+    void myReq.refetch();
+  });
 
   // Тикер для таймера активного разговора.
   useEffect(() => {
@@ -639,12 +682,17 @@ function SoftphoneWidget() {
         </div>
 
         {st.kind === "not_configured" && (
-          <div style={{ padding: "20px 18px", textAlign: "center" }}>
-            <div style={{ fontSize: 12.5, color: C.text2, lineHeight: 1.5, marginBottom: 14 }}>
-              Софтфон не подключён. Введите параметры FreePBX в Настройках телефонии или вызовите окно ниже.
-            </div>
-            <SoftphoneConfigForm onConnect={(cfg) => { saveSoftphoneConfig(cfg); phone.start(cfg); }} />
-          </div>
+          <NotConfiguredPanel
+            credsLoading={creds.isLoading}
+            extAssignedNoWss={!!(creds.data?.extension && !creds.data?.wss_url)}
+            request={myReq.data ?? null}
+            requestLoading={myReq.isLoading}
+            onCreate={(comment) => createReq.mutate({ comment })}
+            onCancel={() => cancelReq.mutate()}
+            createPending={createReq.isPending}
+            cancelPending={cancelReq.isPending}
+            createError={createReq.error}
+          />
         )}
 
         {st.kind === "registration_failed" && (
@@ -744,25 +792,149 @@ function SoftphoneWidget() {
   );
 }
 
-// Маленькая форма ввода кредов SIP. Сохраняет в sessionStorage; backend
-// для постоянного хранения кредов появится позже.
-function SoftphoneConfigForm({ onConnect }: { onConnect: (cfg: import("@/softphone/useSoftphone").SoftphoneConfig) => void }) {
-  const [wssUrl, setWssUrl] = useState("");
-  const [extension, setExtension] = useState("");
-  const [password, setPassword] = useState("");
-  const ok = wssUrl.trim() && extension.trim() && password.trim();
+// NotConfiguredPanel — что показать пользователю в виджете, когда softphone
+// не зарегистрирован. Зависит от того, есть ли у пользователя extension от
+// админа, и есть ли активная заявка на номер.
+//
+// Состояния (в порядке проверки):
+//   1. Идёт загрузка кредов или заявки → spinner.
+//   2. extAssignedNoWss=true (extension есть, wss_url пустой)
+//      → "Софтфон в системе не настроен" (см. ТЗ §1.1).
+//   3. request.status='pending' → "Заявка отправлена" + кнопка "Отозвать".
+//   4. request.status='rejected' → "Заявка отклонена" + причина + "Запросить ещё раз".
+//   5. иначе → CTA "Запросить внутренний номер" + опц. комментарий.
+function NotConfiguredPanel({
+  credsLoading, extAssignedNoWss, request, requestLoading,
+  onCreate, onCancel, createPending, cancelPending, createError,
+}: {
+  credsLoading: boolean;
+  extAssignedNoWss: boolean;
+  request: { id: string; status: string; reject_reason?: string; created_at: string; comment?: string } | null;
+  requestLoading: boolean;
+  onCreate: (comment: string) => void;
+  onCancel: () => void;
+  createPending: boolean;
+  cancelPending: boolean;
+  createError: unknown;
+}) {
+  const [comment, setComment] = useState("");
+  const [showCommentField, setShowCommentField] = useState(false);
+
+  if (credsLoading || requestLoading) {
+    return (
+      <div style={{ padding: "28px 18px", textAlign: "center", color: C.text3, fontSize: 12 }}>
+        <RefreshCw size={16} className="lk-spin" style={{ verticalAlign: "middle", marginRight: 6 }} />
+        Загрузка…
+      </div>
+    );
+  }
+
+  if (extAssignedNoWss) {
+    return (
+      <div style={{ padding: "20px 18px", textAlign: "left" }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+          <AlertTriangle size={18} color={C.warn} style={{ flexShrink: 0, marginTop: 2 }} />
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 4 }}>
+              Софтфон в системе не настроен
+            </div>
+            <div style={{ fontSize: 12, color: C.text2, lineHeight: 1.5 }}>
+              Внутренний номер закреплён за вами, но администратор ещё не
+              указал адрес АТС. Обратитесь к администратору Toolkit.
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (request?.status === "pending") {
+    const dt = new Date(request.created_at);
+    return (
+      <div style={{ padding: "20px 18px", textAlign: "center" }}>
+        <div style={{ width: 40, height: 40, borderRadius: "50%", background: C.warn + "20",
+                      display: "inline-flex", alignItems: "center", justifyContent: "center", marginBottom: 10 }}>
+          <Clock size={20} color={C.warn} />
+        </div>
+        <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 4 }}>
+          Заявка отправлена
+        </div>
+        <div style={{ fontSize: 11.5, color: C.text2, lineHeight: 1.45, marginBottom: 14 }}>
+          {dt.toLocaleString("ru-RU", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" })}
+          {" · ожидает одобрения администратора"}
+        </div>
+        {request.comment && (
+          <div style={{ fontSize: 11.5, color: C.text3, fontStyle: "italic",
+                        background: C.bg2, padding: "6px 10px", borderRadius: 6, marginBottom: 12, textAlign: "left" }}>
+            «{request.comment}»
+          </div>
+        )}
+        <button onClick={onCancel} disabled={cancelPending}
+          style={{ width: "100%", padding: "9px", borderRadius: 8, background: "transparent",
+                   color: C.text2, border: `1px solid ${C.border}`, fontSize: 12.5, fontWeight: 500,
+                   cursor: cancelPending ? "default" : "pointer", fontFamily: "inherit" }}>
+          {cancelPending ? "Отзываем…" : "Отозвать заявку"}
+        </button>
+      </div>
+    );
+  }
+
+  // rejected или нет заявки → CTA «Запросить номер»
+  const wasRejected = request?.status === "rejected";
+  const errCode = createError instanceof Error
+    ? (createError as { code?: string }).code
+    : undefined;
+  const errText = errCode === "already_assigned"
+    ? "Вам уже назначен номер. Обновите страницу."
+    : errCode === "already_pending"
+    ? "Заявка уже отправлена. Обновите страницу."
+    : createError instanceof Error ? createError.message : null;
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8, textAlign: "left" }}>
-      <input value={wssUrl} onChange={(e) => setWssUrl(e.target.value)} placeholder="wss://pbx.example.com:8089/ws"
-        style={{ ...inp(), fontSize: 12, fontFamily: "'DM Mono', monospace" }} />
-      <input value={extension} onChange={(e) => setExtension(e.target.value)} placeholder="Внутренний номер (1012)"
-        style={{ ...inp(), fontSize: 12, fontFamily: "'DM Mono', monospace" }} />
-      <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Пароль SIP"
-        style={{ ...inp(), fontSize: 12 }} />
-      <button onClick={() => ok && onConnect({ wssUrl: wssUrl.trim(), extension: extension.trim(), password })}
-        disabled={!ok}
-        style={{ padding: "9px", borderRadius: 8, border: "none", background: ok ? C.acc : C.bg3, color: ok ? "white" : C.text3, fontWeight: 600, fontSize: 13, cursor: ok ? "pointer" : "default", fontFamily: "inherit" }}>
-        Подключиться
+    <div style={{ padding: "20px 18px", textAlign: "center" }}>
+      <div style={{ width: 40, height: 40, borderRadius: "50%", background: C.bg3,
+                    display: "inline-flex", alignItems: "center", justifyContent: "center", marginBottom: 10 }}>
+        <Phone size={20} color={C.text2} />
+      </div>
+      <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 4 }}>
+        {wasRejected ? "Заявка отклонена" : "Внутренний номер не назначен"}
+      </div>
+      <div style={{ fontSize: 11.5, color: C.text2, lineHeight: 1.45, marginBottom: 12 }}>
+        {wasRejected
+          ? (request?.reject_reason
+              ? `Причина: ${request.reject_reason}`
+              : "Администратор отклонил предыдущую заявку без указания причины.")
+          : "Запросите внутренний номер у администратора Toolkit."}
+      </div>
+
+      {showCommentField ? (
+        <textarea
+          value={comment} onChange={(e) => setComment(e.target.value.slice(0, 500))}
+          placeholder="Опишите задачу — например, «нужен городской»"
+          rows={3}
+          style={{ width: "100%", padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 7,
+                   fontSize: 12, color: C.text, outline: "none", background: C.card,
+                   fontFamily: "inherit", marginBottom: 8, resize: "none", boxSizing: "border-box" }}
+        />
+      ) : (
+        <button onClick={() => setShowCommentField(true)}
+          style={{ background: "none", border: "none", color: C.text3, fontSize: 11.5, fontFamily: "inherit",
+                   cursor: "pointer", marginBottom: 8, textDecoration: "underline" }}>
+          + добавить комментарий
+        </button>
+      )}
+
+      {errText && (
+        <div style={{ fontSize: 11.5, color: C.err, marginBottom: 8, lineHeight: 1.4 }}>
+          {errText}
+        </div>
+      )}
+
+      <button onClick={() => onCreate(comment.trim())} disabled={createPending}
+        style={{ width: "100%", padding: "10px", borderRadius: 8, background: createPending ? C.bg3 : C.acc,
+                 color: createPending ? C.text3 : "white", border: "none", fontSize: 13, fontWeight: 600,
+                 cursor: createPending ? "default" : "pointer", fontFamily: "inherit" }}>
+        {createPending ? "Отправляем…" : (wasRejected ? "Запросить ещё раз" : "Запросить номер")}
       </button>
     </div>
   );
@@ -2299,20 +2471,27 @@ function UsersPage({ hideHeader }: { hideHeader?: boolean }) {
   );
 }
 
-// PhoneSettingsPage — настройки телефонии: 2 вкладки.
-//   • WebRTC шлюз — WSS-подключение к FreePBX + внутренние номера
-//   • AMI         — Asterisk Manager Interface для мониторинга АТС/CDR
+// PhoneSettingsPage — настройки телефонии: 3 вкладки.
+//   • WebRTC шлюз  — WSS-подключение к FreePBX + внутренние номера
+//   • AMI          — Asterisk Manager Interface для мониторинга АТС/CDR
+//   • Заявки       — заявки пользователей на закрепление номера (с бейджем pending)
 function PhoneSettingsPage({ hideHeader }: { hideHeader?: boolean } = {}) {
-  const [tab, setTab] = useState<"webrtc" | "ami">("webrtc");
+  const [tab, setTab] = useState<"webrtc" | "ami" | "requests">("webrtc");
+  // Pending-счётчик для бейджа на табе. Подгружаем независимо от выбранного
+  // таба, чтобы число было актуально, когда админ листает остальные.
+  const reqQ = useAdminExtensionRequests("pending");
+  const pendingCount = reqQ.data?.pending_count ?? 0;
+
   const tabs = [
-    { id: "webrtc" as const, label: "WebRTC шлюз", Icon: Phone },
-    { id: "ami"    as const, label: "AMI (мониторинг)", Icon: Activity },
+    { id: "webrtc"   as const, label: "WebRTC шлюз",        Icon: Phone,    badge: 0 },
+    { id: "ami"      as const, label: "AMI (мониторинг)",   Icon: Activity, badge: 0 },
+    { id: "requests" as const, label: "Заявки на номера",   Icon: Inbox,    badge: pendingCount },
   ];
 
   return (
     <div style={{ minHeight: "100%", background: C.bg2, display: "flex", flexDirection: "column" }}>
       {!hideHeader && (
-        <PgHdr title="Настройки телефонии" sub="FreePBX · WebRTC-шлюз и AMI для мониторинга" />
+        <PgHdr title="Настройки телефонии" sub="FreePBX · WebRTC-шлюз, AMI и заявки на номера" />
       )}
       <div style={{ padding: "0 24px", background: C.card, borderBottom: `1px solid ${C.border}`, display: "flex", gap: 4, flexShrink: 0 }}>
         {tabs.map((x) => (
@@ -2326,12 +2505,20 @@ function PhoneSettingsPage({ hideHeader }: { hideHeader?: boolean } = {}) {
               display: "flex", alignItems: "center", gap: 7, marginBottom: -1,
             }}>
             <x.Icon size={15} />{x.label}
+            {x.badge > 0 && (
+              <span style={{
+                minWidth: 18, height: 18, padding: "0 5px", borderRadius: 9,
+                background: C.err, color: "white", fontSize: 10.5, fontWeight: 700,
+                display: "inline-flex", alignItems: "center", justifyContent: "center",
+              }}>{x.badge}</span>
+            )}
           </button>
         ))}
       </div>
       <div style={{ flex: 1, overflowY: "auto" }}>
-        {tab === "webrtc" && <PhoneWebrtcTab />}
-        {tab === "ami"    && <PhoneAmiTab />}
+        {tab === "webrtc"   && <PhoneWebrtcTab />}
+        {tab === "ami"      && <PhoneAmiTab />}
+        {tab === "requests" && <PhoneRequestsTab />}
       </div>
     </div>
   );
@@ -2533,6 +2720,386 @@ function PhoneAmiTab() {
       </SettingsSection>
     </div>
   );
+}
+
+// PhoneRequestsTab — список заявок пользователей на закрепление номера.
+// На каждую заявку — Approve (через диалог с выбором свободного ext или
+// созданием нового) или Reject (с опц. причиной).
+function PhoneRequestsTab() {
+  const [filter, setFilter] = useState<AdminListFilter>("pending");
+  const reqQ = useAdminExtensionRequests(filter);
+  const phoneCfg = usePhoneConfig();
+  const approveM = useApproveExtensionRequest();
+  const rejectM  = useRejectExtensionRequest();
+
+  const [approveTarget, setApproveTarget] = useState<AdminPhoneExtensionRequest | null>(null);
+  const [rejectTarget,  setRejectTarget]  = useState<AdminPhoneExtensionRequest | null>(null);
+
+  const items = reqQ.data?.items ?? [];
+
+  return (
+    <div style={{ padding: 24, maxWidth: 760 }}>
+      {/* Filter + counter */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+        <div style={{ display: "flex", gap: 4, background: C.bg3, padding: 3, borderRadius: 8 }}>
+          {(["pending", "history"] as AdminListFilter[]).map((f) => (
+            <button key={f} onClick={() => setFilter(f)}
+              style={{ padding: "6px 14px", borderRadius: 6, border: "none", fontFamily: "inherit",
+                       background: filter === f ? C.card : "transparent",
+                       color: filter === f ? C.text : C.text2,
+                       fontSize: 12.5, fontWeight: 500, cursor: "pointer",
+                       boxShadow: filter === f ? "0 1px 2px rgba(0,0,0,0.06)" : "none" }}>
+              {f === "pending" ? "Активные" : "История"}
+            </button>
+          ))}
+        </div>
+        <div style={{ fontSize: 11.5, color: C.text3 }}>
+          Активных заявок: <span style={{ color: C.text2, fontWeight: 600 }}>{reqQ.data?.pending_count ?? 0}</span>
+        </div>
+      </div>
+
+      {reqQ.isLoading ? (
+        <div style={{ textAlign: "center", padding: 40, color: C.text3, fontSize: 13 }}>
+          <RefreshCw size={20} className="lk-spin" /> Загрузка заявок…
+        </div>
+      ) : items.length === 0 ? (
+        <div style={{ textAlign: "center", padding: 40, background: C.card, border: `1px solid ${C.border}`, borderRadius: 12 }}>
+          <Inbox size={28} color={C.text3} style={{ marginBottom: 8 }} />
+          <div style={{ fontSize: 13, color: C.text2, fontWeight: 500 }}>
+            {filter === "pending" ? "Активных заявок нет" : "История пуста"}
+          </div>
+          <div style={{ fontSize: 11.5, color: C.text3, marginTop: 4, lineHeight: 1.5 }}>
+            {filter === "pending"
+              ? "Заявки появятся здесь, когда сотрудники запросят внутренние номера через софтфон."
+              : "Сюда попадут одобренные, отклонённые и отозванные заявки."}
+          </div>
+        </div>
+      ) : (
+        <div>
+          {items.map((r) => (
+            <RequestCard key={r.id} req={r}
+              onApprove={() => setApproveTarget(r)}
+              onReject={() => setRejectTarget(r)} />
+          ))}
+        </div>
+      )}
+
+      {approveTarget && (
+        <ApproveDialog
+          req={approveTarget}
+          phoneCfg={phoneCfg.data}
+          busy={approveM.isPending}
+          error={approveM.error}
+          onClose={() => { setApproveTarget(null); approveM.reset(); }}
+          onSubmit={async (ext, password) => {
+            await approveM.mutateAsync({ id: approveTarget.id, ext, password });
+            setApproveTarget(null);
+            approveM.reset();
+          }}
+        />
+      )}
+
+      {rejectTarget && (
+        <RejectDialog
+          req={rejectTarget}
+          busy={rejectM.isPending}
+          error={rejectM.error}
+          onClose={() => { setRejectTarget(null); rejectM.reset(); }}
+          onSubmit={async (reason) => {
+            await rejectM.mutateAsync({ id: rejectTarget.id, reason });
+            setRejectTarget(null);
+            rejectM.reset();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function RequestCard({ req, onApprove, onReject }: {
+  req: AdminPhoneExtensionRequest;
+  onApprove: () => void;
+  onReject: () => void;
+}) {
+  const dt = new Date(req.created_at);
+  const initials = (req.user.full_name || "?").trim().split(/\s+/).slice(0, 2).map((s) => s[0]).join("").toUpperCase();
+  const isPending = req.status === "pending";
+  const statusBadge = (() => {
+    switch (req.status) {
+      case "pending":   return { label: "Активная",   col: C.warn };
+      case "approved":  return { label: "Одобрена",   col: C.acc };
+      case "rejected":  return { label: "Отклонена",  col: C.err };
+      case "cancelled": return { label: "Отозвана",   col: C.text3 };
+      default:          return { label: req.status,   col: C.text3 };
+    }
+  })();
+  const resolvedDt = req.resolved_at ? new Date(req.resolved_at) : null;
+
+  return (
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 16, marginBottom: 10 }}>
+      <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+        <div style={{ width: 40, height: 40, borderRadius: "50%", background: C.accBg,
+                      display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+                      color: C.acc, fontSize: 13, fontWeight: 700 }}>
+          {initials}
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4, flexWrap: "wrap" }}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{req.user.full_name}</div>
+            <div style={{ fontSize: 11, padding: "2px 8px", borderRadius: 999,
+                          background: statusBadge.col + "20", color: statusBadge.col, fontWeight: 600 }}>
+              {statusBadge.label}
+            </div>
+          </div>
+          <div style={{ fontSize: 11.5, color: C.text2, marginBottom: 8 }}>
+            {req.user.email}
+            {req.user.department ? ` · ${req.user.department}` : ""}
+            {req.user.position ? ` · ${req.user.position}` : ""}
+          </div>
+          <div style={{ fontSize: 11.5, color: C.text3, marginBottom: req.comment ? 8 : 0 }}>
+            Подана {dt.toLocaleString("ru-RU", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" })}
+          </div>
+          {req.comment && (
+            <div style={{ fontSize: 12.5, color: C.text2, fontStyle: "italic", lineHeight: 1.5,
+                          background: C.bg2, padding: "8px 12px", borderRadius: 7, marginTop: 6 }}>
+              «{req.comment}»
+            </div>
+          )}
+
+          {/* Resolved info */}
+          {!isPending && resolvedDt && (
+            <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px dashed ${C.border}`, fontSize: 11.5, color: C.text3, lineHeight: 1.55 }}>
+              {req.status === "approved" && req.assigned_extension && (
+                <>Назначен номер <span style={{ fontFamily: "'DM Mono', monospace", color: C.text, fontWeight: 600 }}>#{req.assigned_extension}</span> · </>
+              )}
+              {req.status === "rejected" && req.reject_reason && (
+                <>Причина: <span style={{ color: C.text2 }}>{req.reject_reason}</span> · </>
+              )}
+              {resolvedDt.toLocaleString("ru-RU", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" })}
+              {req.resolved_by_name ? ` · ${req.resolved_by_name}` : ""}
+            </div>
+          )}
+        </div>
+
+        {isPending && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, flexShrink: 0 }}>
+            <button onClick={onApprove}
+              style={{ padding: "7px 14px", borderRadius: 7, border: "none",
+                       background: C.acc, color: "white", fontSize: 12.5, fontWeight: 600,
+                       cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 5 }}>
+              <Check size={13} /> Назначить
+            </button>
+            <button onClick={onReject}
+              style={{ padding: "7px 14px", borderRadius: 7, border: `1px solid ${C.border}`,
+                       background: C.card, color: C.text2, fontSize: 12.5, fontWeight: 500,
+                       cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 5 }}>
+              <X size={13} /> Отклонить
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ApproveDialog({ req, phoneCfg, busy, error, onClose, onSubmit }: {
+  req: AdminPhoneExtensionRequest;
+  phoneCfg?: { wss_url: string; extensions: { ext: string; has_password: boolean; assigned_to?: string | null }[] };
+  busy: boolean;
+  error: unknown;
+  onClose: () => void;
+  onSubmit: (ext: string, password: string) => Promise<void>;
+}) {
+  const free = (phoneCfg?.extensions ?? []).filter((e) => !e.assigned_to);
+  const hasFree = free.length > 0;
+  const [mode, setMode] = useState<"free" | "new">(hasFree ? "free" : "new");
+  const [selectedExt, setSelectedExt] = useState(free[0]?.ext ?? "");
+  const [newExt, setNewExt] = useState("");
+  const [newPwd, setNewPwd] = useState("");
+
+  const wssMissing = !phoneCfg?.wss_url;
+
+  const ok = mode === "free" ? !!selectedExt : (/^\d{2,6}$/.test(newExt) && newPwd.length > 0);
+  const errCode = error instanceof Error ? (error as { code?: string }).code : undefined;
+  const errText = errCode === "ext_already_assigned"
+    ? "Этот номер уже занят другим пользователем. Выберите другой."
+    : errCode === "user_inactive"
+    ? "Заявитель деактивирован — назначение невозможно."
+    : errCode === "not_pending"
+    ? "Заявка уже резолвлена (другим админом или отозвана пользователем)."
+    : error instanceof Error ? error.message : null;
+
+  const submit = async () => {
+    if (!ok) return;
+    if (mode === "free") await onSubmit(selectedExt, "");
+    else                 await onSubmit(newExt.trim(), newPwd);
+  };
+
+  return (
+    <ModalShell onClose={onClose} title={`Назначить номер: ${req.user.full_name}`}>
+      {wssMissing && (
+        <div style={{ background: C.warn + "15", border: `1px solid ${C.warn}40`, borderRadius: 8,
+                      padding: "10px 12px", marginBottom: 14, fontSize: 12, lineHeight: 1.5, color: C.text }}>
+          <AlertTriangle size={14} color={C.warn} style={{ verticalAlign: "middle", marginRight: 6 }} />
+          Адрес АТС (WSS) не указан в табе «WebRTC шлюз». После назначения номера софтфон у пользователя
+          не заработает, пока вы не заполните WSS-адрес.
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+        <RadioCard active={mode === "free"} disabled={!hasFree}
+          onClick={() => hasFree && setMode("free")}
+          title="Из свободных"
+          sub={hasFree ? `${free.length} ${pluralRus(free.length, ["номер","номера","номеров"])} доступно` : "Свободных нет"} />
+        <RadioCard active={mode === "new"}
+          onClick={() => setMode("new")}
+          title="Создать новый"
+          sub="Добавить extension в FreePBX" />
+      </div>
+
+      {mode === "free" ? (
+        hasFree ? (
+          <div style={{ marginBottom: 14 }}>
+            <Lbl>Свободный номер</Lbl>
+            <select value={selectedExt} onChange={(e) => setSelectedExt(e.target.value)}
+              style={{ ...inp(), fontFamily: "'DM Mono', monospace" }}>
+              {free.map((e) => <option key={e.ext} value={e.ext}>#{e.ext}</option>)}
+            </select>
+          </div>
+        ) : (
+          <div style={{ fontSize: 12.5, color: C.text2, marginBottom: 14, lineHeight: 1.5 }}>
+            Свободных номеров нет. Создайте новый ниже или сначала добавьте номера в табе «WebRTC шлюз».
+          </div>
+        )
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
+          <div>
+            <Lbl>Номер (ext)</Lbl>
+            <input value={newExt} onChange={(e) => setNewExt(e.target.value.replace(/\D/g, "").slice(0, 6))}
+              placeholder="1012" style={{ ...inp(), fontFamily: "'DM Mono', monospace" }} />
+          </div>
+          <div>
+            <Lbl>Пароль SIP</Lbl>
+            <input type="password" value={newPwd} onChange={(e) => setNewPwd(e.target.value)}
+              placeholder="••••••••" style={inp()} />
+          </div>
+        </div>
+      )}
+
+      {errText && (
+        <div style={{ fontSize: 12, color: C.err, marginBottom: 12, lineHeight: 1.4 }}>{errText}</div>
+      )}
+
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <button onClick={onClose} disabled={busy}
+          style={{ padding: "8px 16px", borderRadius: 8, border: `1px solid ${C.border}`,
+                   background: C.card, color: C.text2, fontSize: 13, fontWeight: 500,
+                   cursor: busy ? "default" : "pointer", fontFamily: "inherit" }}>
+          Отмена
+        </button>
+        <button onClick={() => void submit()} disabled={!ok || busy}
+          style={{ padding: "8px 18px", borderRadius: 8, border: "none",
+                   background: ok && !busy ? C.acc : C.bg3, color: ok && !busy ? "white" : C.text3,
+                   fontSize: 13, fontWeight: 600, cursor: ok && !busy ? "pointer" : "default", fontFamily: "inherit" }}>
+          {busy ? "Назначаем…" : "Назначить"}
+        </button>
+      </div>
+    </ModalShell>
+  );
+}
+
+function RejectDialog({ req, busy, error, onClose, onSubmit }: {
+  req: AdminPhoneExtensionRequest;
+  busy: boolean;
+  error: unknown;
+  onClose: () => void;
+  onSubmit: (reason: string) => Promise<void>;
+}) {
+  const [reason, setReason] = useState("");
+  const errCode = error instanceof Error ? (error as { code?: string }).code : undefined;
+  const errText = errCode === "not_pending"
+    ? "Заявка уже резолвлена."
+    : error instanceof Error ? error.message : null;
+
+  return (
+    <ModalShell onClose={onClose} title={`Отклонить заявку: ${req.user.full_name}`}>
+      <div style={{ marginBottom: 14 }}>
+        <Lbl>Причина (необязательно)</Lbl>
+        <textarea value={reason} onChange={(e) => setReason(e.target.value.slice(0, 500))}
+          rows={3} placeholder="Сообщение увидит заявитель в виджете софтфона"
+          style={{ width: "100%", padding: "8px 11px", border: `1px solid ${C.border}`, borderRadius: 7,
+                   fontSize: 13, color: C.text, outline: "none", background: C.card,
+                   fontFamily: "inherit", resize: "none", boxSizing: "border-box" }} />
+        <div style={{ fontSize: 11, color: C.text3, textAlign: "right", marginTop: 3 }}>
+          {reason.length} / 500
+        </div>
+      </div>
+
+      {errText && (
+        <div style={{ fontSize: 12, color: C.err, marginBottom: 12, lineHeight: 1.4 }}>{errText}</div>
+      )}
+
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <button onClick={onClose} disabled={busy}
+          style={{ padding: "8px 16px", borderRadius: 8, border: `1px solid ${C.border}`,
+                   background: C.card, color: C.text2, fontSize: 13, fontWeight: 500,
+                   cursor: busy ? "default" : "pointer", fontFamily: "inherit" }}>
+          Отмена
+        </button>
+        <button onClick={() => void onSubmit(reason.trim())} disabled={busy}
+          style={{ padding: "8px 18px", borderRadius: 8, border: "none",
+                   background: busy ? C.bg3 : C.err, color: busy ? C.text3 : "white",
+                   fontSize: 13, fontWeight: 600, cursor: busy ? "default" : "pointer", fontFamily: "inherit" }}>
+          {busy ? "Отклоняем…" : "Отклонить"}
+        </button>
+      </div>
+    </ModalShell>
+  );
+}
+
+function ModalShell({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
+  return (
+    <div onClick={onClose}
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 200,
+               display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div onClick={(e) => e.stopPropagation()}
+        style={{ background: C.card, borderRadius: 14, width: "100%", maxWidth: 480,
+                 boxShadow: "0 24px 60px rgba(0,0,0,0.25)", border: `1px solid ${C.border}` }}>
+        <div style={{ padding: "14px 18px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{title}</div>
+          <button onClick={onClose}
+            style={{ width: 28, height: 28, borderRadius: 7, border: "none", background: "transparent",
+                     color: C.text2, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <X size={16} />
+          </button>
+        </div>
+        <div style={{ padding: 18 }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function RadioCard({ title, sub, active, disabled, onClick }: {
+  title: string; sub: string; active: boolean; disabled?: boolean; onClick: () => void;
+}) {
+  return (
+    <button onClick={onClick} disabled={disabled}
+      style={{ flex: 1, padding: "10px 12px", borderRadius: 8, textAlign: "left", fontFamily: "inherit",
+               border: `1px solid ${active ? C.acc : C.border}`,
+               background: active ? C.accBg : C.card,
+               cursor: disabled ? "not-allowed" : "pointer",
+               opacity: disabled ? 0.55 : 1 }}>
+      <div style={{ fontSize: 12.5, fontWeight: 600, color: active ? C.accTx : C.text }}>{title}</div>
+      <div style={{ fontSize: 11, color: C.text3, marginTop: 2 }}>{sub}</div>
+    </button>
+  );
+}
+
+function pluralRus(n: number, forms: [string, string, string]): string {
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return forms[0];
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return forms[1];
+  return forms[2];
 }
 
 // SettingsSection — карточка раздела для PhoneSettings/SmtpSettings/AISettings.
@@ -3183,8 +3750,43 @@ function ShellInner({ me }: { me: Me }) {
       </main>
 
       <SoftphoneWidget />
+      {isAdmin && <AdminPhoneRequestsListener />}
 
       {profileOpen && <ProfileModal me={meAsMock} onClose={() => setProfileOpen(false)} />}
     </div>
   );
+}
+
+// AdminPhoneRequestsListener — невидимый компонент, монтируется только для
+// admin-роли. Подписывается на WS-события `phone_extension_request_created` и
+// `phone_extension_request_cancelled`, кидает push в NotificationBell (он же
+// дублирует в OS notification center, когда вкладка не в фокусе) и
+// инвалидирует список заявок, чтобы PhoneRequestsTab сам обновился.
+function AdminPhoneRequestsListener() {
+  const { push } = useApp();
+  const reqQ = useAdminExtensionRequests("pending");
+
+  useWsEvent<{
+    request_id: string;
+    user_id: string;
+    user: { id: string; full_name: string; department?: string };
+    comment?: string;
+    created_at: string;
+  }>("phone_extension_request_created", (e) => {
+    const p = e.payload;
+    if (!p) return;
+    const dept = p.user.department ? ` · ${p.user.department}` : "";
+    push({
+      type: "system",
+      title: "Запрос на внутренний номер",
+      desc: `${p.user.full_name}${dept} запросил номер${p.comment ? `: «${p.comment}»` : ""}`,
+    });
+    void reqQ.refetch();
+  });
+
+  useWsEvent<{ request_id: string }>("phone_extension_request_cancelled", () => {
+    void reqQ.refetch();
+  });
+
+  return null;
 }

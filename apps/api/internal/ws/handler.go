@@ -46,6 +46,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	c := &client{
 		id:     uuid.New(),
 		userID: subj.UserID,
+		role:   string(subj.Role),
 		conn:   conn,
 		send:   make(chan Event, h.sendBufferSize),
 		closed: make(chan struct{}),
