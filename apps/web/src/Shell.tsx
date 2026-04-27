@@ -136,6 +136,9 @@ type AppCtxValue = {
   unread: number;
   phoneOpen: boolean;
   setPhoneOpen: (v: boolean | ((b: boolean) => boolean)) => void;
+  // OS-уведомления (Web Notifications API)
+  osPerm: NotificationPermission | "unsupported";
+  requestOSPerm: () => Promise<NotificationPermission | "unsupported">;
 };
 
 const AppCtx = createContext<AppCtxValue | null>(null);
@@ -145,18 +148,58 @@ function useApp(): AppCtxValue {
   return v;
 }
 
+// notifSupported — браузер поддерживает Web Notifications API (нет в Safari iOS).
+const notifSupported = typeof window !== "undefined" && "Notification" in window;
+
+// fireOSNotification — посылает уведомление в notification-center ОС.
+// Требует granted permission (см. requestOSPerm). Безопасна к вызову даже
+// если permission != granted: тихо ничего не делает.
+function fireOSNotification(n: { title: string; body?: string; tag?: string }) {
+  if (!notifSupported) return;
+  if (Notification.permission !== "granted") return;
+  try {
+    new Notification(n.title, {
+      body: n.body,
+      tag: n.tag,         // тот же tag → ОС склеит дубли
+      icon: "/logo-toolkit.png",
+    });
+  } catch {
+    // Brave shields / private mode могут блокировать — игнорируем.
+  }
+}
+
 function AppProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<StatusKey>("available");
   const [notifs, setNotifs] = useState<Notif[]>([]);
   const [phoneOpen, setPhoneOpen] = useState(false);
-  const push: AppCtxValue["push"] = (n) =>
-    setNotifs((l) => [{ id: Date.now() + Math.random(), ts: Date.now(), read: false, ...n }, ...l]);
+  const [osPerm, setOsPerm] = useState<NotificationPermission | "unsupported">(
+    notifSupported ? Notification.permission : "unsupported",
+  );
+  const requestOSPerm = async (): Promise<NotificationPermission | "unsupported"> => {
+    if (!notifSupported) return "unsupported";
+    try {
+      const p = await Notification.requestPermission();
+      setOsPerm(p);
+      return p;
+    } catch {
+      return Notification.permission;
+    }
+  };
+  const push: AppCtxValue["push"] = (n) => {
+    const item = { id: Date.now() + Math.random(), ts: Date.now(), read: false, ...n };
+    setNotifs((l) => [item, ...l]);
+    // Дублируем в OS notification center когда страница не в фокусе и
+    // у нас есть permission. На активной вкладке OS-popup только мешает.
+    if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+      fireOSNotification({ title: item.title, body: item.desc, tag: String(item.id) });
+    }
+  };
   const markAllRead = () => setNotifs((l) => l.map((n) => ({ ...n, read: true })));
   const remove = (id: number) => setNotifs((l) => l.filter((n) => n.id !== id));
   const clear = () => setNotifs([]);
   const unread = notifs.filter((n) => !n.read).length;
   return (
-    <AppCtx.Provider value={{ status, setStatus, notifs, push, markAllRead, remove, clear, unread, phoneOpen, setPhoneOpen }}>
+    <AppCtx.Provider value={{ status, setStatus, notifs, push, markAllRead, remove, clear, unread, phoneOpen, setPhoneOpen, osPerm, requestOSPerm }}>
       {children}
     </AppCtx.Provider>
   );
@@ -261,7 +304,7 @@ const NOTIF_META: Record<Notif["type"], { Icon: LucideIcon; col: string; bg: str
 };
 
 function NotificationBell() {
-  const { notifs, markAllRead, remove, clear, unread } = useApp();
+  const { notifs, markAllRead, remove, clear, unread, osPerm, requestOSPerm } = useApp();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
 
@@ -304,6 +347,27 @@ function NotificationBell() {
               )}
             </div>
           </div>
+
+          {/* Запрос разрешения на OS-уведомления — показывается если default,
+              чтобы не мешать тем у кого уже granted/denied. */}
+          {osPerm === "default" && (
+            <div style={{ padding: "10px 14px", borderBottom: `1px solid ${C.border}`, background: C.accBg, display: "flex", alignItems: "center", gap: 10 }}>
+              <Bell size={16} color={C.acc} />
+              <div style={{ flex: 1, fontSize: 12, color: C.text, lineHeight: 1.4 }}>
+                Получать уведомления в центре уведомлений ОС, когда Toolkit не в фокусе?
+              </div>
+              <button onClick={() => void requestOSPerm()}
+                style={{ background: C.acc, color: "white", border: "none", padding: "5px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>
+                Включить
+              </button>
+            </div>
+          )}
+          {osPerm === "denied" && (
+            <div style={{ padding: "8px 14px", borderBottom: `1px solid ${C.border}`, background: C.warnBg, fontSize: 11.5, color: C.warnTx, lineHeight: 1.45 }}>
+              OS-уведомления заблокированы в браузере. Включите их в настройках сайта (значок 🔒 рядом с адресом).
+            </div>
+          )}
+
           <div style={{ flex: 1, overflowY: "auto" }}>
             {notifs.length === 0 ? (
               <div style={{ padding: "32px 20px", textAlign: "center" }}>
