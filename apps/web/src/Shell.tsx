@@ -19,8 +19,8 @@ import {
 } from "react";
 import {
   Phone, Video, MessageSquare, Users, FileText, HelpCircle,
-  Settings, Mic, MicOff, PhoneOff, Monitor, Search,
-  Download, Edit2, X, Check,
+  Settings, Mic, MicOff, PhoneOff, Monitor, Search, Plus,
+  Download, X, Check,
   RefreshCw, User, PhoneMissed,
   Save, Wifi, Hash, Shield, Clock, Mail, Key, LogOut,
   Copy, Upload, FileAudio, Trash2, Send, ChevronRight, Inbox,
@@ -42,8 +42,10 @@ import { useAdminUsers } from "@/api/admin";
 import {
   useModuleAccess, useUpdateModuleAccess,
   useSmtpConfig, useUpdateSmtpConfig,
+  usePhoneConfig, useUpdatePhoneConfig,
 } from "@/api/system-settings";
 import { useSoftphone, loadSoftphoneConfig, saveSoftphoneConfig } from "@/softphone/useSoftphone";
+import { useSetUserRole, useSetUserStatus } from "@/api/admin";
 import {
   useTranscripts, useTranscript, useUploadTranscript,
   useDeleteTranscript, useRetryTranscript,
@@ -1983,6 +1985,8 @@ function AnalyticsPage() {
 
 function UsersPage({ hideHeader }: { hideHeader?: boolean }) {
   const list = useAdminUsers();
+  const setRole = useSetUserRole();
+  const setStatus = useSetUserStatus();
   const [q, setQ] = useState("");
   const all = list.data ?? [];
   const filt = all.filter((u) => {
@@ -2055,10 +2059,24 @@ function UsersPage({ hideHeader }: { hideHeader?: boolean }) {
                             : <span style={{ fontSize: 12, color: C.text3, fontStyle: "italic" }}>не назначен</span>}
                         </td>
                         <td style={{ padding: "11px 16px" }}>
-                          <Bdg v={u.is_admin ? "adm" : "def"}>{u.is_admin ? "Администратор" : "Пользователь"}</Bdg>
+                          <button onClick={() => {
+                            const next = u.is_admin ? "user" : "admin";
+                            const verb = u.is_admin ? "Снять права администратора у" : "Назначить администратором";
+                            if (!confirm(`${verb} ${u.full_name || u.email}?`)) return;
+                            setRole.mutate({ id: u.id, role: next });
+                          }} style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }} title="Сменить роль">
+                            <Bdg v={u.is_admin ? "adm" : "def"}>{u.is_admin ? "Администратор" : "Пользователь"}</Bdg>
+                          </button>
                         </td>
                         <td style={{ padding: "11px 16px" }}>
-                          <Bdg v={u.status === "active" ? "ok" : "err"}>{u.status === "active" ? "Активен" : "Заблокирован"}</Bdg>
+                          <button onClick={() => {
+                            const next = u.status === "active" ? "blocked" : "active";
+                            const verb = u.status === "active" ? "Заблокировать" : "Разблокировать";
+                            if (!confirm(`${verb} ${u.full_name || u.email}?`)) return;
+                            setStatus.mutate({ id: u.id, status: next });
+                          }} style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }} title="Сменить статус">
+                            <Bdg v={u.status === "active" ? "ok" : "err"}>{u.status === "active" ? "Активен" : "Заблокирован"}</Bdg>
+                          </button>
                         </td>
                         <td style={{ padding: "11px 16px", fontSize: 12, color: C.text3 }}>{fmtLogin(u.last_login_at)}</td>
                       </tr>
@@ -2113,82 +2131,101 @@ function PhoneSettingsPage({ hideHeader }: { hideHeader?: boolean } = {}) {
 }
 
 function PhoneWebrtcTab() {
-  const [saved, setSaved] = useState(false);
-  const [freeNums, setFreeNums] = useState<{ ext: string; pwd: string; saved: boolean }[]>([]);
-  const [assigned] = useState<unknown[]>([]);
+  const q = usePhoneConfig();
+  const upd = useUpdatePhoneConfig();
+  type ExtRow = { ext: string; pwd: string; hasPwd: boolean };
+  const [wssUrl, setWssUrl] = useState("");
+  const [exts, setExts] = useState<ExtRow[]>([]);
   const [newExt, setNewExt] = useState("");
   const [newPwd, setNewPwd] = useState("");
-  const save = () => { setSaved(true); setTimeout(() => setSaved(false), 2500); };
-  const addFree = () => {
+
+  useEffect(() => {
+    if (q.data) {
+      setWssUrl(q.data.wss_url || "");
+      setExts(q.data.extensions.map((e) => ({ ext: e.ext, pwd: "", hasPwd: e.has_password })));
+    }
+  }, [q.data]);
+
+  const dirty = q.data
+    ? wssUrl !== (q.data.wss_url || "") || exts.length !== q.data.extensions.length ||
+      exts.some((e, i) => e.ext !== q.data!.extensions[i]?.ext || e.pwd !== "")
+    : (wssUrl.length > 0 || exts.length > 0);
+
+  const save = async () => {
+    try {
+      await upd.mutateAsync({
+        wss_url: wssUrl.trim(),
+        extensions: exts.map((e) => ({ ext: e.ext, password: e.pwd })),
+      });
+    } catch (e) {
+      alert("Не удалось сохранить: " + (e instanceof Error ? e.message : String(e)));
+    }
+  };
+
+  const addNew = () => {
     if (!newExt.trim() || !newPwd.trim()) return;
-    setFreeNums((f) => [{ ext: newExt.trim(), pwd: newPwd, saved: true }, ...f]);
+    if (exts.some((x) => x.ext === newExt.trim())) return;
+    setExts((f) => [{ ext: newExt.trim(), pwd: newPwd, hasPwd: true }, ...f]);
     setNewExt(""); setNewPwd("");
   };
-  const updFreePwd = (i: number, v: string) => setFreeNums((f) => f.map((x, idx) => idx === i ? { ...x, pwd: v, saved: false } : x));
-  const saveFree = (i: number) => setFreeNums((f) => f.map((x, idx) => idx === i ? { ...x, saved: true } : x));
-  const editFree = (i: number) => setFreeNums((f) => f.map((x, idx) => idx === i ? { ...x, saved: false } : x));
-  const rmFree = (i: number) => setFreeNums((f) => f.filter((_, idx) => idx !== i));
+  const updPwd = (i: number, v: string) => setExts((f) => f.map((x, idx) => idx === i ? { ...x, pwd: v } : x));
+  const rm = (i: number) => setExts((f) => f.filter((_, idx) => idx !== i));
 
   return (
     <div style={{ padding: 24, maxWidth: 640 }}>
       <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 14 }}>
-        <button onClick={save} style={{ display: "flex", alignItems: "center", gap: 7, background: saved ? C.acc : C.text, color: "white", padding: "9px 18px", borderRadius: 8, fontWeight: 600, fontSize: 14, border: "none", cursor: "pointer", fontFamily: "inherit" }}>
-          {saved ? <><Check size={15} />Сохранено</> : <><Save size={15} />Сохранить</>}
+        <button onClick={() => void save()} disabled={!dirty || upd.isPending}
+          style={{ display: "flex", alignItems: "center", gap: 7, background: dirty && !upd.isPending ? C.acc : C.bg3, color: dirty && !upd.isPending ? "white" : C.text3, padding: "9px 18px", borderRadius: 8, fontWeight: 600, fontSize: 14, border: "none", cursor: dirty && !upd.isPending ? "pointer" : "default", fontFamily: "inherit" }}>
+          {upd.isPending ? <><RefreshCw size={15} className="lk-spin" />Сохраняем…</>
+            : upd.isSuccess && !dirty ? <><Check size={15} />Сохранено</>
+            : <><Save size={15} />Сохранить</>}
         </button>
       </div>
+
       <SettingsSection title="Подключение к FreePBX" sub="WSS-сигнализация WebRTC, шлюз для браузерного софтфона">
-        <Field label="WSS-адрес шлюза"><input placeholder="wss://pbx.example.com:8089/ws" style={{ ...inp(), fontFamily: "'DM Mono', monospace" }} /></Field>
-        <button style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 13, color: C.text, background: C.card, cursor: "pointer", fontFamily: "inherit", marginTop: 4, fontWeight: 500 }}>
-          <Phone size={13} />Тестовый звонок
-        </button>
+        <Field label="WSS-адрес шлюза">
+          <input value={wssUrl} onChange={(e) => setWssUrl(e.target.value)}
+            placeholder="wss://pbx.example.com:8089/ws"
+            style={{ ...inp(), fontFamily: "'DM Mono', monospace" }} />
+        </Field>
       </SettingsSection>
 
       <SettingsSection title="Внутренние номера" sub="Привязка extension'ов FreePBX к пользователям Toolkit">
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14, paddingBottom: 14, borderBottom: `1px dashed ${C.border}` }}>
-          <input value={newExt} onChange={(e) => setNewExt(e.target.value.replace(/\D/g, "").slice(0, 6))} onKeyDown={(e) => { if (e.key === "Enter") addFree(); }}
+          <input value={newExt} onChange={(e) => setNewExt(e.target.value.replace(/\D/g, "").slice(0, 6))} onKeyDown={(e) => { if (e.key === "Enter") addNew(); }}
             placeholder="Номер (напр. 1012)" style={{ width: 150, padding: "8px 11px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13, fontFamily: "'DM Mono', monospace", color: C.text, outline: "none", background: C.card }} />
-          <input type="password" value={newPwd} onChange={(e) => setNewPwd(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addFree(); }}
+          <input type="password" value={newPwd} onChange={(e) => setNewPwd(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addNew(); }}
             placeholder="Пароль*" style={{ flex: 1, minWidth: 140, padding: "8px 11px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13, fontFamily: "'DM Mono', monospace", color: C.text, outline: "none", background: C.card }} />
-          <button onClick={addFree} disabled={!newExt.trim() || !newPwd.trim()}
+          <button onClick={addNew} disabled={!newExt.trim() || !newPwd.trim()}
             style={{ display: "flex", alignItems: "center", gap: 5, padding: "8px 14px", borderRadius: 7, border: "none", background: (newExt.trim() && newPwd.trim()) ? C.acc : C.bg3, color: (newExt.trim() && newPwd.trim()) ? "white" : C.text3, fontSize: 13, fontWeight: 600, cursor: (newExt.trim() && newPwd.trim()) ? "pointer" : "default", fontFamily: "inherit" }}>
-            <Save size={14} />Сохранить
+            <Plus size={14} />Добавить
           </button>
         </div>
 
-        {freeNums.length > 0 && (
+        {exts.length > 0 ? (
           <div style={{ marginBottom: 14 }}>
             <div style={{ fontSize: 10, fontWeight: 600, color: C.text2, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
-              Свободные номера · {freeNums.length}
+              Номера · {exts.length}
             </div>
-            {freeNums.map((n, i) => {
-              const miss = !n.pwd.trim();
-              return (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", background: C.bg2, border: `1px solid ${C.border}`, borderRadius: 8, marginBottom: 6 }}>
-                  <div style={{ width: 28, height: 28, borderRadius: "50%", background: C.border, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                    <Hash size={13} color={C.text2} />
-                  </div>
-                  <span style={{ flex: 1, fontSize: 13, fontWeight: 600, fontFamily: "'DM Mono', monospace", color: C.text }}>#{n.ext}</span>
-                  <input type="password" value={n.pwd} onChange={(e) => updFreePwd(i, e.target.value)} disabled={n.saved} placeholder="Пароль*"
-                    style={{ width: 130, padding: "5px 8px", border: `1px solid ${miss ? C.err : C.border}`, borderRadius: 6, fontSize: 12, fontFamily: "'DM Mono', monospace", color: C.text, outline: "none", background: n.saved ? C.bg3 : C.card, filter: n.saved ? "blur(2.5px)" : "none" }} />
-                  {n.saved ? (
-                    <button onClick={() => editFree(i)} title="Изменить пароль" style={{ width: 28, height: 28, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", background: "transparent", cursor: "pointer", color: C.text2, border: `1px solid ${C.border}` }}>
-                      <Edit2 size={13} />
-                    </button>
-                  ) : (
-                    <button onClick={() => saveFree(i)} disabled={miss} title="Сохранить пароль" style={{ width: 28, height: 28, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", background: miss ? C.bg3 : C.acc, color: miss ? C.text3 : "white", cursor: miss ? "default" : "pointer", border: "none" }}>
-                      <Check size={14} />
-                    </button>
-                  )}
-                  <button onClick={() => rmFree(i)} title="Удалить номер" style={{ width: 26, height: 26, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", background: "transparent", cursor: "pointer", color: C.text3, border: "none" }}>
-                    <X size={14} />
-                  </button>
+            {exts.map((n, i) => (
+              <div key={n.ext} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", background: C.bg2, border: `1px solid ${C.border}`, borderRadius: 8, marginBottom: 6 }}>
+                <div style={{ width: 28, height: 28, borderRadius: "50%", background: C.border, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  <Hash size={13} color={C.text2} />
                 </div>
-              );
-            })}
+                <span style={{ flex: 1, fontSize: 13, fontWeight: 600, fontFamily: "'DM Mono', monospace", color: C.text }}>#{n.ext}</span>
+                <input type="password" value={n.pwd} onChange={(e) => updPwd(i, e.target.value)}
+                  placeholder={n.hasPwd ? "•••••••• сохранён" : "Пароль*"}
+                  style={{ width: 160, padding: "5px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12, fontFamily: "'DM Mono', monospace", color: C.text, outline: "none", background: C.card }} />
+                <button onClick={() => rm(i)} title="Удалить номер" style={{ width: 26, height: 26, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", background: "transparent", cursor: "pointer", color: C.text3, border: "none" }}>
+                  <X size={14} />
+                </button>
+              </div>
+            ))}
+            <div style={{ fontSize: 11.5, color: C.text3, marginTop: 8, lineHeight: 1.4 }}>
+              Изменения сохраняются при нажатии «Сохранить» вверху. Пустое поле пароля = оставить старый.
+            </div>
           </div>
-        )}
-
-        {freeNums.length === 0 && assigned.length === 0 && (
+        ) : (
           <div style={{ padding: "24px 12px", textAlign: "center", color: C.text3 }}>
             <Hash size={20} style={{ marginBottom: 8 }} />
             <div style={{ fontSize: 12.5, color: C.text2, fontWeight: 500 }}>Номера не созданы</div>

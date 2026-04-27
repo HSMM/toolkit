@@ -8,7 +8,8 @@
 import { useEffect, useState } from "react";
 import { Loader2, Video, AlertCircle } from "lucide-react";
 import "@livekit/components-styles";
-import { LiveKitRoom, VideoConference, RoomAudioRenderer } from "@livekit/components-react";
+import { LiveKitRoom } from "@livekit/components-react";
+import { RussianRoomUI } from "@/RoomUI";
 import { C } from "@/styles/tokens";
 import { api, ApiError } from "@/api/client";
 
@@ -117,8 +118,7 @@ export function GuestPage({ token }: { token: string }) {
             style={{ height: "100%", width: "100%" }}
             onDisconnected={() => { setStage({ kind: "form" }); }}
           >
-            <VideoConference />
-            <RoomAudioRenderer />
+            <RussianRoomUI />
           </LiveKitRoom>
         </div>
       </div>

@@ -21,7 +21,80 @@ func NewUsersHandlers(db *pgxpool.Pool) *UsersHandlers { return &UsersHandlers{d
 func (h *UsersHandlers) Routes() http.Handler {
 	r := chi.NewRouter()
 	r.Get("/", h.list)
+	r.Put("/{id}/role", h.setRole)         // body: {"role":"admin"|"user"}
+	r.Put("/{id}/status", h.setStatus)     // body: {"status":"active"|"blocked"}
 	return r
+}
+
+type roleReq struct {
+	Role string `json:"role"`
+}
+type statusReq struct {
+	Status string `json:"status"`
+}
+
+func (h *UsersHandlers) setRole(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_id", "invalid user id")
+		return
+	}
+	var req roleReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	switch req.Role {
+	case "admin":
+		// Берём admin'а из контекста через subject (для granted_by) — но в этом
+		// пакете нет импорта auth; берём id из header x-toolkit-user (выставляется
+		// нашим RequireAuth middleware) — нет, не выставляется.
+		// Простейший вариант: granted_by NULL.
+		_, err = h.db.Exec(r.Context(), `
+			INSERT INTO role_assignment (user_id, role) VALUES ($1, 'admin')
+			ON CONFLICT (user_id, role) DO NOTHING
+		`, id)
+	case "user":
+		// Защита от удаления последнего админа.
+		var adminCount int
+		_ = h.db.QueryRow(r.Context(), `SELECT COUNT(*) FROM role_assignment WHERE role='admin'`).Scan(&adminCount)
+		if adminCount <= 1 {
+			writeErr(w, http.StatusConflict, "last_admin", "нельзя снять права у последнего администратора")
+			return
+		}
+		_, err = h.db.Exec(r.Context(), `DELETE FROM role_assignment WHERE user_id=$1 AND role='admin'`, id)
+	default:
+		writeErr(w, http.StatusBadRequest, "bad_role", "role must be admin or user")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "save_failed", err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *UsersHandlers) setStatus(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_id", "invalid user id")
+		return
+	}
+	var req statusReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	if req.Status != "active" && req.Status != "blocked" {
+		writeErr(w, http.StatusBadRequest, "bad_status", "status must be active or blocked")
+		return
+	}
+	if _, err := h.db.Exec(r.Context(),
+		`UPDATE "user" SET status=$2 WHERE id=$1`, id, req.Status); err != nil {
+		writeErr(w, http.StatusInternalServerError, "save_failed", err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 type userRow struct {

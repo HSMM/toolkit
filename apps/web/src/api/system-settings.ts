@@ -66,3 +66,42 @@ export function useUpdateSmtpConfig() {
     onSuccess: (data) => { qc.setQueryData(["smtp-config"], data); },
   });
 }
+
+// ─── Phone (FreePBX WebRTC) ──────────────────────────────────────────────
+
+export type PhoneExtension = {
+  ext: string;
+  has_password: boolean;
+  assigned_to?: string | null;
+};
+export type PhoneExtensionInput = {
+  ext: string;
+  password?: string;          // пусто → backend сохранит существующий
+  assigned_to?: string | null;
+};
+export type PhoneConfigPublic = {
+  wss_url: string;
+  extensions: PhoneExtension[];
+};
+export type PhoneConfigInput = {
+  wss_url: string;
+  extensions: PhoneExtensionInput[];
+};
+
+export function usePhoneConfig() {
+  return useQuery({
+    queryKey: ["phone-config"],
+    queryFn: ({ signal }) =>
+      api<PhoneConfigPublic>("/api/v1/admin/system-settings/phone", { signal }),
+    staleTime: 30_000,
+  });
+}
+
+export function useUpdatePhoneConfig() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: PhoneConfigInput) =>
+      api<PhoneConfigPublic>("/api/v1/admin/system-settings/phone", { method: "PUT", body: v }),
+    onSuccess: (data) => { qc.setQueryData(["phone-config"], data); },
+  });
+}

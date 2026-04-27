@@ -1,5 +1,5 @@
 // Admin API: только для пользователей с role=admin (бэк защищён RequireRole).
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
 
 export type AdminUser = {
@@ -24,5 +24,23 @@ export function useAdminUsers() {
     queryFn: ({ signal }) =>
       api<{ items: AdminUser[] }>("/api/v1/admin/users", { signal }).then((r) => r.items),
     staleTime: 30_000,
+  });
+}
+
+export function useSetUserRole() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { id: string; role: "admin" | "user" }) =>
+      api<void>(`/api/v1/admin/users/${args.id}/role`, { method: "PUT", body: { role: args.role } }),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ["admin-users"] }); },
+  });
+}
+
+export function useSetUserStatus() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { id: string; status: "active" | "blocked" }) =>
+      api<void>(`/api/v1/admin/users/${args.id}/status`, { method: "PUT", body: { status: args.status } }),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ["admin-users"] }); },
   });
 }

@@ -3,11 +3,8 @@
 // Используется внутри VcsPage (Shell.tsx) после успешного /meetings/{id}/join.
 
 import "@livekit/components-styles";
-import {
-  LiveKitRoom,
-  VideoConference,
-  RoomAudioRenderer,
-} from "@livekit/components-react";
+import { LiveKitRoom } from "@livekit/components-react";
+import { RussianRoomUI } from "@/RoomUI";
 import { useEffect, useState } from "react";
 import { X, Loader2, Check, UserPlus, Circle, Square } from "lucide-react";
 import { C } from "@/styles/tokens";
@@ -113,8 +110,7 @@ export function MeetingRoom({ meeting, isHost, onClose }: Props) {
             style={{ height: "100%", width: "100%" }}
             onDisconnected={close}
           >
-            <VideoConference />
-            <RoomAudioRenderer />
+            <RussianRoomUI />
           </LiveKitRoom>
         )}
 
