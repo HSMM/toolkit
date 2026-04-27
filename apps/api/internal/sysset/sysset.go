@@ -90,6 +90,10 @@ func NewHandlers(db *pgxpool.Pool) *Handlers { return &Handlers{db: db} }
 func (h *Handlers) ReadRoutes() http.Handler {
 	r := chi.NewRouter()
 	r.Get("/modules", h.getModules)
+	// Авторизованный пользователь читает СВОИ SIP-креды (для софтфона). Это
+	// единственный extension, привязанный к нему через assigned_to. Полный
+	// список с паролями всех номеров доступен только админу через WriteRoutes.
+	r.Get("/phone/me", h.getMyPhoneCredentials)
 	return r
 }
 
@@ -202,6 +206,33 @@ func (h *Handlers) putSMTP(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) testSMTP(w http.ResponseWriter, _ *http.Request) {
 	writeErr(w, http.StatusNotImplemented, "not_implemented",
 		"тест-отправка появится позже; сейчас настройки только сохраняются")
+}
+
+// MyPhoneCredentials — то, что нужно браузерному JsSIP-клиенту для регистрации.
+// Возвращается ТОЛЬКО владельцу extension'а (subject.UserID == assigned_to).
+type MyPhoneCredentials struct {
+	WssURL    string `json:"wss_url"`
+	Extension string `json:"extension"`
+	Password  string `json:"password"`
+}
+
+func (h *Handlers) getMyPhoneCredentials(w http.ResponseWriter, r *http.Request) {
+	subj := auth.MustSubject(r.Context())
+	c, err := h.loadPhone(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "load_failed", err.Error())
+		return
+	}
+	uid := subj.UserID.String()
+	for _, e := range c.Extensions {
+		if e.AssignedTo != nil && *e.AssignedTo == uid {
+			writeJSON(w, http.StatusOK, MyPhoneCredentials{
+				WssURL: c.WssURL, Extension: e.Ext, Password: e.Password,
+			})
+			return
+		}
+	}
+	writeErr(w, http.StatusNotFound, "not_assigned", "за пользователем не закреплён extension")
 }
 
 func (h *Handlers) getPhone(w http.ResponseWriter, r *http.Request) {

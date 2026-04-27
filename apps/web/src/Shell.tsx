@@ -43,6 +43,7 @@ import {
   useModuleAccess, useUpdateModuleAccess,
   useSmtpConfig, useUpdateSmtpConfig,
   usePhoneConfig, useUpdatePhoneConfig,
+  useMyPhoneCredentials,
 } from "@/api/system-settings";
 import { useSoftphone, loadSoftphoneConfig, saveSoftphoneConfig } from "@/softphone/useSoftphone";
 import { useSetUserRole, useSetUserStatus } from "@/api/admin";
@@ -541,12 +542,32 @@ function SoftphoneWidget() {
     },
   });
 
-  // Авто-старт UA если есть сохранённая конфигурация (sessionStorage / window).
+  // Тянем креды с бэкенда (extension, привязанный к текущему user'у админом).
+  // Sessionstorage остаётся как локальный override / fallback на dev.
+  const creds = useMyPhoneCredentials();
+
+  // Автостарт. Приоритет: backend creds → sessionStorage. Перезапускаем UA
+  // когда пришли свежие креды (например админ только что изменил пароль).
+  const startedKeyRef = useRef<string>("");
   useEffect(() => {
-    const cfg = loadSoftphoneConfig();
-    if (cfg) phone.start(cfg);
+    let cfg: import("@/softphone/useSoftphone").SoftphoneConfig | null = null;
+    if (creds.data) {
+      cfg = {
+        wssUrl: creds.data.wss_url,
+        extension: creds.data.extension,
+        password: creds.data.password,
+      };
+    } else if (!creds.isLoading) {
+      cfg = loadSoftphoneConfig();
+    }
+    if (!cfg) return;
+    const key = `${cfg.wssUrl}|${cfg.extension}|${cfg.password}`;
+    if (startedKeyRef.current === key) return;
+    startedKeyRef.current = key;
+    saveSoftphoneConfig(cfg);
+    phone.start(cfg);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [creds.data, creds.isLoading]);
 
   // Тикер для таймера активного разговора.
   useEffect(() => {

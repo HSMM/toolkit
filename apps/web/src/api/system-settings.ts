@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api } from "./client";
+import { api, ApiError } from "./client";
 
 export type ModuleAccess = {
   vcs: boolean;
@@ -102,6 +102,33 @@ export function useUpdatePhoneConfig() {
   return useMutation({
     mutationFn: (v: PhoneConfigInput) =>
       api<PhoneConfigPublic>("/api/v1/admin/system-settings/phone", { method: "PUT", body: v }),
-    onSuccess: (data) => { qc.setQueryData(["phone-config"], data); },
+    onSuccess: (data) => {
+      qc.setQueryData(["phone-config"], data);
+      // Креды текущего пользователя могли поменяться (новый extension/password) —
+      // даём SoftphoneWidget шанс перерегистрироваться.
+      void qc.invalidateQueries({ queryKey: ["my-phone-credentials"] });
+    },
+  });
+}
+
+// Креды текущего пользователя для браузерного софтфона. Возвращается 404
+// если за пользователем не закреплён extension — это не ошибка, а нормальное
+// "ещё не настроено" состояние.
+export type MyPhoneCredentials = {
+  wss_url: string;
+  extension: string;
+  password: string;
+};
+export function useMyPhoneCredentials() {
+  return useQuery({
+    queryKey: ["my-phone-credentials"],
+    queryFn: ({ signal }) =>
+      api<MyPhoneCredentials>("/api/v1/system-settings/phone/me", { signal })
+        .catch((e: unknown) => {
+          if (e instanceof ApiError && e.status === 404) return null;
+          throw e;
+        }),
+    staleTime: 60_000,
+    retry: false,
   });
 }
