@@ -4,6 +4,126 @@
 диагностику прод-инцидентов и важные решения, чтобы история была видна не только
 в чате и `git log`.
 
+## 2026-04-27 (вечер) — Заявки на внутренние номера (софтфон)
+
+**Контекст:** после Bitrix-синка все 141 сотрудник появляются в Toolkit, но
+extension у них не привязан. У пользователя без extension'а виджет софтфона
+показывал dev-форму ручного ввода кредов или сообщение «Не настроено» —
+без возможности сообщить админу, что нужен номер.
+
+**Сделано:**
+
+- **ТЗ** в `docs/specs/phone-extension-requests.md` (12 разделов: контекст,
+  предусловия работы софтфона §1.1, user/admin stories, модель данных,
+  API-контракт, WS-события, UI-логика виджета и админ-таба, edge cases,
+  чек-лист приёмки). Зафиксировано: цепочка настройки админом — адрес АТС
+  → внутренние номера → сопоставление user↔extension; фича закрывает
+  только последний шаг.
+
+- **Миграция 000016 `phone_extension_requests`** — таблица с UNIQUE-индексом
+  по `(user_id) WHERE status='pending'` (одна активная заявка на пользователя),
+  индексом по `(status, created_at DESC)` для админского списка, trigger
+  `set_updated_at`. Статусы: `pending / approved / rejected / cancelled`.
+
+- **`internal/phonereq`** — пакет с пользовательскими и админскими эндпоинтами:
+  - `GET    /api/v1/phone/extension-requests/me` — последняя заявка или null.
+  - `POST   /api/v1/phone/extension-requests/` — создать (409 если уже привязан
+    extension или активная заявка).
+  - `DELETE /api/v1/phone/extension-requests/me` — отозвать.
+  - `GET    /api/v1/admin/phone/extension-requests/?status=pending|history|all`
+    — список + `pending_count` для бейджа.
+  - `POST   /api/v1/admin/phone/extension-requests/{id}/approve` — body
+    `{ext, password?}`. Транзакционен с `pg_advisory_xact_lock(hashtext('phone_config'))`,
+    обновляет `system_setting/phone_config.extensions[]` (либо найден свободный
+    ext, либо новый с password), пишет `assigned_to=user_id`.
+  - `POST   /api/v1/admin/phone/extension-requests/{id}/reject` — body
+    `{reason?}`.
+  - WS-события: `phone_extension_request_{created,cancelled}` → admin'ам
+    через `Hub.PublishToRole`; `phone_extension_request_resolved` → заявителю.
+
+- **`internal/ws/hub.go`** — расширен per-role broadcast'ом: `Hub.PublishToRole`
+  + индекс `byRole: role -> connID -> *client`. При WS-upgrade прокидываем
+  `subj.Role` в client. (Hub.Publish и Hub.Broadcast — без изменений.)
+
+- **Frontend `api/phone-requests.ts`** — хуки `useMyExtensionRequest`,
+  `useCreate/CancelExtensionRequest`, `useAdminExtensionRequests`,
+  `useApprove/RejectExtensionRequest`. ApproveOnSuccess инвалидирует
+  `["phone-config"]` и `["my-phone-credentials"]` — у заявителя виджет
+  тут же подцепит новые креды и зарегистрируется в JsSIP.
+
+- **Виджет софтфона (`SoftphoneWidget`)** — переделан state `not_configured`:
+  - dev-форма ввода кредов удалена (sessionStorage-override для разработки
+    остаётся через `window.__TOOLKIT_PHONE__`);
+  - новые ветки в `NotConfiguredPanel`:
+    - extension есть, но `wss_url` пустой → «Софтфон в системе не настроен»
+      (патологический сценарий, см. ТЗ §1.1; виджет НЕ запускает JsSIP с битыми
+      кредами);
+    - заявка `pending` → карточка со временем подачи + кнопка «Отозвать»;
+    - заявка `rejected` → причина отказа (если указана) + «Запросить ещё раз»;
+    - иначе → CTA «Запросить номер» + опциональное поле комментария (≤500).
+  - WS-обработчик `phone_extension_request_resolved`: на approve → push
+    «Внутренний номер назначен: <ext>» + refetch creds; на reject → push
+    с причиной + refetch заявки.
+
+- **Админский таб «Заявки на номера»** в Настройки → Телефония — третья вкладка
+  рядом с WebRTC/AMI, с бейджем pending-счётчика. Внутри:
+  - переключатель **Активные / История**;
+  - карточки заявок с ФИО / email / отделом / комментарием / статусом;
+  - диалог approve: радио «Из свободных» (dropdown extension'ов без
+    `assigned_to`) / «Создать новый» (поля ext+password); warning-баннер
+    если `phone_config.wss_url` пуст — «после назначения софтфон у пользователя
+    не заработает, пока вы не заполните WSS»;
+  - диалог reject с textarea причины (≤500).
+
+- **`AdminPhoneRequestsListener`** — невидимый компонент в Shell.tsx,
+  монтируется только для роли `admin`. Подписан на
+  `phone_extension_request_{created,cancelled}`: на create — push в
+  NotificationBell (он же дублирует в OS notification center когда вкладка
+  не в фокусе) + invalidate `["admin-extension-requests"]`.
+
+- **`go.mod`/`go.sum`** — `go mod tidy` вытащил недостающие транзитивные deps
+  minio (go-ini, klauspost/compress и пр.), которых не хватало в go.sum
+  при чистом build'е. Затянули.
+
+**Деплой (2026-04-27 13:54-13:58 UTC):**
+
+- Backup БД → MinIO `backups/toolkit-20260427T135406Z.dump` (245 KiB).
+- Миграция up: `schema_migrations.version` 15 → 16, dirty=false.
+- `docker compose ... build api worker web-build` — все три образа собрались
+  чисто (Go 1.23, Vite 5, без warning'ов).
+- `docker compose ... up -d api worker web web-build` — сервисы переподнялись
+  на новые образы. Postgres был восстановлен compose'ом во время
+  `migrate run` (uptime сбросился, healthy за 35с); api/worker
+  переподключились автоматически через pgx pool.
+- Smoke: `curl /healthz` → 200, `curl /api/v1/phone/extension-requests/me`
+  без auth → 401, `curl /api/v1/admin/phone/extension-requests/` без auth → 401.
+  Worker-логи: 2 job kind'а зарегистрированы (`transcribe_recording`,
+  `send_meeting_invitation`) — новых job'ов фича не вводит.
+
+**Что НЕ сделано (оставлено на потом):**
+
+- **Email-уведомление** админу при создании заявки и пользователю при
+  approve/reject — сейчас только WS push + OS-нотификация. Email мог бы
+  ловить случаи, когда админ оффлайн неделями.
+- **Audit-log** для approve/reject — данные в БД (`resolved_by`, `resolved_at`)
+  есть, отдельной записи в `audit_log` пока нет; добавим вместе с UI
+  audit-log в Настройках.
+- **Фоновая чистка отозванных/отклонённых заявок** — не нужна на старте,
+  но если за полгода накопится мусор — добавим retention.
+- **`GET /admin/phone/extension-requests` пагинация** — limit/offset работают,
+  но UI пока не использует (показываем первые 50). Если pending перевалит
+  за 50, добавим инфинит-скролл.
+
+**Ветка/коммит:** `phone-extension-requests` (`fbaf3e2`), пушнута в origin.
+Прод сейчас на этой ветке (не на main); merge в main и удаление ветки —
+отдельным шагом.
+
+**Откат, если понадобится:**
+- `git checkout main && docker compose ... up -d --build api worker web web-build`
+  — старые образы остаются в кеше Docker, восстановятся за ~30с.
+- Down-миграция: `docker compose run --rm migrate migrate --cmd=down --n=1`
+  (DROP TABLE phone_extension_request).
+
 ## 2026-04-27 (день) — Email-приглашения на встречи + multi-select участников
 
 **Контекст:** после Bitrix-синка (предыдущая итерация) в БД появилось 141
