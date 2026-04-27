@@ -1,4 +1,4 @@
-// API клиент для модуля /api/v1/meetings (E5).
+// API клиент для модуля /api/v1/meetings.
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, apiFetch } from "./client";
 

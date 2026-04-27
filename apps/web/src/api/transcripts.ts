@@ -1,5 +1,5 @@
 // Клиент API для модуля транскрибации.
-// Соответствует apps/api/internal/transcription/handlers.go (E7).
+// Соответствует apps/api/internal/transcription/handlers.go.
 
 import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";

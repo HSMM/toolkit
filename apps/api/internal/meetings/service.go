@@ -1,11 +1,10 @@
-// Package meetings — модуль ВКС (E5): создание/список/просмотр встречи,
-// выпуск LiveKit-токенов на join, фиксация participant-входов/выходов,
-// принудительное завершение комнаты.
+// Package meetings — модуль ВКС: создание/список/просмотр встречи, выпуск
+// LiveKit-токенов на join, фиксация входов/выходов participant'ов, гостевые
+// ссылки с lobby (admit/reject), запись (composite video MP4 + audio OGG)
+// и принудительное завершение комнаты.
 //
-// MVP scope (E5.1): только сотрудники (без гостей по email-ссылкам), без
-// записи через Egress (E5.2 добавит). Каждая встреча в LiveKit живёт пока
-// есть участники (auto-create при первом join, auto-delete по empty_timeout
-// из livekit.yaml). Принудительный End — Twirp DeleteRoom.
+// Каждая встреча в LiveKit живёт пока есть участники (auto-create при
+// первом join, auto-delete по empty_timeout из livekit.yaml).
 package meetings
 
 import (
@@ -34,7 +33,7 @@ type Service struct {
 	lk *livekit.Client
 	// publicWS — wss://… для браузера (передаётся клиенту).
 	publicWS string
-	// recDeps — настроены в server.go через AttachRecording (E5.2). Если nil,
+	// recDeps — настроены в server.go через AttachRecording. Если nil,
 	// все методы записи возвращают ErrRecordingNotConfigured.
 	recDeps *RecordingDeps
 	// log — для асинхронных операций (auto-start recording, OnEgressEnded
@@ -355,7 +354,7 @@ func (s *Service) End(ctx context.Context, subj *auth.Subject, meetingID uuid.UU
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// guest access (E5.3): публичная ссылка для подключения без сессии Toolkit
+// guest access: публичная ссылка для подключения без сессии Toolkit
 // ─────────────────────────────────────────────────────────────────────────
 
 // GuestMeetingInfo — публичный срез данных встречи для landing-страницы гостя.
@@ -669,8 +668,8 @@ func insertParticipant(ctx context.Context, tx pgx.Tx, meetingID, userID uuid.UU
 	return err
 }
 
-// canViewMeeting — minimal MVP RBAC: admin, создатель, любой participant.
-// E8 заменит на Authz матрицу из ТЗ 4.1.
+// canViewMeeting — простой RBAC: admin, создатель встречи или любой
+// её participant. Полная Authz-матрица из ТЗ 4.1 — отдельной задачей.
 func canViewMeeting(subj *auth.Subject, m *Meeting, parts []*Participant) bool {
 	if subj.Role == auth.RoleAdmin || subj.UserID == m.CreatedBy {
 		return true

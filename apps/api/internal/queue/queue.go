@@ -1,5 +1,5 @@
 // Package queue is a Postgres-backed job queue using FOR UPDATE SKIP LOCKED.
-// Reasoning: ТЗ MVP scale (≤100 users, ≤50 concurrent calls) is well within
+// Reasoning: spec scale (≤100 users, ≤50 concurrent calls) is well within
 // PG queue throughput; one less moving part than a Redis/RabbitMQ broker.
 package queue
 

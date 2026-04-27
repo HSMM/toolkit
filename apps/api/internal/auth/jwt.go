@@ -8,7 +8,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// AccessTokenTTL is the lifetime of issued JWT access tokens (ТЗ 5.2.1).
+// AccessTokenTTL is the lifetime of issued JWT access tokens (per spec).
 const AccessTokenTTL = 15 * time.Minute
 
 // AccessClaims is the payload of a Toolkit JWT access token. We deliberately

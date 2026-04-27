@@ -53,7 +53,7 @@ func WithReason() func(*Decision) { return func(d *Decision) { d.RequiresReason 
 func WithNotify() func(*Decision) { return func(d *Decision) { d.NotifyOwner = true } }
 
 // Authz checks fine-grained access to recordings/transcripts/meetings.
-// Implements the matrix in ТЗ MVP раздел 4.1.
+// Implements the matrix in spec
 type Authz struct {
 	pool *pgxpool.Pool
 }

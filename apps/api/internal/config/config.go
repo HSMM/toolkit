@@ -39,7 +39,7 @@ type Config struct {
 	GigaAMMaxRetries      int
 	GigaAMConcurrentLimit int
 
-	// LiveKit (E5)
+	// LiveKit
 	LiveKitAPIKey    string // shared secret pair (mint tokens, sign Twirp calls)
 	LiveKitAPISecret string
 	LiveKitURL       string // internal Twirp URL (api → livekit), напр. http://livekit:7880

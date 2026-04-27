@@ -2,13 +2,10 @@
 //
 // Layout:
 //   - /healthz, /readyz, /version    — health (no auth)
-//   - /oauth/*                       — Bitrix24 OAuth flow (no auth, see E1)
+//   - /oauth/*                       — Bitrix24 OAuth flow (no auth)
 //   - /api/v1/*                      — JSON REST API (RequireAuth)
 //   - /api/v1/ws                     — WebSocket events (RequireAuth)
 //   - /admin/*                       — administrative endpoints (RequireAuth + RequireRole(admin))
-//
-// All concrete handlers live in their domain packages and are wired here as
-// they land (E1.x users/auth, E2.x sync, E3.x base, E5/E6/E7 modules, E8 admin).
 package server
 
 import (
@@ -54,7 +51,7 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 	hub := ws.NewHub(logger)
 	oauthHandlers := oauthhandlers.New(cfg, pool, logger, jwtIssuer)
 
-	// LiveKit + meetings (E5).
+	// LiveKit + meetings.
 	var (
 		meetingsHandlers *meetings.Handlers
 		meetingsService  *meetings.Service
@@ -80,7 +77,7 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 		}
 	}
 
-	// Storage + queue + transcription handlers (E7).
+	// Storage + queue + transcription handlers.
 	// MinIO connect non-fatal: модуль /transcripts отдаст 503 если недоступен.
 	var transcriptionHandlers *transcription.Handlers
 	storeClient, sErr := storage.New(ctx, storage.Config{
@@ -173,15 +170,12 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 
 			r.Get("/me", handleMe(pool))
 
-			// WebSocket events (E3.3).
+			// WebSocket events.
 			r.Mount("/ws", ws.NewHandler(hub, cfg.AllowedCORSOrigins))
 
-			// Транскрибация (E7).
 			if transcriptionHandlers != nil {
 				r.Mount("/transcripts", transcriptionHandlers.Routes())
 			}
-
-			// ВКС (E5).
 			if meetingsHandlers != nil {
 				r.Mount("/meetings", meetingsHandlers.Routes())
 			}
@@ -202,13 +196,13 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 		})
 	})
 
-	// --- Admin-only endpoints (E8) ---
+	// --- Admin-only endpoints ---
 	r.Route("/admin", func(r chi.Router) {
 		r.Use(middleware.RequireAuth(jwtIssuer, subjectLoader, logger))
 		r.Use(middleware.RequireRole(auth.RoleAdmin))
 		r.Use(middleware.RateLimitByUser(cfg.RateLimitUserPerMin, time.Minute))
 
-		r.Get("/queue/stats", stubHandler("E3.4 admin: queue stats — added later"))
+		r.Get("/queue/stats", stubHandler("queue stats endpoint not implemented yet"))
 		r.Mount("/users", admin.NewUsersHandlers(pool).Routes())
 	})
 

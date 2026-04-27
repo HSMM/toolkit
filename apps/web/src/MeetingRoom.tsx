@@ -1,9 +1,6 @@
-// MeetingRoom — LiveKit-комната, обёрнутая в дефолтный pre-built UI.
+// MeetingRoom — LiveKit-комната, обёрнутая в дефолтный pre-built UI
+// (VideoConference: видео-плитки + контролы + ChatToggle).
 // Используется внутри VcsPage (Shell.tsx) после успешного /meetings/{id}/join.
-//
-// MVP: дефолтный VideoConference layout (видео-плитки + контролы + ChatToggle).
-// Никаких кастомизаций, чтобы не отвлекаться от пайплайна. Кастомный layout
-// (custom controls, sidebar with participants) — отдельная итерация E5.x.
 
 import "@livekit/components-styles";
 import {

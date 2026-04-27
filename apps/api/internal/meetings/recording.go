@@ -1,18 +1,14 @@
 package meetings
 
-// Recording-логика встречи (E5.2, composite-pivot v2):
-// - Параллельно стартуем ДВА RoomCompositeEgress'а на встречу:
+// Recording-логика встречи: параллельно стартуем ДВА composite-egress'а:
 //     • видео+аудио (MP4) → meeting.current_egress_id        — для просмотра
 //     • только аудио (OGG/Opus) → meeting.current_audio_egress_id — для GigaAM
-// - host жмёт Start → оба egress; meeting.recording_active=true.
-// - host жмёт Stop  → StopEgress на оба; recording_active=false.
-// - egress_ended webhook идёт по каждому отдельно. Распознаём по тому, в какой
-//   из двух колонок meeting лежит этот egress_id, и создаём соответствующую
-//   recording-row:
-//     • видео → kind='meeting_composite', mime='video/mp4', no transcribe
-//     • аудио → kind='meeting_audio',     mime='audio/ogg', enqueue transcribe
-//
-// Per-track для каждого участника откладывается до решения по диаризации.
+// host жмёт Start → оба egress; recording_active=true.
+// host жмёт Stop  → StopEgress на оба; recording_active=false.
+// egress_ended webhook идёт по каждому отдельно: распознаём по тому, в какой
+// из двух колонок meeting лежит этот egress_id, и создаём recording-row
+// нужного типа (meeting_composite | meeting_audio). Транскрипцию ставим
+// в очередь только для аудио-дорожки.
 
 import (
 	"bytes"

@@ -33,7 +33,7 @@ func defaults() ModuleAccess {
 
 // SMTPConfig — параметры подключения к корпоративному SMTP. Используется
 // почтовыми уведомлениями (приглашения на встречи, GDPR-отчёты, алерты).
-// Реальная отправка пока не реализована — тест-кнопка возвращает 501.
+// Реальная отправка пока не реализована — тест-эндпоинт возвращает 501.
 type SMTPConfig struct {
 	Host       string `json:"host"`
 	Port       int    `json:"port"`
@@ -173,10 +173,10 @@ func (h *Handlers) putSMTP(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// testSMTP — заглушка. Реальная отправка появится с E8.x (email-уведомления).
+// testSMTP — заглушка до полноценного email-пайплайна.
 func (h *Handlers) testSMTP(w http.ResponseWriter, _ *http.Request) {
 	writeErr(w, http.StatusNotImplemented, "not_implemented",
-		"тест-отправка появится с email-уведомлениями (E8.x). Сейчас настройки только сохраняются")
+		"тест-отправка появится позже; сейчас настройки только сохраняются")
 }
 
 func (h *Handlers) loadSMTP(ctx context.Context) (SMTPConfig, error) {

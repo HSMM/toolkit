@@ -108,7 +108,7 @@ func (h *Handlers) get(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "get_failed", err.Error())
 		return
 	}
-	// MVP-проверка доступа: владелец upload'а или admin.
+	// Проверка доступа: владелец upload'а или admin.
 	if !subj.IsAdmin() && view.UploadedBy != subj.UserID {
 		writeErr(w, http.StatusForbidden, "forbidden", "")
 		return

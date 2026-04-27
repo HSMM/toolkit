@@ -1,6 +1,6 @@
 // Package worker is the entry point of the `toolkit worker` mode.
 // Wires DB pool, job queue, MinIO storage, GigaAM client; регистрирует
-// handlers очереди по доменам (E5/E7/E10).
+// доменные handlers очереди.
 package worker
 
 import (
@@ -27,7 +27,7 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 	q := queue.New(pool)
 	registry := queue.NewRegistry()
 
-	// Транскрибация (E7.3 — для пользовательских загрузок; E7.4 для встреч добавится отдельно).
+	// Транскрибация (handler kind = transcribe_recording).
 	if storeClient, sErr := storage.New(ctx, storage.Config{
 		Endpoint:  cfg.MinioEndpoint,
 		AccessKey: cfg.MinioAccessKey,
@@ -53,11 +53,6 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 			registry.Register(transcription.JobKindTranscribeRecording, tw.Handle)
 		}
 	}
-
-	// Прочие handlers — регистрируются по мере появления:
-	//   E2.4: registry.Register("sync_users_bitrix24", ...)
-	//   E5.10: registry.Register("import_cdr_freepbx", ...)
-	//   E10.1: registry.Register("send_email", ...)
 
 	logger.Info("worker handlers registered", "count", len(registry.Kinds()), "kinds", registry.Kinds())
 

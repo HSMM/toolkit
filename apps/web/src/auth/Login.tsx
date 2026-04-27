@@ -1,7 +1,7 @@
 // Страница логина. Полный экран — только до первой авторизации,
 // дальше пользователь живёт под AppLayout.
 //
-// CTA "Войти через Bitrix24" → window.location → /oauth/login (E1.2 на бэке).
+// CTA "Войти через Bitrix24" → window.location → /oauth/login.
 
 import { useAuth } from "./AuthContext";
 import { C, LOGO_URL } from "@/styles/tokens";

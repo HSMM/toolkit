@@ -18,7 +18,7 @@ import (
 // (HttpOnly Secure cookie). 32 bytes → 64 hex chars, sufficient entropy.
 const RefreshTokenBytes = 32
 
-// RefreshTokenInactivityTTL — sliding TTL of refresh tokens (ТЗ 5.2.1, 30 days).
+// RefreshTokenInactivityTTL — sliding TTL of refresh tokens (per spec).
 // Configurable by admin per ТЗ 3.1.
 const RefreshTokenInactivityTTL = 30 * 24 * time.Hour
 
@@ -124,7 +124,7 @@ func (s *SessionStore) Revoke(ctx context.Context, id uuid.UUID) error {
 }
 
 // RevokeAllForUser revokes every active session of a user. Used by admin
-// "force-logout" (ТЗ 3.3.1) and on user-block (ТЗ 3.1).
+// "force-logout" (per spec) and on user-block (per spec).
 func (s *SessionStore) RevokeAllForUser(ctx context.Context, userID uuid.UUID) error {
 	_, err := s.pool.Exec(ctx,
 		`UPDATE session SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL`,

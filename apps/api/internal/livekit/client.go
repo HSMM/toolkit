@@ -1,11 +1,11 @@
 // Package livekit — тонкий клиент для LiveKit OSS:
-//   - MintJoinToken / MintAdminToken — JWT HS256 с грантами video.* (без зависимости от server-sdk-go)
+//   - MintJoinToken — JWT HS256 access-токен для участника
 //   - EndRoom — Twirp DeleteRoom
+//   - StartRoomCompositeEgress / StartRoomCompositeAudioEgress / StopEgress — запись
+//   - VerifyAndParseWebhook — приём событий комнат и egress
 //
-// Полный SDK не подключаем намеренно: для текущего MVP (создать комнату при
-// первом подключении, выдать токен, принудительно завершить) хватает 2 RPC.
-// Если позже понадобится UpdateParticipant / SendData / Egress API — можно
-// либо расширить этот клиент, либо подключить github.com/livekit/server-sdk-go.
+// Полный server-sdk-go не подключаем — нашего набора Twirp вызовов достаточно,
+// и зависимостей сильно меньше.
 package livekit
 
 import (
@@ -181,9 +181,10 @@ func (c *Client) ListParticipants(ctx context.Context, room string) ([]LKPartici
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Egress (E5.2): per-participant audio-only запись с заливкой в S3 (MinIO).
-// Используется ParticipantEgress, чтобы получить ОДИН файл на участника
-// со всеми его аудио-треками микшированными.
+// Egress: запись комнаты в S3 (MinIO). Доступны два варианта:
+//   - StartRoomCompositeEgress       → MP4 (видео+аудио grid)
+//   - StartRoomCompositeAudioEgress  → OGG (только смикшированное аудио)
+//   - StartParticipantAudioEgress    → OGG, отдельный файл на участника
 // ─────────────────────────────────────────────────────────────────────────
 
 // S3Config описывает S3-совместимое хранилище (MinIO в нашем случае).
@@ -229,7 +230,7 @@ func (c *Client) StartParticipantAudioEgress(ctx context.Context, room, identity
 }
 
 // StartRoomCompositeEgress — одна запись на всю комнату: видео-grid + микшированное аудио,
-// MP4 в S3. Используется для «полной» записи встречи (E5.2 pivot, без per-track).
+// MP4 в S3. Используется для «полной» записи встречи.
 //
 // layout — "grid" (по умолчанию), "speaker", "single-speaker" — см. LiveKit docs.
 func (c *Client) StartRoomCompositeEgress(ctx context.Context, room, layout, filepath string, s3 S3Config) (string, error) {

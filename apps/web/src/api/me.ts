@@ -1,5 +1,5 @@
-// Хелперы для эндпоинтов /api/v1. По мере расширения схемы (E2/E5/E6/E7/E8)
-// сюда добавляются вызовы; типы — из сгенерированного schema.gen.ts (`npm run gen:api`).
+// Хелперы для эндпоинтов /api/v1. По мере расширения схемы сюда
+// добавляются вызовы; типы — из сгенерированного schema.gen.ts (`npm run gen:api`).
 
 import { useQuery } from "@tanstack/react-query";
 import { api } from "./client";

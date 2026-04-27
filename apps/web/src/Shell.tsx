@@ -8,8 +8,9 @@
 //   - LOGO_URL → импорт из styles/tokens (плейсхолдер для open source)
 //   - кнопка «Выйти» в ProfileModal → useAuth().logout()
 //
-// Остальные данные (meetings, transcripts, exts) — пока локальные mock'и:
-// будут заменены на API-вызовы по мере появления эндпоинтов в эпиках E5–E8.
+// Большая часть данных приходит из API; локальные state'ы — для UX-моментов
+// (открытые модалки, выбранные элементы, фильтры) и тех модулей, под
+// которые ещё нет endpoint'ов.
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import {
@@ -51,9 +52,8 @@ import {
 
 // ──────────────────────────────────────────────────────────────────────────
 // MockUser — view-model для ProfileModal и сайдбара (адаптер над Me и
-// /admin/users). Назван «Mock» исторически: на старте эпика E4 это были
-// фиктивные данные, сейчас все поля заполняются из реального API. Тип
-// сохраняем чтобы не править весь UI разом.
+// /admin/users). Назван «Mock» исторически — сейчас все поля заполняются
+// из реального API; тип сохраняем чтобы не править весь UI разом.
 // ──────────────────────────────────────────────────────────────────────────
 
 type MockUser = {
@@ -856,7 +856,7 @@ function VcsPage({ me, onOpenTranscriptions }: { me: Me; onOpenTranscriptions?: 
         ) : meetings.length === 0 ? (
           <Empty Icon={Video}
             title="Нет встреч"
-            sub="Создайте встречу сейчас или запланируйте на будущее. Приглашение коллег появится после E2.4 (Bitrix24-синхронизация)."
+            sub="Создайте встречу сейчас или запланируйте на будущее. Приглашение коллег появится после синхронизации пользователей с Bitrix24."
             action={<button onClick={() => openModal("instant")} style={{ display: "inline-flex", alignItems: "center", gap: 7, background: C.acc, color: "white", padding: "9px 18px", borderRadius: 8, fontWeight: 500, fontSize: 14, border: "none", cursor: "pointer", fontFamily: "inherit" }}><Video size={15} />Создать встречу</button>}
           />
         ) : (
@@ -963,7 +963,7 @@ function VcsPage({ me, onOpenTranscriptions }: { me: Me; onOpenTranscriptions?: 
                 </div>
               )}
               {[
-                { v: record, set: setRecord, t: "Запись встречи", d: "Композитная запись (mp4) сохраняется в MinIO. Включается на host'е через LiveKit Egress (E5.2)." },
+                { v: record, set: setRecord, t: "Запись встречи", d: "Композитная запись (видео+аудио MP4 + отдельная аудио-дорожка для транскрибации) сохраняется в MinIO." },
               ].map((opt, i) => (
                 <label key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", border: `1px solid ${opt.v ? C.acc : C.border}`, borderRadius: 10, cursor: "pointer", background: opt.v ? C.accBg : C.card, marginBottom: 8 }}>
                   <div style={{ position: "relative", width: 36, height: 20, background: opt.v ? C.acc : C.border2, borderRadius: 10, flexShrink: 0 }}>
@@ -977,7 +977,7 @@ function VcsPage({ me, onOpenTranscriptions }: { me: Me; onOpenTranscriptions?: 
                 </label>
               ))}
               <div style={{ marginTop: 12, padding: "10px 12px", background: C.warnBg, border: `1px solid ${C.warnBrd}`, borderRadius: 8, fontSize: 12, color: C.warnTx, lineHeight: 1.4 }}>
-                В этой версии ссылка на встречу — только у создателя. Приглашение коллег по email и поиск участников появятся после E2.4 (синхронизация пользователей с Bitrix24).
+                В этой версии ссылка на встречу — только у создателя. Приглашение коллег по email и поиск участников появятся после синхронизации пользователей с Bitrix24.
               </div>
             </div>
             <div style={{ padding: "14px 22px", borderTop: `1px solid ${C.border}`, display: "flex", gap: 10, justifyContent: "flex-end", background: C.card, flexShrink: 0 }}>
@@ -997,7 +997,7 @@ function VcsPage({ me, onOpenTranscriptions }: { me: Me; onOpenTranscriptions?: 
 }
 
 // ──────────────────────────────────────────────────────────────────────────
-// TRANSCRIPTION (E7) — viewer с плеером, диалог-бабблами, аналитикой и AI
+// TRANSCRIPTION — viewer с плеером, диалог-бабблами, аналитикой и AI
 // ──────────────────────────────────────────────────────────────────────────
 
 const ALLOWED_AUDIO = [".wav", ".ogg", ".mp3", ".m4a", ".mp4", ".wma", ".flac", ".aac"];
@@ -1661,7 +1661,7 @@ function AnalyticsPage() {
   const [tab, setTab] = useState<"monitoring" | "metrics">("monitoring");
   const [range, setRange] = useState("today");
 
-  // Состояния extensions из FreePBX AMI (E5+) — пока endpoint не реализован,
+  // Состояния extensions из FreePBX AMI — пока endpoint не реализован,
   // массив пустой, и шаблон показывает Empty-state.
   const [exts, setExts] = useState<ExtRow[]>([]);
 
@@ -1698,7 +1698,7 @@ function AnalyticsPage() {
   const dnd     = exts.filter((e) => e.state === "dnd").length;
   const load    = online ? Math.round(busy / online * 100) : 0;
 
-  // Очереди FreePBX (E5+) и метрики операторов (E8+ admin) — придут с backend.
+  // Очереди FreePBX и метрики операторов — придут с backend позже.
   const queues: { name: string; waiting: number; agents: number; answered: number; avgWait: number; sla: number }[] = [];
   const metrics: { name: string; av: string; col: string; answered: number; outgoing: number; missed: number; avgDur: number; totalTalk: number; sla: number }[] = [];
 
@@ -2142,7 +2142,7 @@ function PhoneAmiTab() {
   const save = () => { setSaved(true); setTimeout(() => setSaved(false), 2500); };
   const test = () => {
     setTestSt("checking");
-    setTimeout(() => setTestSt("fail"), 1400); // mock — реальное подключение в E6
+    setTimeout(() => setTestSt("fail"), 1400); // mock — реальная проверка появится с интеграцией AMI
   };
 
   return (
@@ -2190,7 +2190,7 @@ function PhoneAmiTab() {
         </button>
         {testSt === "fail" && (
           <div style={{ marginTop: 10, fontSize: 12, color: C.text2, lineHeight: 1.5 }}>
-            Заглушка теста: реальная проверка появится в E6 (Softphone). Сейчас интеграция AMI не реализована — только UI настроек.
+            Заглушка теста: реальная проверка появится после подключения AMI. Сейчас сохраняется только конфигурация.
           </div>
         )}
       </SettingsSection>
@@ -2488,7 +2488,7 @@ function SmtpSettingsPage({ hideHeader }: { hideHeader?: boolean } = {}) {
         )}
 
         <div style={{ marginBottom: 16, padding: "10px 12px", background: C.warnBg, border: `1px solid ${C.warnBrd}`, borderRadius: 8, fontSize: 12, color: C.warnTx, lineHeight: 1.5 }}>
-          Настройки сохраняются в БД, но автоматическая отправка писем (приглашения, GDPR-отчёты) появится с E8.x — пока ни один сценарий их не использует.
+          Настройки сохраняются в БД. Автоматическая отправка писем (приглашения, GDPR-отчёты) появится позже — пока ни один сценарий её не использует.
         </div>
 
         <SettingsSection title="Сервер SMTP" sub="Параметры подключения к почтовому серверу">
@@ -2520,7 +2520,7 @@ function SmtpSettingsPage({ hideHeader }: { hideHeader?: boolean } = {}) {
           <Field label="Email отправителя"><input value={form.from_email} onChange={(e) => set("from_email", e.target.value)} placeholder="noreply@example.com" style={{ ...inp(), fontFamily: "'DM Mono', monospace" }} /></Field>
         </SettingsSection>
 
-        <SettingsSection title="Проверка" sub="Тестовая отправка появится вместе с email-уведомлениями (E8.x)">
+        <SettingsSection title="Проверка" sub="Тестовая отправка появится вместе с email-уведомлениями">
           <button disabled title="Функция тестовой отправки появится позже"
             style={{ padding: "9px 14px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg3, color: C.text3, fontSize: 13, fontWeight: 500, cursor: "default", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6 }}>
             <Send size={14} />Отправить тест
@@ -2687,14 +2687,14 @@ function ProfileModal({ onClose, me }: { onClose: () => void; me: MockUser }) {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
-// STUB pages (Мессенджеры / Контакты / Хелпдэск — не в MVP)
+// STUB pages (Мессенджеры / Контакты / Хелпдэск — пока не реализованы)
 // ──────────────────────────────────────────────────────────────────────────
 
 function StubPage({ page }: { page: "messengers" | "contacts" | "helpdesk" }) {
   const M = {
-    messengers: { Icon: MessageSquare, col: C.ok,   bg: C.okBg,   title: "Мессенджеры", desc: "Омниканальный inbox: WhatsApp, Telegram и другие каналы. Также внутренний чат сотрудников.", stage: "Этап 2" },
-    contacts:   { Icon: Users,         col: C.purp, bg: C.purpBg, title: "Контакты",    desc: "Справочник коллег с оргструктурой и внешних контрагентов, синхронизация с Bitrix24.",        stage: "Этап 2" },
-    helpdesk:   { Icon: HelpCircle,    col: C.warn, bg: C.warnBg, title: "Хелпдэск",    desc: "Система тикетов для ИТ, АХО, HR. SLA-политики, назначение, история обращений, база знаний.", stage: "Этап 2" },
+    messengers: { Icon: MessageSquare, col: C.ok,   bg: C.okBg,   title: "Мессенджеры", desc: "Омниканальный inbox: WhatsApp, Telegram и другие каналы. Также внутренний чат сотрудников.", stage: "В разработке" },
+    contacts:   { Icon: Users,         col: C.purp, bg: C.purpBg, title: "Контакты",    desc: "Справочник коллег с оргструктурой и внешних контрагентов, синхронизация с Bitrix24.",        stage: "В разработке" },
+    helpdesk:   { Icon: HelpCircle,    col: C.warn, bg: C.warnBg, title: "Хелпдэск",    desc: "Система тикетов для ИТ, АХО, HR. SLA-политики, назначение, история обращений, база знаний.", stage: "В разработке" },
   } as const;
   const m = M[page];
   return (
@@ -2705,7 +2705,7 @@ function StubPage({ page }: { page: "messengers" | "contacts" | "helpdesk" }) {
         </div>
         <h2 style={{ margin: "0 0 10px", fontSize: 20, fontWeight: 600, color: C.text }}>{m.title}</h2>
         <p style={{ margin: "0 0 20px", fontSize: 14, color: C.text2, lineHeight: 1.65 }}>{m.desc}</p>
-        <Bdg v="warn">В разработке · {m.stage}</Bdg>
+        <Bdg v="warn">{m.stage}</Bdg>
       </div>
     </div>
   );

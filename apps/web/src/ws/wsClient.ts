@@ -1,5 +1,5 @@
 // WebSocket-клиент для /api/v1/ws.
-// Соответствует серверному hub'у из apps/api/internal/ws/hub.go (E3.3).
+// Соответствует серверному hub'у из apps/api/internal/ws/hub.go.
 //
 // - Auth: JWT передаётся в Sec-WebSocket-Protocol (нестандартно, но единственный
 //   способ доставить bearer-токен через WS-upgrade без cookie). Сервер ожидает
