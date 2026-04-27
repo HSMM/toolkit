@@ -217,14 +217,20 @@ func (s *Service) OnEgressEnded(ctx context.Context, info *livekit.EgressInfo) e
 		return err
 	}
 
-	if fr == nil || fr.Filename == "" {
+	// Без этого guard LiveKit для прерванного egress'а (например пользователь
+	// нажал «Стоп» до того как Chrome успел подняться) присылает webhook с
+	// заполненным template-filename но size=0; мы вставляли row, UI показывал
+	// «скачать», запрос падал с 500 в http.ServeContent.
+	var size int64
+	if fr != nil {
+		size = fr.SizeBytes()
+	}
+	if info.Status != "EGRESS_COMPLETE" || fr == nil || fr.Filename == "" || size == 0 {
 		if err := tx.Commit(ctx); err != nil {
 			return err
 		}
-		// Не возвращаем ошибку — иначе LiveKit будет ретраить webhook
-		// (мы уже зачистили pointer'ы). Просто логируем.
-		s.logf("egress %s ended without file (status=%s, error=%s)",
-			info.EgressID, info.Status, info.Error)
+		s.logf("egress %s skipped (status=%s, error=%q, size=%d)",
+			info.EgressID, info.Status, info.Error, size)
 		return nil
 	}
 
