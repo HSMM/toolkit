@@ -214,6 +214,8 @@ firewall после DNAT.
 - ✅ **Авторизация** — OAuth Bitrix24, JWT (HS256, 15 мин) + refresh-сессии, RBAC (admin / user / контекстная manager).
 - ✅ **Синхронизация пользователей с Bitrix24** — manual через UI, фильтр `active+employee`, исключение экстранета, soft-deactivate отсутствующих, реактивация вернувшихся, OAuth refresh через `oauth.bitrix.info`.
 - ✅ **Видеоконференции** — LiveKit-комнаты, гостевые ссылки с lobby (admit/reject), composite-запись (видео MP4 + audio OGG), скачивание файлов, авто-транскрибация audio-дорожки, custom RU-UI комнаты, guard от прерванных egress'ов.
+- ✅ **Приглашение участников встречи** — multi-select сотрудников из синхронизированной таблицы `user` (поиск по имени/email/отделу) + email-приглашения внешним адресатам со ссылкой на guest-вход (HTML-письма через SMTP, асинхронная отправка через job-очередь).
+- ✅ **Email-пайплайн** — SMTP-сендер с поддержкой SSL/STARTTLS/none, конфиг из Settings → SMTP подгружается на лету. Используется для приглашений на встречи; готов к подключению других уведомлений.
 - ✅ **Транскрибация** — GigaAM ASR через polling, viewer с диалогом по каналам, аналитика, экспорт TXT, ручная загрузка аудио.
 - ✅ **Софтфон (WebRTC)** — JsSIP-клиент к FreePBX (WSS), исходящие/входящие, mute/hold/dial-pad, popup + OS-нотификация на входящий, креды подтягиваются с бэкенда (extension, привязанный админом к user'у).
 - ✅ **Настройки системы** — все 4 раздела с реальной персистенцией: Пользователи (роли/блокировка/Bitrix-синк), Доступ к модулям, Телефония (WebRTC + AMI), SMTP. Доступ к модулям фильтрует NAV для не-админа.
@@ -228,8 +230,7 @@ firewall после DNAT.
 - ❌ **Политики записи и retention UI** — backend ENUM в схеме есть, админский UI для редактирования нет.
 - ❌ **GDPR-запросы UI** — в БД есть таблица, в UI нет страницы поиска/закрытия запросов 152-ФЗ.
 - ❌ **Audit-log UI** — данные в БД пишутся, страницы просмотра нет.
-- ❌ **Email-пайплайн** — SMTP-настройки сохраняются, но реальная отправка (приглашения на встречу, алерты) пока не подключена. Тест-кнопка возвращает 501.
-- ❌ **Приглашение участников встречи по email + поиск участников** — после Bitrix-синка таблица `user` есть, осталось добавить мульти-селектор в диалоге создания встречи и привязать к SMTP.
+- ❌ **SMTP test-send** — кнопка «Проверить отправку» в Настройках → SMTP пока возвращает 501. Реальные приглашения на встречи отправляются.
 - ❌ **AMI (Asterisk Manager Interface) для модуля «Мониторинг АТС»** — UI готов, реальная интеграция не сделана.
 - ❌ **CI/CD и отдельный staging** — отложены.
 
@@ -237,14 +238,14 @@ firewall после DNAT.
 |---|---|---|
 | **E0** Инфраструктура | docker-compose стек, Postgres / MinIO / OpenSearch / LiveKit / coturn / Prometheus / Grafana / Loki / бэкапы | Готово (CI и отдельный staging — отложены) |
 | **E1** Авторизация | OAuth Bitrix24, JWT-сессии (HS256, 15 мин) + refresh, RBAC | Готово |
-| **E2.1** Схема БД | 14 миграций (user / contact_cache / call / meeting / participant / recording / transcript / gdpr / softphone / system_setting) | Готово |
+| **E2.1** Схема БД | 15 миграций (user / contact_cache / call / meeting / participant / recording / transcript / gdpr / softphone / system_setting / meeting_invitation) | Готово |
 | **E2.4** Sync пользователей | Bitrix `user.get` через OAuth admin-сессии (refresh через `oauth.bitrix.info`), фильтр `active+employee`, исключение экстранета, реактивация вернувшихся, soft-deactivate отсутствующих. Запуск из UI «Настройки → Пользователи → Синхронизировать с Bitrix24» | Готово (фоновый scheduler — отложен) |
 | **E3** Backend-каркас | chi-роутер, RequireAuth/RequireRole, очередь джобов на Postgres+SKIP LOCKED, WebSocket-hub, structured slog | Готово |
 | **E4** Фронт-каркас | Vite + React + TS, авторизация, единый Shell, тёмные/светлые токены, i18n RU, OS-уведомления через Web Notifications API | Готово |
-| **E5** Видеоконференции | LiveKit-комнаты, гостевые ссылки, lobby с admit/reject, composite-запись (видео MP4 + audio OGG), скачивание файлов, авто-транскрибация audio-дорожки, custom RU-UI комнаты, guard от ABORTED egress | Готово |
+| **E5** Видеоконференции | LiveKit-комнаты, гостевые ссылки, lobby с admit/reject, composite-запись (видео MP4 + audio OGG), скачивание файлов, авто-транскрибация audio-дорожки, custom RU-UI комнаты, guard от ABORTED egress, **multi-select сотрудников и email-приглашения внешним адресатам** | Готово |
 | **E6** Софтфон | Браузерный JsSIP-клиент к FreePBX (WSS), input/output, mute/hold/dial, входящий popup + OS-нотификация. Креды подтягиваются с бэкенда (`/system-settings/phone/me`) — extension, привязанный админом к user'у | Готово (требуется боевое тестирование с реальным extension) |
 | **E7** Транскрибация | GigaAM ASR через polling, viewer с диалогом по каналам, аналитика, экспорт TXT, ручная загрузка файлов | Готово |
-| **E8** Админ | Все 4 раздела «Настройки системы»: Пользователи (роли/блокировка/Bitrix-синк), Доступ к модулям, Телефония (WebRTC + AMI), SMTP. Политики записи и GDPR-запросы | Частично (settings + sync — да; политики/GDPR/audit-log UI — запланированы) |
+| **E8** Админ | Все 4 раздела «Настройки системы»: Пользователи (роли/блокировка/Bitrix-синк), Доступ к модулям, Телефония (WebRTC + AMI), SMTP. SMTP-сендер реально отправляет email-приглашения. Политики записи и GDPR-запросы | Частично (settings + sync + email-pipeline — да; политики/GDPR/audit-log UI — запланированы) |
 
 ## Лицензия
 

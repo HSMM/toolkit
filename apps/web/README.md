@@ -25,6 +25,10 @@ SPA Toolkit. **React 18 + TypeScript + Vite + react-router-dom + TanStack Query 
   кнопка «Гостевая ссылка», dropdown «Записи» для скачивания MP4/OGG, custom
   RU-UI комнаты на примитивах LiveKit (`GridLayout` + `ParticipantTile` +
   `useTrackToggle` + custom `ChatPanel`).
+- **Multi-select участников встречи** (`InviteParticipantsField`): debounced
+  поиск сотрудников по `useUserSearch` + chip'ы выбранных, отдельный input
+  для внешних email'ов с Enter/comma. На submit передаётся `participant_ids`
+  + `invitee_emails`; backend шлёт HTML-письма со ссылкой на guest-вход.
 - **Гостевой вход** (`GuestPage.tsx`): public route `/g/<token>`, форма имени →
   POST `/request` → polling status каждые 2с → авто-вход когда host допустил.
 - **Транскрибация** (`TranscriptionPage.tsx`): загрузка аудио, список с прогрессом,
@@ -49,9 +53,8 @@ Run: `npm run e2e` при запущенном dev-сервере.
 
 ## Что не реализовано (известные пробелы MVP)
 
-- Приглашение участников встречи по email + поиск (мульти-селектор поверх
-  свежесинхронизированной таблицы `user`).
 - Политики записи / GDPR-запросы / Audit-log — отдельные страницы в Настройках.
+- UI просмотра / повторной отправки `meeting_invitation` (см. backend README).
 - Реальная end-to-end проверка софтфона с боевым FreePBX-extension'ом.
 - AMI-вкладка в Настройках телефонии — UI готов, реальное подключение нет.
 

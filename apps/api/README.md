@@ -111,6 +111,12 @@ apps/api/
 - PromoteAdmin / DemoteAdmin с защитой от снятия с последнего активного админа.
 - Authz-матрица для recording с режимами Allow / Deny / WithReason / WithNotify.
 
+**Email-приглашения на встречи (`internal/meetings/invitations.go` + `internal/mailer`):**
+- Поиск пользователей `GET /api/v1/users/search?q=` (auth, не admin) — публичные поля по ILIKE по name/email/department/position.
+- При создании встречи `POST /api/v1/meetings` принимает `invitee_emails: string[]` — для каждого вставляется row в `meeting_invitation` (UNIQUE по `(meeting_id, lower(email))`), и ставится job `send_meeting_invitation`.
+- `mailer.Client` тянет SMTP-конфиг на лету из `system_setting/smtp_config` (тот же, что и админская страница SMTP), поддерживает SSL/STARTTLS/none, MIME-Q-кодирует UTF-8 заголовки.
+- `InvitationWorker.Handle` шлёт HTML-письмо со ссылкой на guest-вход (генерирует `guest_link_token` если ещё нет). Permanent failure → nil; transient → error → ретрай queue с backoff.
+
 **Видеоконференции (`internal/meetings` + `internal/livekit`):**
 - Тонкий Twirp-клиент к LiveKit без `server-sdk-go`: mint join token, EndRoom, ListParticipants, Composite Egress (MP4 grid), AudioRoomComposite (OGG), StopEgress.
 - Webhook handler `/api/v1/livekit/webhook` (HMAC-проверка JWT + sha256 body), парсит `egress_started/ended/...`. Поля `int64` декодируются через `json.Number` (LiveKit protobuf JSON сериализует их как строки).
@@ -156,7 +162,8 @@ apps/api/
 ## Что не реализовано (известные пробелы MVP)
 
 - Фоновое расписание Bitrix-sync (cron-job каждые N минут).
-- Email-пайплайн (SMTP-настройки сохраняются, но `smtp.Send` не подключён; тест-кнопка → 501).
+- SMTP test-send — кнопка «Проверить отправку» в админке возвращает 501 (хотя сам сендер работает и шлёт реальные приглашения).
 - Политики записи / GDPR / audit-log endpoints — данные пишутся, API для UI ещё нет.
+- UI просмотра/повторной отправки `meeting_invitation`.
 - Реальная интеграция AMI для модуля «Мониторинг АТС».
 - `/metrics` endpoint для Prometheus — Prometheus scrap'ит его, но он 404 (не блокирует запуск).

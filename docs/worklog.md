@@ -4,6 +4,66 @@
 диагностику прод-инцидентов и важные решения, чтобы история была видна не только
 в чате и `git log`.
 
+## 2026-04-27 (день) — Email-приглашения на встречи + multi-select участников
+
+**Контекст:** после Bitrix-синка (предыдущая итерация) в БД появилось 141
+активный сотрудник, нужно дать возможность приглашать их на встречи + слать
+email со ссылкой на guest-вход внешним адресатам.
+
+**Сделано:**
+
+- **Миграция 000015 `meeting_invitation`** — id, meeting_id (FK CASCADE), email,
+  invited_by, status (pending/sent/failed), sent_at, last_error, attempts,
+  created_at. UNIQUE по `(meeting_id, LOWER(email))` чтобы повторное приглашение
+  не плодило дубль.
+
+- **`internal/mailer`** — универсальный SMTP-сендер. Конфиг тянется на лету из
+  `system_setting/smtp_config` (тот же ключ, что и админская страница SMTP).
+  Поддержка SSL implicit (порт 465), STARTTLS (587/25) и plain. Заголовки
+  Subject и From-name MIME-Q-кодируются для UTF-8.
+
+- **`meetings.Service.Create` + `CreateInput.InviteeEmails`** — dedup'нутые
+  адреса (нормализация + валидация на @) вставляются в `meeting_invitation`
+  через ON CONFLICT DO UPDATE (для возврата id), на каждую — job
+  `send_meeting_invitation` в очередь.
+
+- **`meetings.InvitationWorker.Handle`** — отправляет HTML-письмо со ссылкой
+  на гостевой вход (`/g/<guest_link_token>`); если token ещё не сгенерирован,
+  генерирует и сохраняет в `meeting.guest_link_token`. Permanent-failure
+  (meeting удалён) → возвращаем nil чтобы не зацикливать ретраи; transient →
+  error → queue ретраит с экспоненциальным backoff. На каждый прогон
+  обновляются `status / sent_at / last_error / attempts`.
+
+- **`meetings.Service.SearchUsers` + `GET /api/v1/users/search?q=`** — поиск
+  активных сотрудников по `name/email/department/position` через ILIKE.
+  Доступен любому authenticated user'у (НЕ admin only) — возвращает только
+  публичные поля (без extension/is_admin/status). Лимит 20 (max 50).
+
+- **Frontend `useUserSearch(query)`** — debounced на 200ms.
+
+- **Frontend `InviteParticipantsField`** в диалоге создания встречи:
+  searchable dropdown сотрудников (исключает себя и уже выбранных) с avatar
+  + ФИО + отдел; chip'ы выбранных с возможностью удалить; раздел «Внешние
+  email'ы» с chip'ами через Enter/comma и backspace для удаления последнего.
+  Лёгкая валидация email-regex на клиенте. На submit передаём
+  `participant_ids` (UUIDs) + `invitee_emails` (строки).
+
+- **Регистрация invitation handler в `worker.go`.** Worker теперь регистрирует
+  два kind'а: `transcribe_recording` и `send_meeting_invitation`.
+
+**Известные ограничения:**
+- SMTP test-кнопка («Проверить отправку») в Settings → SMTP пока возвращает
+  501 — реальный test-send не подключён, хотя пайплайн уже готов и работает
+  для приглашений.
+- Нет UI просмотра/повторной отправки приглашений на странице встречи. Если
+  email failed — придётся либо закидывать вручную в БД (`UPDATE meeting_invitation
+  SET status='pending'`), либо пересоздавать встречу.
+- Внутренние сотрудники (приглашённые через multi-select) email НЕ получают —
+  встреча просто появляется у них в списке. Если нужно дублирующее уведомление
+  на корпоративный email — отдельная задача (можно поверх той же job-pipeline).
+
+**Коммит:** `7709fee Meetings: приглашение участников по email + поиск по таблице user`
+
 ## 2026-04-27 (утро) — Phone user-picker, softphone-from-backend, recording guard, Bitrix sync
 
 **Контекст:** обнаружено, что (1) Settings → Телефония → Внутренние номера сохраняли
