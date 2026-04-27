@@ -116,7 +116,11 @@ func refreshAdminToken(ctx context.Context, db *pgxpool.Pool, client *bitrix.Cli
 		return "", fmt.Errorf("decode refresh token: %w", err)
 	}
 
-	tok, err := client.RefreshAccessToken(ctx, string(raw), "")
+	// oauth.bitrix.info — единый OAuth-прокси Bitrix24 (и для cloud, и для
+	// самохостед-порталов с локальными приложениями). Сам портал нашего клиента
+	// (https://portal.softservice.by/oauth/token/) отдаёт login HTML, не JSON,
+	// поэтому ходим только через bitrix.info.
+	tok, err := client.RefreshAccessToken(ctx, string(raw), "oauth.bitrix.info")
 	if err != nil {
 		return "", err
 	}
