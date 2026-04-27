@@ -44,3 +44,24 @@ export function useSetUserStatus() {
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ["admin-users"] }); },
   });
 }
+
+// Запускает синхронизацию пользователей с Bitrix24 (фильтр active+employee).
+// Backend идёт по webhook'у из BITRIX_SYNC_WEBHOOK_URL — если он не задан,
+// вернётся 503 sync_not_configured.
+export type BitrixSyncResult = {
+  fetched: number;
+  added: number;
+  updated: number;
+  reactivated: number;
+  deactivated: number;
+  skipped: number;
+  errors?: string[];
+};
+export function useSyncBitrixUsers() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      api<BitrixSyncResult>("/api/v1/admin/users/sync/bitrix", { method: "POST", body: {} }),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ["admin-users"] }); },
+  });
+}

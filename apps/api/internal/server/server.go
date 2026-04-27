@@ -24,6 +24,7 @@ import (
 
 	"github.com/HSMM/toolkit/internal/admin"
 	"github.com/HSMM/toolkit/internal/auth"
+	"github.com/HSMM/toolkit/internal/bitrix"
 	"github.com/HSMM/toolkit/internal/sysset"
 	"github.com/HSMM/toolkit/internal/config"
 	"github.com/HSMM/toolkit/internal/db"
@@ -190,7 +191,13 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 			// тоже остаётся — для прямых запросов к api без NPM-проксирования.
 			r.Group(func(r chi.Router) {
 				r.Use(middleware.RequireRole(auth.RoleAdmin))
-				r.Mount("/admin/users", admin.NewUsersHandlers(pool).Routes())
+				adminUsers := admin.NewUsersHandlers(pool)
+				adminUsers.SetBitrixSync(&bitrix.Client{
+					PortalURL:    cfg.BitrixPortalURL,
+					ClientID:     cfg.BitrixClientID,
+					ClientSecret: cfg.BitrixClientSecret,
+				}, cfg.BitrixSyncWebhookURL)
+				r.Mount("/admin/users", adminUsers.Routes())
 				r.Mount("/admin/system-settings", sysHandlers.WriteRoutes())
 			})
 		})
@@ -203,7 +210,13 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 		r.Use(middleware.RateLimitByUser(cfg.RateLimitUserPerMin, time.Minute))
 
 		r.Get("/queue/stats", stubHandler("queue stats endpoint not implemented yet"))
-		r.Mount("/users", admin.NewUsersHandlers(pool).Routes())
+		legacyAdminUsers := admin.NewUsersHandlers(pool)
+		legacyAdminUsers.SetBitrixSync(&bitrix.Client{
+			PortalURL:    cfg.BitrixPortalURL,
+			ClientID:     cfg.BitrixClientID,
+			ClientSecret: cfg.BitrixClientSecret,
+		}, cfg.BitrixSyncWebhookURL)
+		r.Mount("/users", legacyAdminUsers.Routes())
 	})
 
 	srv := &http.Server{

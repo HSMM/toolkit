@@ -1,6 +1,4 @@
 // Package admin — admin-only HTTP endpoints.
-// Сейчас реализован только список пользователей для «Настройки системы →
-// Пользователи». Управление ролями/блокировкой добавится позже.
 package admin
 
 import (
@@ -8,14 +6,27 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/HSMM/toolkit/internal/bitrix"
+	"github.com/HSMM/toolkit/internal/usersync"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-type UsersHandlers struct{ db *pgxpool.Pool }
+type UsersHandlers struct {
+	db          *pgxpool.Pool
+	bxClient    *bitrix.Client
+	bxSyncURL   string
+}
 
 func NewUsersHandlers(db *pgxpool.Pool) *UsersHandlers { return &UsersHandlers{db: db} }
+
+// SetBitrixSync включает endpoint /sync/bitrix. Если bxClient или url пустые —
+// endpoint вернёт 503.
+func (h *UsersHandlers) SetBitrixSync(client *bitrix.Client, webhookURL string) {
+	h.bxClient = client
+	h.bxSyncURL = webhookURL
+}
 
 // Routes монтируются под /admin/users.
 func (h *UsersHandlers) Routes() http.Handler {
@@ -23,7 +34,22 @@ func (h *UsersHandlers) Routes() http.Handler {
 	r.Get("/", h.list)
 	r.Put("/{id}/role", h.setRole)         // body: {"role":"admin"|"user"}
 	r.Put("/{id}/status", h.setStatus)     // body: {"status":"active"|"blocked"}
+	r.Post("/sync/bitrix", h.syncBitrix)   // body: {} → {fetched, added, updated, ...}
 	return r
+}
+
+func (h *UsersHandlers) syncBitrix(w http.ResponseWriter, r *http.Request) {
+	if h.bxClient == nil || h.bxSyncURL == "" {
+		writeErr(w, http.StatusServiceUnavailable, "sync_not_configured",
+			"BITRIX_SYNC_WEBHOOK_URL не задан в конфиге")
+		return
+	}
+	res, err := usersync.Run(r.Context(), h.db, h.bxClient, h.bxSyncURL)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "sync_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 type roleReq struct {

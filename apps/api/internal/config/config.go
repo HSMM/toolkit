@@ -27,6 +27,9 @@ type Config struct {
 	BitrixClientID     string
 	BitrixClientSecret string
 	BitrixAppToken     string
+	// Inbound webhook URL (https://portal.bitrix24.ru/rest/{uid}/{token}/) для
+	// фоновой синхронизации пользователей. Полностью независим от OAuth-сессий.
+	BitrixSyncWebhookURL string
 
 	// External services
 	FreePBXWSSURL    string
@@ -81,6 +84,7 @@ func Load() (*Config, error) {
 		BitrixClientID:     getenv("BITRIX_CLIENT_ID", ""),
 		BitrixClientSecret: getenv("BITRIX_CLIENT_SECRET", ""),
 		BitrixAppToken:     getenv("BITRIX_APP_TOKEN", ""),
+		BitrixSyncWebhookURL: getenv("BITRIX_SYNC_WEBHOOK_URL", ""),
 		FreePBXWSSURL:      getenv("FREEPBX_WSS_URL", ""),
 		FreePBXExtension:   getenv("FREEPBX_EXTENSION", ""),
 		FreePBXExtPwd:      getenv("FREEPBX_EXTENSION_PASSWORD", ""),

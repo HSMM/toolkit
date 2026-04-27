@@ -39,6 +39,16 @@ type User struct {
 	WorkPosition   string          `json:"WORK_POSITION"`
 	PersonalPhoto  string          `json:"PERSONAL_PHOTO"`
 	UFDepartment   json.RawMessage `json:"UF_DEPARTMENT"`
+	// Возвращаются user.get'ом, в user.current их нет — поэтому RawMessage,
+	// чтобы переварить и bool ("ACTIVE": true) и Bitrix-овский string "Y"/"N".
+	ActiveRaw   json.RawMessage `json:"ACTIVE,omitempty"`
+	UserType    string          `json:"USER_TYPE,omitempty"`
+}
+
+// IsActive — толерантный парсинг ACTIVE: true/false или "Y"/"N".
+func (u *User) IsActive() bool {
+	s := strings.Trim(strings.TrimSpace(string(u.ActiveRaw)), `"`)
+	return s == "true" || s == "Y" || s == "1"
 }
 
 func (c *Client) AuthorizeURL(redirectURI, state string) (string, error) {
@@ -102,6 +112,50 @@ func (c *Client) CurrentUser(ctx context.Context, accessToken string) (*User, er
 		return nil, fmt.Errorf("bitrix: user.current response without ID")
 	}
 	return &envelope.Result, nil
+}
+
+// ListEmployees вызывает user.get через входящий webhook (FILTER USER_TYPE=employee
+// исключает экстранет). Bitrix24 отдаёт по 50 пользователей за страницу;
+// `next` в ответе — start-параметр для следующей страницы (0/-1 = конец).
+//
+// webhookBase — полный URL вида https://portal.bitrix24.ru/rest/{user_id}/{token}/
+// (с трейлинг-слэшем). Хранится в системной настройке (или env-переменной).
+func (c *Client) ListEmployees(ctx context.Context, webhookBase string, start int) (users []User, next int, err error) {
+	if strings.TrimSpace(webhookBase) == "" {
+		return nil, 0, fmt.Errorf("bitrix: webhook URL is empty")
+	}
+	base := strings.TrimRight(webhookBase, "/") + "/user.get.json"
+	u, err := url.Parse(base)
+	if err != nil {
+		return nil, 0, fmt.Errorf("bitrix webhook url: %w", err)
+	}
+	q := u.Query()
+	q.Set("FILTER[USER_TYPE]", "employee")
+	q.Set("FILTER[ACTIVE]", "Y")
+	q.Set("ADMIN_MODE", "true") // вернуть всех, не только видимых вызывающему
+	if start > 0 {
+		q.Set("start", fmt.Sprint(start))
+	}
+	u.RawQuery = q.Encode()
+
+	var envelope struct {
+		Result []User      `json:"result"`
+		Next   json.Number `json:"next"`
+		Error  string      `json:"error"`
+		Desc   string      `json:"error_description"`
+	}
+	if err := c.getJSON(ctx, u.String(), &envelope); err != nil {
+		return nil, 0, err
+	}
+	if envelope.Error != "" {
+		return nil, 0, fmt.Errorf("bitrix user.get: %s: %s", envelope.Error, envelope.Desc)
+	}
+	if envelope.Next != "" {
+		if n, err := envelope.Next.Int64(); err == nil {
+			next = int(n)
+		}
+	}
+	return envelope.Result, next, nil
 }
 
 func (u *User) FullName() string {

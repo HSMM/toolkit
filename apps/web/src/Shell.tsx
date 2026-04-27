@@ -46,7 +46,7 @@ import {
   useMyPhoneCredentials,
 } from "@/api/system-settings";
 import { useSoftphone, loadSoftphoneConfig, saveSoftphoneConfig } from "@/softphone/useSoftphone";
-import { useSetUserRole, useSetUserStatus } from "@/api/admin";
+import { useSetUserRole, useSetUserStatus, useSyncBitrixUsers } from "@/api/admin";
 import {
   useTranscripts, useTranscript, useUploadTranscript,
   useDeleteTranscript, useRetryTranscript,
@@ -2008,6 +2008,7 @@ function UsersPage({ hideHeader }: { hideHeader?: boolean }) {
   const list = useAdminUsers();
   const setRole = useSetUserRole();
   const setStatus = useSetUserStatus();
+  const sync = useSyncBitrixUsers();
   const [q, setQ] = useState("");
   const all = list.data ?? [];
   const filt = all.filter((u) => {
@@ -2036,10 +2037,31 @@ function UsersPage({ hideHeader }: { hideHeader?: boolean }) {
       )}
       <div style={{ padding: 24 }}>
         <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
-          <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 10 }}>
             <Search size={14} color={C.text3} />
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Поиск по имени, email, отделу или внутреннему номеру…"
               style={{ flex: 1, border: "none", outline: "none", fontSize: 14, color: C.text, background: "transparent", fontFamily: "inherit" }} />
+            <button onClick={() => {
+              sync.mutate(undefined, {
+                onSuccess: (r) => {
+                  const parts = [
+                    `получено: ${r.fetched}`,
+                    `новых: ${r.added}`,
+                    `обновлено: ${r.updated}`,
+                  ];
+                  if (r.reactivated) parts.push(`вернулись: ${r.reactivated}`);
+                  if (r.deactivated) parts.push(`деактивировано: ${r.deactivated}`);
+                  if (r.skipped) parts.push(`пропущено: ${r.skipped}`);
+                  alert("Синхронизация завершена.\n" + parts.join(", ") +
+                    (r.errors?.length ? `\n\nОшибки (${r.errors.length}):\n${r.errors.slice(0, 5).join("\n")}` : ""));
+                },
+                onError: (e) => alert("Не удалось синхронизировать: " + (e instanceof Error ? e.message : String(e))),
+              });
+            }} disabled={sync.isPending} title="Подтянуть активных сотрудников из Bitrix24"
+              style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 13px", borderRadius: 7, border: `1px solid ${C.border}`, background: sync.isPending ? C.bg3 : C.card, color: C.text, fontSize: 12.5, fontWeight: 500, cursor: sync.isPending ? "default" : "pointer", fontFamily: "inherit" }}>
+              <RefreshCw size={13} className={sync.isPending ? "lk-spin" : undefined} />
+              {sync.isPending ? "Синхронизация…" : "Синхронизировать с Bitrix24"}
+            </button>
           </div>
           {list.isError ? (
             <Empty Icon={Users} title="Не удалось загрузить" sub={String(list.error)} />
