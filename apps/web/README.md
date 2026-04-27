@@ -2,55 +2,58 @@
 
 SPA Toolkit. **React 18 + TypeScript + Vite + react-router-dom + TanStack Query + lucide-react + i18next + Playwright**.
 
-## Что уже есть (E4.1–E4.7)
+## Что реализовано
 
-**Каркас (E4.1):**
-- Vite 5, React 18, TS strict.
-- Алиас `@/*` → `src/*`.
-- Dev-server на `:5173` с прокси `/api`, `/oauth`, `/healthz`, `/version` на backend.
+**Каркас:**
+- Vite 5, React 18, TypeScript strict, алиас `@/*` → `src/*`.
+- Dev-server `:5173` с прокси `/api`, `/oauth`, `/healthz`, `/version` на backend.
+- `Shell.tsx` — единый layout (sidebar/header), `App.tsx` — public path-router (`/g/<token>` для гостей обходит auth gate).
 
-**Роутинг и layout (E4.2):**
-- `BrowserRouter` + защищённые маршруты (anonymous → `/login`).
-- `AppLayout`: коллапсирующая `Sidebar`, контент через `<Outlet/>`.
-- Маршруты: `/phone`, `/meet`, `/transcripts`, `/admin/*`, заглушки `/messengers`, `/contacts`, `/helpdesk` (соответствуют ТЗ 3.2.4).
+**API client / state:**
+- `src/api/client.ts` — типизированный fetch с обработкой 401 (auto-logout) и `ApiError {status, code, message, details}`.
+- TanStack Query v5 c разумными дефолтами (staleTime 30s, retry только для 5xx).
+- Хуки по доменам: `meetings.ts`, `transcripts.ts`, `system-settings.ts`, `admin.ts`, `me.ts`.
+- WebSocket: `src/ws/wsClient.ts` с reconnect 1→30s, Bearer через subprotocol `bearer.<jwt>`. `useWsClient()` + `useWsEvent(type, handler)`.
 
-**Дизайн-система (E4.3):**
-- Палитра `C` в `src/styles/tokens.ts` — ровно из переданного UI-прототипа.
-- Inline styles (паттерн прототипа); общие шрифты/сброс — `src/styles/globals.css`.
-- Заглушки `Empty / Loading / ErrorBox` (`src/components/states.tsx`).
+**Auth:**
+- `AuthContext` — `loading|anonymous|authenticated`, восстановление через `/oauth/refresh`, `login()`/`logout()`.
+- `Login.tsx` — CTA «Войти через Bitrix24» → редирект на `/oauth/login`.
 
-**API client (E4.4):**
-- `src/api/client.ts` — типизированный fetch-обёртка с обработкой 401, ApiError.
-- `src/api/queryClient.ts` — TanStack Query с разумными дефолтами (staleTime 30s, retry для не-4xx).
-- `src/api/me.ts` — пример вызова `/api/v1/me`.
-- `npm run gen:api` — генерация типов из `../api/api/openapi.yaml` через `openapi-typescript`.
+**Реализованные модули:**
+- **Видеоконференции** (`Shell.tsx::VcsPage` + `MeetingRoom.tsx` + `RoomUI.tsx`):
+  список встреч, форма создания (instant/scheduled), live-таймер, бейдж записи,
+  кнопка «Гостевая ссылка», dropdown «Записи» для скачивания MP4/OGG, custom
+  RU-UI комнаты на примитивах LiveKit (`GridLayout` + `ParticipantTile` +
+  `useTrackToggle` + custom `ChatPanel`).
+- **Гостевой вход** (`GuestPage.tsx`): public route `/g/<token>`, форма имени →
+  POST `/request` → polling status каждые 2с → авто-вход когда host допустил.
+- **Транскрибация** (`TranscriptionPage.tsx`): загрузка аудио, список с прогрессом,
+  viewer с диалогом по каналам, экспорт TXT, ручная правка.
+- **Софтфон** (`SoftphoneWidget` + `softphone/useSoftphone.ts`): JsSIP-клиент к
+  FreePBX, state-machine (`not_configured / connecting / registered / incoming
+  / outgoing / active / ended`), dialer / mute / hold / hangup, popup на входящий
+  + OS-нотификация. Креды подтягиваются из `/system-settings/phone/me`.
+- **Настройки системы** (`Shell.tsx`, 4 таба): Пользователи (роли/блокировка
+  кликом + кнопка Bitrix-синка), Доступ к модулям, Телефония (WebRTC шлюз с
+  user-picker + AMI), SMTP. Все 4 — реальная персистенция через API.
+- **Мониторинг АТС** — перенесён в админ-меню.
+- **OS-уведомления**: `AppCtx.osPerm` + `requestOSPerm`, `push()` дублирует
+  в notification center когда вкладка не в фокусе. NotificationBell показывает
+  CTA «Включить» если permission=default.
 
-**WS client (E4.5):**
-- `src/ws/wsClient.ts` — нативный WebSocket с экспоненциальным reconnect (1→30s) и subscribe по типу события. Bearer-токен передаётся через subprotocol `bearer.<jwt>` (контракт с `apps/api/internal/ws/handler.go`).
-- `src/ws/useWs.ts` — `useWsClient()` + `useWsEvent(type, handler)` для React.
+**i18n:** только русский (ТЗ 5.4). Большинство строк inline (паттерн прототипа);
+ключи `src/i18n/ru.json` для общих секций.
 
-**Auth (E1.9–E1.11 заготовка):**
-- `src/auth/AuthContext.tsx` — состояние `loading|anonymous|authenticated`, восстановление через `/oauth/refresh`, `login()`/`logout()`.
-- `src/auth/Login.tsx` — экран логина с CTA «Войти через Bitrix24» → редирект на `/oauth/login`.
+**E2E:** `tests/e2e/login.spec.ts` (Playwright Chromium / Firefox / WebKit).
+Run: `npm run e2e` при запущенном dev-сервере.
 
-**i18n (E4.7):**
-- Только русский (ТЗ 5.4).
-- Все строки в `src/i18n/ru.json`, ключи иерархические.
-- Хук: `import { useT } from "@/i18n"` → `useT().t("nav.phone")`.
+## Что не реализовано (известные пробелы MVP)
 
-**E2E (E4.8):**
-- `tests/e2e/login.spec.ts` — проверяет, что страница логина рендерится и анонимный заход на защищённый роут редиректит на `/login`.
-- `playwright.config.ts` — Chromium / Firefox / WebKit. Run: `npm run e2e` (при запущенном dev-сервере).
-
-## Что не сделано (ждёт прототип)
-
-- **Полный UI Софтфона** (`src/modules/phone/PhonePage.tsx`) — сейчас заглушка. Возьмётся из прототипа `SoftphonePage` (dial pad, состояния звонка, история).
-- **Полный UI ВКС** (`src/modules/meet/MeetPage.tsx`) — заглушка. Из прототипа `VcsPage`: список встреч, модалка создания, выбор камеры/микрофона.
-- **Полный UI Транскрибации** (`src/modules/transcripts/TranscriptsPage.tsx`) — заглушка. Из прототипа `TranscriptionPage`: загрузка аудио, список с прогрессом, viewer.
-- **Полный UI Админки** (`src/modules/admin/AdminPage.tsx`) — заглушка. Из прототипа `Settings*`.
-- **NotificationBell, StatusSelector** — компоненты прототипа, нужен полный код.
-
-> Положи полный React-файл в `apps/web/prototype.jsx` или присылай частями — модули будут собраны в продакшен-форму (TypeScript, разнесены по файлам, подключены к React Query и WS-клиенту).
+- Приглашение участников встречи по email + поиск (мульти-селектор поверх
+  свежесинхронизированной таблицы `user`).
+- Политики записи / GDPR-запросы / Audit-log — отдельные страницы в Настройках.
+- Реальная end-to-end проверка софтфона с боевым FreePBX-extension'ом.
+- AMI-вкладка в Настройках телефонии — UI готов, реальное подключение нет.
 
 ## Запуск
 

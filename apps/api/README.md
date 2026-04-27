@@ -95,50 +95,68 @@ apps/api/
 └── README.md
 ```
 
-## Что уже работает (итерация 2, после E3)
+## Что реализовано
 
 **Каркас:**
 - Подключение к Postgres через pool (`pgx/v5`), graceful shutdown.
-- Миграции через `golang-migrate` (7 миграций, см. `../../migrations/README.md`).
-- Структурированные JSON-логи (`log/slog`) с автоматическим обогащением `user_id`, `role`, `session_id`, `request_id` после прохождения auth.
+- Миграции через `golang-migrate` (14 миграций, см. `../../migrations/README.md`).
+- Структурированные JSON-логи (`log/slog`) с обогащением `user_id`, `role`, `session_id`, `request_id` после прохождения auth.
 
-**Auth (E1 фундамент + E3.1/E3.2):**
+**Auth:**
+- OAuth Bitrix24 (`internal/server/oauth`), refresh через `oauth.bitrix.info`, обмен code → tokens, upsert toolkit-юзера, bootstrap первого админа из `TOOLKIT_BOOTSTRAP_ADMINS`.
 - JWT access-токены HS256 на 15 мин, claims: `uid`, `email`, `role`, `sid`.
 - Refresh-токены 32 байта, sha256-hash в БД, 30 дней sliding TTL, инвалидация при logout/блокировке.
 - HMAC-подписанное OAuth state с встроенным TTL (10 мин) — без БД.
-- SubjectLoader подгружает роль и список прямых подчинённых (контекстная роль «Руководитель», ТЗ 2.1).
+- SubjectLoader подгружает роль и список прямых подчинённых (контекстная роль «Руководитель»).
 - PromoteAdmin / DemoteAdmin с защитой от снятия с последнего активного админа.
-- Authz-матрица для recording с режимами Allow / Deny / WithReason / WithNotify (ТЗ 4.1).
+- Authz-матрица для recording с режимами Allow / Deny / WithReason / WithNotify.
 
-**Очередь (E3.4):**
+**Видеоконференции (`internal/meetings` + `internal/livekit`):**
+- Тонкий Twirp-клиент к LiveKit без `server-sdk-go`: mint join token, EndRoom, ListParticipants, Composite Egress (MP4 grid), AudioRoomComposite (OGG), StopEgress.
+- Webhook handler `/api/v1/livekit/webhook` (HMAC-проверка JWT + sha256 body), парсит `egress_started/ended/...`. Поля `int64` декодируются через `json.Number` (LiveKit protobuf JSON сериализует их как строки).
+- `OnEgressEnded` через `SELECT FOR UPDATE` + ON CONFLICT по unique partial-индексу — идемпотентность при ретрае webhook'а; transcribe job ставится только на реальный INSERT.
+- Guard от `EGRESS_ABORTED/FAILED/LIMIT_REACHED`: pointer'ы зачищаются, recording-row не создаётся (иначе UI показывал бы битые «Скачать» с 500 в `http.ServeContent`).
+- Скачивание файлов через `http.ServeContent` с Range-поддержкой и Content-Disposition.
+- Гостевые ссылки + lobby (admit/reject), long-poll status.
+
+**Транскрибация (`internal/transcription` + `internal/gigaam`):**
+- Polling-клиент GigaAM (`POST /stt/transcribe` → `GET /stt/result/{task_id}`).
+- Хранение транскриптов с диалогом по каналам, аналитикой, экспортом TXT.
+- Ручная загрузка аудио-файлов (`POST /transcripts/upload`) поверх той же job-pipeline.
+
+**Bitrix24 sync пользователей (`internal/usersync` + `internal/bitrix`):**
+- `bitrix.Client.RefreshAccessToken` через `oauth.bitrix.info`, `bitrix.Client.ListEmployees` через `user.get` с `FILTER USER_TYPE=employee + ACTIVE=Y`, постранично по 50.
+- `usersync.Run` берёт самую свежую активную admin-сессию с непустым `bitrix_refresh_token_encrypted`, refresh'ит, UPSERT'ит в `"user"` через CTE с отслеживанием inserted/reactivated/updated, помечает отсутствующих как `deactivated_in_bitrix`.
+- Endpoint `POST /api/v1/admin/users/sync/bitrix`. Запуск из UI; фоновый scheduler — отложен.
+
+**System settings (`internal/sysset` + `internal/admin`):**
+- KV-таблица `system_setting` (key/value JSONB).
+- ReadRoutes (auth-required): `GET /modules`, `GET /phone/me` (свои SIP-креды).
+- WriteRoutes (admin only): GET/PUT для `modules`, `smtp`, `phone` (с preserved-password логикой для пустых полей и password preservation per extension).
+- Admin users: `GET/PUT/DELETE /admin/users`, `PUT /{id}/role` (с защитой от снятия последнего админа), `PUT /{id}/status`, `POST /sync/bitrix`.
+
+**Очередь:**
 - `queue.New(pool)` + `queue.NewRegistry()` → `queue.NewRunner(...)`.
 - Атомарный Claim через `FOR UPDATE SKIP LOCKED`.
 - Экспоненциальный backoff по неудачам (до 1 часа), dead-letter после `max_attempts`.
 - Drain в shutdown — in-flight задачи освобождаются обратно в pending.
 
-**WebSocket (E3.3):**
+**WebSocket:**
 - Hub с per-user подписками, неблокирующий publish (drop-on-buffer-full с warning'ом).
 - Auth требуется при upgrade. Ping каждые 30с.
-- На клиенте — переподключение с backoff (логика на стороне фронта в E4).
 
-**HTTP routes (E3.1):**
+**HTTP routes:**
 - `/healthz`, `/readyz`, `/version` — без авторизации.
-- `/oauth/{login,callback,install,logout}` — заглушки 501, реальная реализация в E1.2.
-- `/api/v1/*` — за `RequireAuth` + `RateLimitByUser`. Реализован `/api/v1/me`.
-- `/api/v1/ws` — WebSocket events.
-- `/admin/*` — за `RequireAuth` + `RequireRole(admin)`.
+- `/oauth/{login,callback,refresh,logout}` — реальная реализация.
+- `/api/v1/livekit/webhook` — публичный (HMAC-валидация внутри handler'а; путь под `/api/v1` чтобы NPM проксировал).
+- `/api/v1/*` — за `RequireAuth` + `RateLimitByUser`. `/api/v1/me`, `/api/v1/meetings/*`, `/api/v1/transcripts/*`, `/api/v1/ws`, `/api/v1/system-settings/*`.
+- `/api/v1/admin/*` — `RequireRole(admin)`: users + system-settings WriteRoutes.
+- `/admin/*` (legacy) — для прямых вызовов без NPM.
 
-**OpenAPI спека (E3.5):** `api/openapi.yaml` — source of truth для генерации TS-клиента фронта.
+## Что не реализовано (известные пробелы MVP)
 
-**Тесты (E3.7):**
-- `go test ./...` покрывает: JWT (issue/verify/expired/tampered/alg-none), OAuth state (round-trip/tamper/different-secret/malformed), Queue registry, middleware-helpers.
-- Интеграционные тесты против реального PG — добавляются в каждом доменном модуле (E5/E6/E7) как `*_integration_test.go` (build tag `integration`).
-
-## Что дальше (E1 implementation + E2 sync + E5/E6/E7/E8)
-
-- **E1.2** — реализовать handlers `/oauth/{login,callback,install,logout}`: использовать `auth.OAuthStateMinter`, `auth.JWTIssuer`, `auth.SessionStore`, новый Bitrix24 client.
-- **E1.4** — bootstrap-admin при первом входе: проверять `cfg.BootstrapAdmins` и вызывать `auth.PromoteAdmin`.
-- **E1.8** — CLI `toolkit admin promote <email>` — добавить subcommand в `cmd/toolkit/main.go`.
-- **E2.3** — Bitrix24 client (`internal/bitrix24`) с rate-limit backoff.
-- **E2.4/E2.5** — handlers очереди для sync sotrudnikov / контактов.
-- **E5/E6/E7/E8** — модули по плану декомпозиции.
+- Фоновое расписание Bitrix-sync (cron-job каждые N минут).
+- Email-пайплайн (SMTP-настройки сохраняются, но `smtp.Send` не подключён; тест-кнопка → 501).
+- Политики записи / GDPR / audit-log endpoints — данные пишутся, API для UI ещё нет.
+- Реальная интеграция AMI для модуля «Мониторинг АТС».
+- `/metrics` endpoint для Prometheus — Prometheus scrap'ит его, но он 404 (не блокирует запуск).
