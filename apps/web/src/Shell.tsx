@@ -24,7 +24,7 @@ import {
   Save, Wifi, Hash, Shield, Clock, Mail, Key, LogOut,
   Copy, Upload, FileAudio, Trash2, Send, ChevronRight, Inbox,
   Bell, Activity, BarChart3, Headphones, ArrowRightLeft, Minus,
-  Sparkles, MessageCircle, Smile, Frown, Meh, AlertTriangle,
+  Sparkles, MessageCircle, Smile, Frown, Meh, AlertTriangle, AlertCircle,
   type LucideIcon,
 } from "lucide-react";
 
@@ -38,6 +38,10 @@ import {
 } from "@/api/meetings";
 import { MeetingRoom } from "@/MeetingRoom";
 import { useAdminUsers } from "@/api/admin";
+import {
+  useModuleAccess, useUpdateModuleAccess,
+  useSmtpConfig, useUpdateSmtpConfig,
+} from "@/api/system-settings";
 import {
   useTranscripts, useTranscript, useUploadTranscript,
   useDeleteTranscript, useRetryTranscript,
@@ -1648,7 +1652,7 @@ function AnalyticsPage() {
   return (
     <div style={{ minHeight: "100%", background: C.bg2 }}>
       <style>{`@keyframes anPulse{0%,100%{box-shadow:0 0 0 0 rgba(245,158,11,.45)}70%{box-shadow:0 0 0 7px rgba(245,158,11,0)}}`}</style>
-      <PgHdr title="Аналитика" sub="Мониторинг FreePBX через AMI · метрики сотрудников" />
+      <PgHdr title="Мониторинг АТС" sub="FreePBX через AMI · оперативные метрики, регистрации, активные каналы" />
 
       <div style={{ padding: "0 24px", background: C.card, borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 4 }}>
         {([{ id: "monitoring" as const, label: "Мониторинг", Icon: Activity },
@@ -1941,132 +1945,21 @@ function UsersPage({ hideHeader }: { hideHeader?: boolean }) {
   );
 }
 
+// PhoneSettingsPage — настройки телефонии: 2 вкладки.
+//   • WebRTC шлюз — WSS-подключение к FreePBX + внутренние номера
+//   • AMI         — Asterisk Manager Interface для мониторинга АТС/CDR
 function PhoneSettingsPage({ hideHeader }: { hideHeader?: boolean } = {}) {
-  const [saved, setSaved] = useState(false);
-  const [freeNums, setFreeNums] = useState<{ ext: string; pwd: string; saved: boolean }[]>([]);
-  const [assigned] = useState<unknown[]>([]);
-  const [newExt, setNewExt] = useState("");
-  const [newPwd, setNewPwd] = useState("");
-  const save = () => { setSaved(true); setTimeout(() => setSaved(false), 2500); };
-  const addFree = () => {
-    if (!newExt.trim() || !newPwd.trim()) return;
-    setFreeNums((f) => [{ ext: newExt.trim(), pwd: newPwd, saved: true }, ...f]);
-    setNewExt(""); setNewPwd("");
-  };
-  const updFreePwd = (i: number, v: string) => setFreeNums((f) => f.map((x, idx) => idx === i ? { ...x, pwd: v, saved: false } : x));
-  const saveFree = (i: number) => setFreeNums((f) => f.map((x, idx) => idx === i ? { ...x, saved: true } : x));
-  const editFree = (i: number) => setFreeNums((f) => f.map((x, idx) => idx === i ? { ...x, saved: false } : x));
-  const rmFree = (i: number) => setFreeNums((f) => f.filter((_, idx) => idx !== i));
-
-  const Sec = ({ title, sub, children }: { title: string; sub?: string; children: ReactNode }) => (
-    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, marginBottom: 16, overflow: "hidden" }}>
-      <div style={{ padding: "14px 20px", borderBottom: `1px solid ${C.border}` }}>
-        <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{title}</div>
-        {sub && <div style={{ fontSize: 12, color: C.text2, marginTop: 2 }}>{sub}</div>}
-      </div>
-      <div style={{ padding: "18px 20px" }}>{children}</div>
-    </div>
-  );
-
-  const saveBtn = (
-    <button onClick={save} style={{ display: "flex", alignItems: "center", gap: 7, background: saved ? C.acc : C.text, color: "white", padding: "9px 18px", borderRadius: 8, fontWeight: 600, fontSize: 14, border: "none", cursor: "pointer", fontFamily: "inherit" }}>
-      {saved ? <><Check size={15} />Сохранено</> : <><Save size={15} />Сохранить</>}
-    </button>
-  );
-  return (
-    <div style={{ minHeight: "100%", background: C.bg2 }}>
-      {!hideHeader && (
-        <PgHdr title="Настройки телефонии" sub="FreePBX WebRTC · WSS-подключение и внутренние номера" action={saveBtn} />
-      )}
-      <div style={{ padding: 24, maxWidth: 640 }}>
-        {hideHeader && (
-          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 14 }}>{saveBtn}</div>
-        )}
-        <Sec title="Подключение к FreePBX" sub="WebRTC-шлюз · WSS-сигнализация">
-          <Field label="WSS-адрес шлюза"><input placeholder="wss://pbx.example.com:8089/ws" style={{ ...inp(), fontFamily: "'DM Mono', monospace" }} /></Field>
-          <button style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 13, color: C.text, background: C.card, cursor: "pointer", fontFamily: "inherit", marginTop: 4, fontWeight: 500 }}>
-            <Phone size={13} />Тестовый звонок
-          </button>
-        </Sec>
-
-        <Sec title="Внутренние номера" sub="Привязка номеров FreePBX к пользователям Toolkit">
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14, paddingBottom: 14, borderBottom: `1px dashed ${C.border}` }}>
-            <input value={newExt} onChange={(e) => setNewExt(e.target.value.replace(/\D/g, "").slice(0, 6))} onKeyDown={(e) => { if (e.key === "Enter") addFree(); }}
-              placeholder="Номер (напр. 1012)" style={{ width: 150, padding: "8px 11px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13, fontFamily: "'DM Mono', monospace", color: C.text, outline: "none", background: C.card }} />
-            <input type="password" value={newPwd} onChange={(e) => setNewPwd(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addFree(); }}
-              placeholder="Пароль*" style={{ flex: 1, minWidth: 140, padding: "8px 11px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13, fontFamily: "'DM Mono', monospace", color: C.text, outline: "none", background: C.card }} />
-            <button onClick={addFree} disabled={!newExt.trim() || !newPwd.trim()}
-              style={{ display: "flex", alignItems: "center", gap: 5, padding: "8px 14px", borderRadius: 7, border: "none", background: (newExt.trim() && newPwd.trim()) ? C.acc : C.bg3, color: (newExt.trim() && newPwd.trim()) ? "white" : C.text3, fontSize: 13, fontWeight: 600, cursor: (newExt.trim() && newPwd.trim()) ? "pointer" : "default", fontFamily: "inherit" }}>
-              <Save size={14} />Сохранить
-            </button>
-          </div>
-
-          {freeNums.length > 0 && (
-            <div style={{ marginBottom: 14 }}>
-              <div style={{ fontSize: 10, fontWeight: 600, color: C.text2, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
-                Свободные номера · {freeNums.length}
-              </div>
-              {freeNums.map((n, i) => {
-                const miss = !n.pwd.trim();
-                return (
-                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", background: C.bg2, border: `1px solid ${C.border}`, borderRadius: 8, marginBottom: 6 }}>
-                    <div style={{ width: 28, height: 28, borderRadius: "50%", background: C.border, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                      <Hash size={13} color={C.text2} />
-                    </div>
-                    <span style={{ flex: 1, fontSize: 13, fontWeight: 600, fontFamily: "'DM Mono', monospace", color: C.text }}>#{n.ext}</span>
-                    <input type="password" value={n.pwd} onChange={(e) => updFreePwd(i, e.target.value)} disabled={n.saved} placeholder="Пароль*"
-                      style={{ width: 130, padding: "5px 8px", border: `1px solid ${miss ? C.err : C.border}`, borderRadius: 6, fontSize: 12, fontFamily: "'DM Mono', monospace", color: C.text, outline: "none", background: n.saved ? C.bg3 : C.card, filter: n.saved ? "blur(2.5px)" : "none" }} />
-                    {n.saved ? (
-                      <button onClick={() => editFree(i)} title="Изменить пароль" style={{ width: 28, height: 28, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", background: "transparent", cursor: "pointer", color: C.text2, border: `1px solid ${C.border}` }}>
-                        <Edit2 size={13} />
-                      </button>
-                    ) : (
-                      <button onClick={() => saveFree(i)} disabled={miss} title="Сохранить пароль" style={{ width: 28, height: 28, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", background: miss ? C.bg3 : C.acc, color: miss ? C.text3 : "white", cursor: miss ? "default" : "pointer", border: "none" }}>
-                        <Check size={14} />
-                      </button>
-                    )}
-                    <button onClick={() => rmFree(i)} title="Удалить номер" style={{ width: 26, height: 26, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", background: "transparent", cursor: "pointer", color: C.text3, border: "none" }}>
-                      <X size={14} />
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {freeNums.length === 0 && assigned.length === 0 && (
-            <div style={{ padding: "24px 12px", textAlign: "center", color: C.text3 }}>
-              <Hash size={20} style={{ marginBottom: 8 }} />
-              <div style={{ fontSize: 12.5, color: C.text2, fontWeight: 500 }}>Номера не созданы</div>
-              <div style={{ fontSize: 11.5, color: C.text3, marginTop: 3, lineHeight: 1.5 }}>Добавьте первый номер из FreePBX в поле выше</div>
-            </div>
-          )}
-        </Sec>
-      </div>
-    </div>
-  );
-}
-
-// ──────────────────────────────────────────────────────────────────────────
-// SYSTEM SETTINGS — единая админ-страница с табами
-// (Пользователи / Телефония / SMTP / AI)
-// ──────────────────────────────────────────────────────────────────────────
-
-type SettingsTab = "users" | "phone" | "smtp" | "ai";
-
-function SystemSettingsPage(_: { users?: MockUser[] }) {
-  const [tab, setTab] = useState<SettingsTab>("users");
-
-  const tabs: { id: SettingsTab; label: string; Icon: LucideIcon }[] = [
-    { id: "users", label: "Пользователи", Icon: User },
-    { id: "phone", label: "Телефония",    Icon: Phone },
-    { id: "smtp",  label: "SMTP",         Icon: Send },
-    { id: "ai",    label: "AI",           Icon: Sparkles },
+  const [tab, setTab] = useState<"webrtc" | "ami">("webrtc");
+  const tabs = [
+    { id: "webrtc" as const, label: "WebRTC шлюз", Icon: Phone },
+    { id: "ami"    as const, label: "AMI (мониторинг)", Icon: Activity },
   ];
 
   return (
     <div style={{ minHeight: "100%", background: C.bg2, display: "flex", flexDirection: "column" }}>
-      <PgHdr title="Настройки системы" sub="Пользователи · Телефония · SMTP · AI" />
+      {!hideHeader && (
+        <PgHdr title="Настройки телефонии" sub="FreePBX · WebRTC-шлюз и AMI для мониторинга" />
+      )}
       <div style={{ padding: "0 24px", background: C.card, borderBottom: `1px solid ${C.border}`, display: "flex", gap: 4, flexShrink: 0 }}>
         {tabs.map((x) => (
           <button key={x.id} onClick={() => setTab(x.id)}
@@ -2083,10 +1976,282 @@ function SystemSettingsPage(_: { users?: MockUser[] }) {
         ))}
       </div>
       <div style={{ flex: 1, overflowY: "auto" }}>
-        {tab === "users" && <UsersPage hideHeader />}
-        {tab === "phone" && <PhoneSettingsPage hideHeader />}
-        {tab === "smtp"  && <SmtpSettingsPage hideHeader />}
-        {tab === "ai"    && <AISettingsPage hideHeader />}
+        {tab === "webrtc" && <PhoneWebrtcTab />}
+        {tab === "ami"    && <PhoneAmiTab />}
+      </div>
+    </div>
+  );
+}
+
+function PhoneWebrtcTab() {
+  const [saved, setSaved] = useState(false);
+  const [freeNums, setFreeNums] = useState<{ ext: string; pwd: string; saved: boolean }[]>([]);
+  const [assigned] = useState<unknown[]>([]);
+  const [newExt, setNewExt] = useState("");
+  const [newPwd, setNewPwd] = useState("");
+  const save = () => { setSaved(true); setTimeout(() => setSaved(false), 2500); };
+  const addFree = () => {
+    if (!newExt.trim() || !newPwd.trim()) return;
+    setFreeNums((f) => [{ ext: newExt.trim(), pwd: newPwd, saved: true }, ...f]);
+    setNewExt(""); setNewPwd("");
+  };
+  const updFreePwd = (i: number, v: string) => setFreeNums((f) => f.map((x, idx) => idx === i ? { ...x, pwd: v, saved: false } : x));
+  const saveFree = (i: number) => setFreeNums((f) => f.map((x, idx) => idx === i ? { ...x, saved: true } : x));
+  const editFree = (i: number) => setFreeNums((f) => f.map((x, idx) => idx === i ? { ...x, saved: false } : x));
+  const rmFree = (i: number) => setFreeNums((f) => f.filter((_, idx) => idx !== i));
+
+  return (
+    <div style={{ padding: 24, maxWidth: 640 }}>
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 14 }}>
+        <button onClick={save} style={{ display: "flex", alignItems: "center", gap: 7, background: saved ? C.acc : C.text, color: "white", padding: "9px 18px", borderRadius: 8, fontWeight: 600, fontSize: 14, border: "none", cursor: "pointer", fontFamily: "inherit" }}>
+          {saved ? <><Check size={15} />Сохранено</> : <><Save size={15} />Сохранить</>}
+        </button>
+      </div>
+      <SettingsSection title="Подключение к FreePBX" sub="WSS-сигнализация WebRTC, шлюз для браузерного софтфона">
+        <Field label="WSS-адрес шлюза"><input placeholder="wss://pbx.example.com:8089/ws" style={{ ...inp(), fontFamily: "'DM Mono', monospace" }} /></Field>
+        <button style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 13, color: C.text, background: C.card, cursor: "pointer", fontFamily: "inherit", marginTop: 4, fontWeight: 500 }}>
+          <Phone size={13} />Тестовый звонок
+        </button>
+      </SettingsSection>
+
+      <SettingsSection title="Внутренние номера" sub="Привязка extension'ов FreePBX к пользователям Toolkit">
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14, paddingBottom: 14, borderBottom: `1px dashed ${C.border}` }}>
+          <input value={newExt} onChange={(e) => setNewExt(e.target.value.replace(/\D/g, "").slice(0, 6))} onKeyDown={(e) => { if (e.key === "Enter") addFree(); }}
+            placeholder="Номер (напр. 1012)" style={{ width: 150, padding: "8px 11px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13, fontFamily: "'DM Mono', monospace", color: C.text, outline: "none", background: C.card }} />
+          <input type="password" value={newPwd} onChange={(e) => setNewPwd(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addFree(); }}
+            placeholder="Пароль*" style={{ flex: 1, minWidth: 140, padding: "8px 11px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13, fontFamily: "'DM Mono', monospace", color: C.text, outline: "none", background: C.card }} />
+          <button onClick={addFree} disabled={!newExt.trim() || !newPwd.trim()}
+            style={{ display: "flex", alignItems: "center", gap: 5, padding: "8px 14px", borderRadius: 7, border: "none", background: (newExt.trim() && newPwd.trim()) ? C.acc : C.bg3, color: (newExt.trim() && newPwd.trim()) ? "white" : C.text3, fontSize: 13, fontWeight: 600, cursor: (newExt.trim() && newPwd.trim()) ? "pointer" : "default", fontFamily: "inherit" }}>
+            <Save size={14} />Сохранить
+          </button>
+        </div>
+
+        {freeNums.length > 0 && (
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 10, fontWeight: 600, color: C.text2, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
+              Свободные номера · {freeNums.length}
+            </div>
+            {freeNums.map((n, i) => {
+              const miss = !n.pwd.trim();
+              return (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", background: C.bg2, border: `1px solid ${C.border}`, borderRadius: 8, marginBottom: 6 }}>
+                  <div style={{ width: 28, height: 28, borderRadius: "50%", background: C.border, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                    <Hash size={13} color={C.text2} />
+                  </div>
+                  <span style={{ flex: 1, fontSize: 13, fontWeight: 600, fontFamily: "'DM Mono', monospace", color: C.text }}>#{n.ext}</span>
+                  <input type="password" value={n.pwd} onChange={(e) => updFreePwd(i, e.target.value)} disabled={n.saved} placeholder="Пароль*"
+                    style={{ width: 130, padding: "5px 8px", border: `1px solid ${miss ? C.err : C.border}`, borderRadius: 6, fontSize: 12, fontFamily: "'DM Mono', monospace", color: C.text, outline: "none", background: n.saved ? C.bg3 : C.card, filter: n.saved ? "blur(2.5px)" : "none" }} />
+                  {n.saved ? (
+                    <button onClick={() => editFree(i)} title="Изменить пароль" style={{ width: 28, height: 28, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", background: "transparent", cursor: "pointer", color: C.text2, border: `1px solid ${C.border}` }}>
+                      <Edit2 size={13} />
+                    </button>
+                  ) : (
+                    <button onClick={() => saveFree(i)} disabled={miss} title="Сохранить пароль" style={{ width: 28, height: 28, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", background: miss ? C.bg3 : C.acc, color: miss ? C.text3 : "white", cursor: miss ? "default" : "pointer", border: "none" }}>
+                      <Check size={14} />
+                    </button>
+                  )}
+                  <button onClick={() => rmFree(i)} title="Удалить номер" style={{ width: 26, height: 26, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", background: "transparent", cursor: "pointer", color: C.text3, border: "none" }}>
+                    <X size={14} />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {freeNums.length === 0 && assigned.length === 0 && (
+          <div style={{ padding: "24px 12px", textAlign: "center", color: C.text3 }}>
+            <Hash size={20} style={{ marginBottom: 8 }} />
+            <div style={{ fontSize: 12.5, color: C.text2, fontWeight: 500 }}>Номера не созданы</div>
+            <div style={{ fontSize: 11.5, color: C.text3, marginTop: 3, lineHeight: 1.5 }}>Добавьте первый номер из FreePBX в поле выше</div>
+          </div>
+        )}
+      </SettingsSection>
+    </div>
+  );
+}
+
+function PhoneAmiTab() {
+  const [saved, setSaved] = useState(false);
+  const [enabled, setEnabled] = useState(false);
+  const [testSt, setTestSt] = useState<"idle" | "checking" | "ok" | "fail">("idle");
+  const save = () => { setSaved(true); setTimeout(() => setSaved(false), 2500); };
+  const test = () => {
+    setTestSt("checking");
+    setTimeout(() => setTestSt("fail"), 1400); // mock — реальное подключение в E6
+  };
+
+  return (
+    <div style={{ padding: 24, maxWidth: 640 }}>
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 14 }}>
+        <button onClick={save} style={{ display: "flex", alignItems: "center", gap: 7, background: saved ? C.acc : C.text, color: "white", padding: "9px 18px", borderRadius: 8, fontWeight: 600, fontSize: 14, border: "none", cursor: "pointer", fontFamily: "inherit" }}>
+          {saved ? <><Check size={15} />Сохранено</> : <><Save size={15} />Сохранить</>}
+        </button>
+      </div>
+
+      <SettingsSection title="Asterisk Manager Interface (AMI)"
+        sub="Прямое TCP-подключение к Asterisk для мониторинга АТС: список регистраций, активные каналы, история CDR. Не используется для звонков — только наблюдение.">
+        <label style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", border: `1px solid ${enabled ? C.acc : C.border}`, borderRadius: 10, cursor: "pointer", background: enabled ? C.accBg : C.card, marginBottom: 14 }}>
+          <div style={{ position: "relative", width: 36, height: 20, background: enabled ? C.acc : C.border2, borderRadius: 10, flexShrink: 0 }}>
+            <div style={{ position: "absolute", top: 2, left: enabled ? 18 : 2, width: 16, height: 16, background: "white", borderRadius: "50%", transition: "left .15s", boxShadow: "0 1px 3px rgba(0,0,0,0.15)" }} />
+          </div>
+          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} style={{ display: "none" }} />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 600, color: C.text }}>Включить интеграцию AMI</div>
+            <div style={{ fontSize: 12, color: C.text2, marginTop: 2, lineHeight: 1.4 }}>Без этой галочки модуль «Мониторинг АТС» не будет получать данные от Asterisk.</div>
+          </div>
+        </label>
+
+        <Field label="Хост"><input placeholder="pbx.example.com или IP" style={{ ...inp(), fontFamily: "'DM Mono', monospace" }} disabled={!enabled} /></Field>
+        <div style={{ display: "grid", gridTemplateColumns: "140px 1fr", gap: 12, marginBottom: 14 }}>
+          <div>
+            <Lbl>Порт</Lbl>
+            <input defaultValue="5038" style={{ ...inp(), fontFamily: "'DM Mono', monospace" }} disabled={!enabled} />
+          </div>
+          <div>
+            <Lbl>Пользователь AMI</Lbl>
+            <input placeholder="toolkit-monitor" style={inp()} disabled={!enabled} />
+          </div>
+        </div>
+        <Field label="Секрет (manager.conf → secret)"><input type="password" placeholder="••••••••" style={inp()} disabled={!enabled} /></Field>
+      </SettingsSection>
+
+      <SettingsSection title="Проверка подключения" sub="Подключиться к AMI и прочитать `Action: Ping`">
+        <button onClick={test} disabled={!enabled || testSt === "checking"}
+          style={{ padding: "9px 14px", borderRadius: 8, border: `1px solid ${C.border}`, background: testSt === "ok" ? C.accBg : C.card, color: testSt === "ok" ? C.accTx : C.text, fontSize: 13, fontWeight: 500, cursor: enabled && testSt !== "checking" ? "pointer" : "default", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6, opacity: enabled ? 1 : 0.55 }}>
+          {testSt === "checking" ? <><RefreshCw size={14} className="lk-spin" />Проверяем…</>
+            : testSt === "ok" ? <><Check size={14} />Соединение ОК</>
+            : testSt === "fail" ? <><AlertCircle size={14} color={C.err} />Не удалось подключиться</>
+            : <><Wifi size={14} />Проверить связь</>}
+        </button>
+        {testSt === "fail" && (
+          <div style={{ marginTop: 10, fontSize: 12, color: C.text2, lineHeight: 1.5 }}>
+            Заглушка теста: реальная проверка появится в E6 (Softphone). Сейчас интеграция AMI не реализована — только UI настроек.
+          </div>
+        )}
+      </SettingsSection>
+    </div>
+  );
+}
+
+// SettingsSection — карточка раздела для PhoneSettings/SmtpSettings/AISettings.
+function SettingsSection({ title, sub, children }: { title: string; sub?: string; children: ReactNode }) {
+  return (
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, marginBottom: 16, overflow: "hidden" }}>
+      <div style={{ padding: "14px 20px", borderBottom: `1px solid ${C.border}` }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{title}</div>
+        {sub && <div style={{ fontSize: 12, color: C.text2, marginTop: 2 }}>{sub}</div>}
+      </div>
+      <div style={{ padding: "18px 20px" }}>{children}</div>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// SYSTEM SETTINGS — единая админ-страница с табами
+// (Пользователи / Телефония / SMTP / AI)
+// ──────────────────────────────────────────────────────────────────────────
+
+type SettingsTab = "users" | "modules" | "phone" | "smtp" | "ai";
+
+function SystemSettingsPage(_: { users?: MockUser[] }) {
+  const [tab, setTab] = useState<SettingsTab>("users");
+
+  const tabs: { id: SettingsTab; label: string; Icon: LucideIcon }[] = [
+    { id: "users",   label: "Пользователи",     Icon: User },
+    { id: "modules", label: "Доступ к модулям", Icon: Shield },
+    { id: "phone",   label: "Телефония",        Icon: Phone },
+    { id: "smtp",    label: "SMTP",             Icon: Send },
+    { id: "ai",      label: "AI",               Icon: Sparkles },
+  ];
+
+  return (
+    <div style={{ minHeight: "100%", background: C.bg2, display: "flex", flexDirection: "column" }}>
+      <PgHdr title="Настройки системы" sub="Пользователи · Доступ к модулям · Телефония · SMTP · AI" />
+      <div style={{ padding: "0 24px", background: C.card, borderBottom: `1px solid ${C.border}`, display: "flex", gap: 4, flexShrink: 0 }}>
+        {tabs.map((x) => (
+          <button key={x.id} onClick={() => setTab(x.id)}
+            style={{
+              padding: "12px 14px", background: "transparent", border: "none",
+              borderBottom: `2px solid ${tab === x.id ? C.acc : "transparent"}`,
+              color: tab === x.id ? C.text : C.text2,
+              fontSize: 13.5, fontWeight: tab === x.id ? 600 : 500,
+              cursor: "pointer", fontFamily: "inherit",
+              display: "flex", alignItems: "center", gap: 7, marginBottom: -1,
+            }}>
+            <x.Icon size={15} />{x.label}
+          </button>
+        ))}
+      </div>
+      <div style={{ flex: 1, overflowY: "auto" }}>
+        {tab === "users"   && <UsersPage hideHeader />}
+        {tab === "modules" && <ModuleAccessPage />}
+        {tab === "phone"   && <PhoneSettingsPage hideHeader />}
+        {tab === "smtp"    && <SmtpSettingsPage hideHeader />}
+        {tab === "ai"      && <AISettingsPage hideHeader />}
+      </div>
+    </div>
+  );
+}
+
+// ModuleAccessPage — переключатели видимости модулей в основном меню для
+// non-admin пользователей. Админы всегда видят всё (фильтр на стороне UI).
+function ModuleAccessPage() {
+  const q = useModuleAccess();
+  const upd = useUpdateModuleAccess();
+  const v = q.data;
+  const [draft, setDraft] = useState<typeof v>(v);
+  useEffect(() => { if (v) setDraft(v); }, [v]);
+
+  if (!draft || !v) return <div style={{ padding: 40, textAlign: "center", color: C.text3 }}>Загрузка…</div>;
+
+  const dirty = JSON.stringify(draft) !== JSON.stringify(v);
+  const items: { key: keyof typeof draft; label: string; desc: string; Icon: LucideIcon }[] = [
+    { key: "vcs",           label: "Видеоконференции", desc: "Создание и проведение встреч (LiveKit)", Icon: Video },
+    { key: "transcription", label: "Транскрибация",    desc: "Расшифровка звонков и встреч (GigaAM)",  Icon: FileText },
+    { key: "messengers",    label: "Мессенджеры",      desc: "WhatsApp / Telegram / внутренний чат",   Icon: MessageSquare },
+    { key: "contacts",      label: "Контакты",         desc: "Справочник коллег и контрагентов",       Icon: Users },
+    { key: "helpdesk",      label: "Хелпдэск",         desc: "Тикеты для ИТ / АХО / HR",               Icon: HelpCircle },
+  ];
+
+  const save = async () => {
+    try { await upd.mutateAsync(draft); }
+    catch (e) { alert("Не удалось сохранить: " + (e instanceof Error ? e.message : String(e))); }
+  };
+
+  return (
+    <div style={{ padding: 24, maxWidth: 720 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+        <div style={{ fontSize: 12.5, color: C.text2, lineHeight: 1.5 }}>
+          Выключенный модуль скрывается из меню для всех, кроме главного администратора.<br/>Доступ по прямой ссылке тоже блокируется (роуты на сервере не проверяют этот флаг — в первой версии скрытие только в UI).
+        </div>
+        <button onClick={() => void save()} disabled={!dirty || upd.isPending}
+          style={{ display: "flex", alignItems: "center", gap: 7, background: dirty && !upd.isPending ? C.acc : C.bg3, color: dirty && !upd.isPending ? "white" : C.text3, padding: "9px 18px", borderRadius: 8, fontWeight: 600, fontSize: 14, border: "none", cursor: dirty && !upd.isPending ? "pointer" : "default", fontFamily: "inherit", flexShrink: 0 }}>
+          {upd.isPending ? <><RefreshCw size={15} className="lk-spin" />Сохраняем…</>
+            : upd.isSuccess && !dirty ? <><Check size={15} />Сохранено</>
+            : <><Save size={15} />Сохранить</>}
+        </button>
+      </div>
+
+      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
+        {items.map((it, i) => {
+          const on = !!draft[it.key];
+          return (
+            <label key={it.key} style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 18px", borderTop: i === 0 ? "none" : `1px solid ${C.border}`, cursor: "pointer" }}>
+              <div style={{ width: 36, height: 36, borderRadius: 10, background: on ? C.accBg : C.bg3, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                <it.Icon size={17} color={on ? C.acc : C.text3} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{it.label}</div>
+                <div style={{ fontSize: 12, color: C.text2, marginTop: 2 }}>{it.desc}</div>
+              </div>
+              <div style={{ position: "relative", width: 40, height: 22, background: on ? C.acc : C.border2, borderRadius: 11, flexShrink: 0, transition: "background .15s" }}>
+                <div style={{ position: "absolute", top: 2, left: on ? 20 : 2, width: 18, height: 18, background: "white", borderRadius: "50%", transition: "left .15s", boxShadow: "0 1px 3px rgba(0,0,0,0.15)" }} />
+              </div>
+              <input type="checkbox" checked={on} onChange={(e) => setDraft({ ...draft, [it.key]: e.target.checked })} style={{ display: "none" }} />
+            </label>
+          );
+        })}
       </div>
     </div>
   );
@@ -2203,36 +2368,53 @@ function AISettingsPage({ hideHeader }: { hideHeader?: boolean } = {}) {
 }
 
 function SmtpSettingsPage({ hideHeader }: { hideHeader?: boolean } = {}) {
-  const [saved, setSaved] = useState(false);
-  const [testSt, setTestSt] = useState<"idle" | "sending" | "sent">("idle");
-  const [enc, setEnc] = useState("starttls");
-  const [port, setPort] = useState("587");
-  const [testEmail, setTestEmail] = useState("");
+  const q = useSmtpConfig();
+  const upd = useUpdateSmtpConfig();
+  type Form = {
+    host: string; port: number; encryption: "ssl" | "starttls" | "none" | "";
+    user: string; password: string;
+    from_name: string; from_email: string;
+  };
+  const [form, setForm] = useState<Form>({
+    host: "", port: 587, encryption: "starttls", user: "", password: "", from_name: "", from_email: "",
+  });
+  const [pwTouched, setPwTouched] = useState(false);
+  useEffect(() => {
+    if (q.data) setForm({
+      host: q.data.host, port: q.data.port || 587,
+      encryption: (q.data.encryption || "starttls"),
+      user: q.data.user, password: "",
+      from_name: q.data.from_name, from_email: q.data.from_email,
+    });
+  }, [q.data]);
 
-  const save = () => { setSaved(true); setTimeout(() => setSaved(false), 2500); };
-  const testConn = () => {
-    setTestSt("sending");
-    setTimeout(() => { setTestSt("sent"); setTimeout(() => setTestSt("idle"), 4000); }, 1500);
+  const set = <K extends keyof Form>(k: K, v: Form[K]) => setForm((f) => ({ ...f, [k]: v }));
+  const save = async () => {
+    try {
+      await upd.mutateAsync({
+        host: form.host, port: Number(form.port) || 587,
+        encryption: form.encryption || "starttls",
+        user: form.user,
+        password: pwTouched ? form.password : "", // пустая строка → backend сохранит старый
+        from_name: form.from_name, from_email: form.from_email,
+      });
+      setPwTouched(false);
+    } catch (e) {
+      alert("Не удалось сохранить: " + (e instanceof Error ? e.message : String(e)));
+    }
   };
 
-  const Sec = ({ title, sub, children }: { title: string; sub?: string; children: ReactNode }) => (
-    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, marginBottom: 16, overflow: "hidden" }}>
-      <div style={{ padding: "14px 20px", borderBottom: `1px solid ${C.border}` }}>
-        <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{title}</div>
-        {sub && <div style={{ fontSize: 12, color: C.text2, marginTop: 2 }}>{sub}</div>}
-      </div>
-      <div style={{ padding: "18px 20px" }}>{children}</div>
-    </div>
-  );
-
   const saveBtn = (
-    <button onClick={save} style={{ display: "flex", alignItems: "center", gap: 7, background: saved ? C.acc : C.text, color: "white", padding: "9px 18px", borderRadius: 8, fontWeight: 600, fontSize: 14, border: "none", cursor: "pointer", fontFamily: "inherit" }}>
-      {saved ? <><Check size={15} />Сохранено</> : <><Save size={15} />Сохранить</>}
+    <button onClick={() => void save()} disabled={upd.isPending}
+      style={{ display: "flex", alignItems: "center", gap: 7, background: upd.isPending ? C.bg3 : (upd.isSuccess ? C.acc : C.text), color: upd.isPending ? C.text3 : "white", padding: "9px 18px", borderRadius: 8, fontWeight: 600, fontSize: 14, border: "none", cursor: upd.isPending ? "default" : "pointer", fontFamily: "inherit" }}>
+      {upd.isPending ? <><RefreshCw size={15} className="lk-spin" />Сохраняем…</>
+        : upd.isSuccess ? <><Check size={15} />Сохранено</>
+        : <><Save size={15} />Сохранить</>}
     </button>
   );
+
   return (
     <div style={{ minHeight: "100%", background: C.bg2 }}>
-      <style>{`@keyframes spin2{to{transform:rotate(360deg)}}`}</style>
       {!hideHeader && (
         <PgHdr title="Настройки SMTP" sub="Отправка приглашений на встречи и уведомлений" action={saveBtn} />
       )}
@@ -2240,48 +2422,46 @@ function SmtpSettingsPage({ hideHeader }: { hideHeader?: boolean } = {}) {
         {hideHeader && (
           <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 14 }}>{saveBtn}</div>
         )}
-        <Sec title="Сервер SMTP" sub="Параметры подключения к почтовому серверу">
-          <Field label="Хост"><input placeholder="smtp.example.com" style={{ ...inp(), fontFamily: "'DM Mono', monospace" }} /></Field>
+
+        <div style={{ marginBottom: 16, padding: "10px 12px", background: C.warnBg, border: `1px solid ${C.warnBrd}`, borderRadius: 8, fontSize: 12, color: C.warnTx, lineHeight: 1.5 }}>
+          Настройки сохраняются в БД, но автоматическая отправка писем (приглашения, GDPR-отчёты) появится с E8.x — пока ни один сценарий их не использует.
+        </div>
+
+        <SettingsSection title="Сервер SMTP" sub="Параметры подключения к почтовому серверу">
+          <Field label="Хост"><input value={form.host} onChange={(e) => set("host", e.target.value)} placeholder="smtp.example.com" style={{ ...inp(), fontFamily: "'DM Mono', monospace" }} /></Field>
           <div style={{ display: "grid", gridTemplateColumns: "140px 1fr", gap: 12, marginBottom: 14 }}>
             <div>
               <Lbl>Порт</Lbl>
-              <select value={port} onChange={(e) => setPort(e.target.value)} style={{ ...inp(), fontFamily: "'DM Mono', monospace", cursor: "pointer" }}>
+              <select value={String(form.port)} onChange={(e) => set("port", Number(e.target.value))} style={{ ...inp(), fontFamily: "'DM Mono', monospace", cursor: "pointer" }}>
                 <option value="25">25</option><option value="465">465</option><option value="587">587</option>
               </select>
             </div>
             <div>
               <Lbl>Шифрование</Lbl>
-              <select value={enc} onChange={(e) => setEnc(e.target.value)} style={{ ...inp(), cursor: "pointer" }}>
+              <select value={form.encryption} onChange={(e) => set("encryption", e.target.value as Form["encryption"])} style={{ ...inp(), cursor: "pointer" }}>
                 <option value="ssl">SSL/TLS</option><option value="starttls">STARTTLS</option><option value="none">Без шифрования</option>
               </select>
             </div>
           </div>
-          <Field label="Логин"><input placeholder="noreply@example.com" style={inp()} /></Field>
-          <Field label="Пароль"><input type="password" placeholder="••••••••" style={inp()} /></Field>
-        </Sec>
+          <Field label="Логин"><input value={form.user} onChange={(e) => set("user", e.target.value)} placeholder="noreply@example.com" style={inp()} /></Field>
+          <Field label={`Пароль${q.data?.has_password && !pwTouched ? " · сохранён" : ""}`}>
+            <input type="password" value={form.password}
+              onChange={(e) => { set("password", e.target.value); setPwTouched(true); }}
+              placeholder={q.data?.has_password && !pwTouched ? "••••••••" : "Введите пароль"} style={inp()} />
+          </Field>
+        </SettingsSection>
 
-        <Sec title="Отправитель" sub="Как будет выглядеть адрес в письмах">
-          <Field label="Имя отправителя"><input placeholder="Название компании" style={inp()} /></Field>
-          <Field label="Email отправителя"><input placeholder="noreply@example.com" style={{ ...inp(), fontFamily: "'DM Mono', monospace" }} /></Field>
-        </Sec>
+        <SettingsSection title="Отправитель" sub="Как будет выглядеть адрес в письмах">
+          <Field label="Имя отправителя"><input value={form.from_name} onChange={(e) => set("from_name", e.target.value)} placeholder="Название компании" style={inp()} /></Field>
+          <Field label="Email отправителя"><input value={form.from_email} onChange={(e) => set("from_email", e.target.value)} placeholder="noreply@example.com" style={{ ...inp(), fontFamily: "'DM Mono', monospace" }} /></Field>
+        </SettingsSection>
 
-        <Sec title="Проверка" sub="Отправить тестовое письмо с текущими настройками">
-          <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
-            <div style={{ flex: 1 }}>
-              <Lbl>Адрес получателя</Lbl>
-              <input value={testEmail} onChange={(e) => setTestEmail(e.target.value)} placeholder="your@email.com" style={inp()} />
-            </div>
-            <button onClick={testConn} disabled={testSt !== "idle" || !testEmail.trim()}
-              style={{ padding: "9px 14px", borderRadius: 8, border: `1px solid ${testSt === "sent" ? C.accBrd : C.border}`, background: testSt === "sent" ? C.accBg : C.card, color: testSt === "sent" ? C.accTx : C.text, fontSize: 13, fontWeight: 500, cursor: testSt !== "idle" || !testEmail.trim() ? "default" : "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6, opacity: testSt === "sending" || !testEmail.trim() ? 0.7 : 1, whiteSpace: "nowrap" }}>
-              {testSt === "sent" ? <><Check size={14} />Письмо отправлено</>
-                : testSt === "sending" ? <><RefreshCw size={14} style={{ animation: "spin2 1s linear infinite" }} />Отправка</>
-                  : <><Send size={14} />Отправить тест</>}
-            </button>
-          </div>
-          <div style={{ fontSize: 11.5, color: C.text3, marginTop: 10, lineHeight: 1.5 }}>
-            Если письмо не пришло — проверьте настройки подключения, логин/пароль и папку «Спам».
-          </div>
-        </Sec>
+        <SettingsSection title="Проверка" sub="Тестовая отправка появится вместе с email-уведомлениями (E8.x)">
+          <button disabled title="Функция тестовой отправки появится позже"
+            style={{ padding: "9px 14px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg3, color: C.text3, fontSize: 13, fontWeight: 500, cursor: "default", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6 }}>
+            <Send size={14} />Отправить тест
+          </button>
+        </SettingsSection>
       </div>
     </div>
   );
@@ -2473,14 +2653,17 @@ function StubPage({ page }: { page: "messengers" | "contacts" | "helpdesk" }) {
 
 const NAV: NavItemDef[] = [
   { id: "vcs",           label: "Конференции",   Icon: Video },
-  { id: "analytics",     label: "Аналитика",     Icon: BarChart3 },
   { id: "transcription", label: "Транскрибация", Icon: FileText },
   { id: "messengers",    label: "Мессенджеры",   Icon: MessageSquare, stub: true },
   { id: "contacts",      label: "Контакты",      Icon: Users,         stub: true },
   { id: "helpdesk",      label: "Хелпдэск",      Icon: HelpCircle,    stub: true },
 ];
+// Админ-меню: только пользователям с role=admin. Мониторинг АТС переехал
+// сюда из основного меню — он показывает оперативные метрики FreePBX и
+// нужен только дежурному админу.
 const ADM: NavItemDef[] = [
-  { id: "settings", label: "Настройки системы", Icon: Settings },
+  { id: "monitoring", label: "Мониторинг АТС",    Icon: BarChart3 },
+  { id: "settings",   label: "Настройки системы", Icon: Settings },
 ];
 
 export function Shell({ me }: { me: Me }) {
@@ -2508,6 +2691,17 @@ function ShellInner({ me }: { me: Me }) {
 
   const meAsMock = meAsMockUser(me);
   const isAdmin = me.role === "admin";
+
+  // Module-access — админам показываем всё, остальным фильтруем по флагам.
+  const moduleAccess = useModuleAccess().data;
+  const visibleNav = isAdmin ? NAV : NAV.filter((it) => {
+    if (!moduleAccess) return true;
+    return (moduleAccess as unknown as Record<string, boolean>)[it.id] !== false;
+  });
+  // Если non-admin сейчас на скрытом модуле — переадресуем на первый доступный.
+  const allowedPage = (isAdmin || visibleNav.some((it) => it.id === page))
+    ? page
+    : (visibleNav[0]?.id ?? "vcs");
 
   const onEnter = () => { if (hoverTimer.current) clearTimeout(hoverTimer.current); setExpanded(true); };
   const onLeave = () => { if (hoverTimer.current) clearTimeout(hoverTimer.current); hoverTimer.current = setTimeout(() => setExpanded(false), 120); };
@@ -2553,7 +2747,7 @@ function ShellInner({ me }: { me: Me }) {
 
         <div style={{ flex: 1, padding: "8px 0", overflowY: "auto", overflowX: "hidden", display: "flex", flexDirection: "column" }}>
           <div style={{ padding: "10px 14px 4px", fontSize: 10, fontWeight: 600, color: C.text3, textTransform: "uppercase", letterSpacing: "0.09em", whiteSpace: "nowrap", opacity: expanded ? 1 : 0, transition: "opacity 120ms", transitionDelay: expanded ? "80ms" : "0ms", height: expanded ? "auto" : 0, overflow: "hidden" }}>Инструменты</div>
-          {NAV.map((item) => <NavItem key={item.id} item={item} active={page === item.id} expanded={expanded} onClick={() => setPage(item.id)} />)}
+          {visibleNav.map((item) => <NavItem key={item.id} item={item} active={page === item.id} expanded={expanded} onClick={() => setPage(item.id)} />)}
           {isAdmin && <>
             <div style={{ margin: "8px 12px", borderTop: `1px solid ${C.border}` }} />
             <div style={{ padding: "4px 14px 4px", fontSize: 10, fontWeight: 600, color: C.text3, textTransform: "uppercase", letterSpacing: "0.09em", whiteSpace: "nowrap", opacity: expanded ? 1 : 0, transition: "opacity 120ms", transitionDelay: expanded ? "80ms" : "0ms", height: expanded ? "auto" : 0, overflow: "hidden" }}>Администратор</div>
@@ -2580,11 +2774,11 @@ function ShellInner({ me }: { me: Me }) {
       </nav>
 
       <main style={{ flex: 1, overflow: "auto", display: "flex", flexDirection: "column" }}>
-        {page === "vcs"            && <VcsPage me={me} onOpenTranscriptions={goToTranscriptions} />}
-        {page === "analytics"      && <AnalyticsPage />}
-        {page === "transcription"  && <TranscriptionPage meetingFilter={transcriptMeetingFilter} />}
-        {isAdmin && page === "settings" && <SystemSettingsPage />}
-        {(["messengers", "contacts", "helpdesk"] as const).includes(page as any) && <StubPage page={page as "messengers" | "contacts" | "helpdesk"} />}
+        {allowedPage === "vcs"             && <VcsPage me={me} onOpenTranscriptions={goToTranscriptions} />}
+        {allowedPage === "transcription"   && <TranscriptionPage meetingFilter={transcriptMeetingFilter} />}
+        {isAdmin && allowedPage === "monitoring" && <AnalyticsPage />}
+        {isAdmin && allowedPage === "settings"   && <SystemSettingsPage />}
+        {(["messengers", "contacts", "helpdesk"] as const).includes(allowedPage as any) && <StubPage page={allowedPage as "messengers" | "contacts" | "helpdesk"} />}
       </main>
 
       <SoftphoneWidget />

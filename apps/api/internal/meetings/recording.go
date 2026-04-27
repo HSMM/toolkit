@@ -71,13 +71,22 @@ func (s *Service) StartRecording(ctx context.Context, subj *auth.Subject, meetin
 		return ErrEnded
 	}
 
+	// Эксклюзивный lock на meeting на всю проверку+запуск+UPDATE: защита от
+	// двойного auto-start (host входит дважды быстрым реджойном) — иначе
+	// получим два LK-egress'а, второй перезапишет колонку и первый «утечёт».
+	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
 	var (
-		active                bool
-		videoEg, audioEg      *string
+		active           bool
+		videoEg, audioEg *string
 	)
-	if err := s.db.QueryRow(ctx, `
+	if err := tx.QueryRow(ctx, `
 		SELECT recording_active, current_egress_id, current_audio_egress_id
-		FROM meeting WHERE id=$1
+		FROM meeting WHERE id=$1 FOR UPDATE
 	`, meetingID).Scan(&active, &videoEg, &audioEg); err != nil {
 		return err
 	}
@@ -86,7 +95,7 @@ func (s *Service) StartRecording(ctx context.Context, subj *auth.Subject, meetin
 	}
 
 	// Запускаем обе дорожки. Если вторая упала — первую нужно остановить,
-	// чтобы не остался "зависший" видео-egress.
+	// чтобы не остался «зависший» видео-egress.
 	videoID, err := s.lk.StartRoomCompositeEgress(ctx, m.LiveKitRoomID, "grid", s.recDeps.VideoFilepathTmpl, s.recDeps.S3)
 	if err != nil {
 		return fmt.Errorf("video egress: %w", err)
@@ -97,7 +106,7 @@ func (s *Service) StartRecording(ctx context.Context, subj *auth.Subject, meetin
 		return fmt.Errorf("audio egress: %w", err)
 	}
 
-	if _, err := s.db.Exec(ctx, `
+	if _, err := tx.Exec(ctx, `
 		UPDATE meeting
 		   SET recording_active        = TRUE,
 		       recording_started_at    = COALESCE(recording_started_at, NOW()),
@@ -108,6 +117,11 @@ func (s *Service) StartRecording(ctx context.Context, subj *auth.Subject, meetin
 		_ = s.lk.StopEgress(ctx, videoID)
 		_ = s.lk.StopEgress(ctx, audioID)
 		return fmt.Errorf("flag meeting active: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		_ = s.lk.StopEgress(ctx, videoID)
+		_ = s.lk.StopEgress(ctx, audioID)
+		return fmt.Errorf("commit: %w", err)
 	}
 	return nil
 }
@@ -156,29 +170,6 @@ func (s *Service) OnEgressEnded(ctx context.Context, info *livekit.EgressInfo) e
 		return errors.New("OnEgressEnded: empty egress info")
 	}
 
-	// Поиск: или video, или audio. COALESCE — потому что после ENDED первой
-	// дорожки соответствующий current_*_egress_id уже NULL, и сравнение с $1
-	// возвращает NULL вместо false; *bool в Go не умеет в NULL.
-	const findQ = `
-		SELECT id,
-		       COALESCE(current_egress_id       = $1, FALSE) AS is_video,
-		       COALESCE(current_audio_egress_id = $1, FALSE) AS is_audio
-		FROM meeting
-		WHERE current_egress_id = $1 OR current_audio_egress_id = $1
-	`
-	var (
-		meetingID         uuid.UUID
-		isVideo, isAudio  bool
-	)
-	err := s.db.QueryRow(ctx, findQ, info.EgressID).Scan(&meetingID, &isVideo, &isAudio)
-	if errors.Is(err, pgx.ErrNoRows) {
-		s.logf("OnEgressEnded: no meeting for egress %s (already cleared?)", info.EgressID)
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-
 	var fr *livekit.FileResult
 	if len(info.FileResults) > 0 {
 		fr = info.FileResults[0]
@@ -190,22 +181,43 @@ func (s *Service) OnEgressEnded(ctx context.Context, info *livekit.EgressInfo) e
 	}
 	defer tx.Rollback(ctx)
 
-	// Сбрасываем pointer на эту дорожку (видео или аудио, в зависимости).
-	if isVideo {
-		if _, err := tx.Exec(ctx, `UPDATE meeting SET current_egress_id = NULL WHERE id = $1`, meetingID); err != nil {
-			return err
-		}
+	// Эксклюзивный lock на meeting на всю транзакцию — защита от гонки между
+	// параллельными webhook'ами видео+аудио и от ретраев одного и того же.
+	// COALESCE — после ENDED первой дорожки соответствующая колонка уже NULL.
+	const findQ = `
+		SELECT id,
+		       COALESCE(current_egress_id       = $1, FALSE) AS is_video,
+		       COALESCE(current_audio_egress_id = $1, FALSE) AS is_audio
+		FROM meeting
+		WHERE current_egress_id = $1 OR current_audio_egress_id = $1
+		FOR UPDATE
+	`
+	var (
+		meetingID        uuid.UUID
+		isVideo, isAudio bool
+	)
+	err = tx.QueryRow(ctx, findQ, info.EgressID).Scan(&meetingID, &isVideo, &isAudio)
+	if errors.Is(err, pgx.ErrNoRows) {
+		s.logf("OnEgressEnded: no meeting for egress %s (already cleared, retry?)", info.EgressID)
+		return nil
 	}
-	if isAudio {
-		if _, err := tx.Exec(ctx, `UPDATE meeting SET current_audio_egress_id = NULL WHERE id = $1`, meetingID); err != nil {
-			return err
-		}
+	if err != nil {
+		return err
 	}
-	// recording_active=false когда обе дорожки закончились (оба pointer'а NULL).
-	if _, err := tx.Exec(ctx, `
-		UPDATE meeting SET recording_active = FALSE
-		 WHERE id = $1 AND current_egress_id IS NULL AND current_audio_egress_id IS NULL
-	`, meetingID); err != nil {
+
+	// Сбрасываем pointer на эту дорожку (видео или аудио, в зависимости),
+	// и в одном UPDATE снимаем recording_active если обе уже NULL.
+	const clearQ = `
+		UPDATE meeting
+		   SET current_egress_id       = CASE WHEN $2 THEN NULL ELSE current_egress_id END,
+		       current_audio_egress_id = CASE WHEN $3 THEN NULL ELSE current_audio_egress_id END,
+		       recording_active        = CASE
+		           WHEN ($2 OR current_egress_id       IS NULL)
+		            AND ($3 OR current_audio_egress_id IS NULL)
+		           THEN FALSE ELSE recording_active END
+		 WHERE id = $1
+	`
+	if _, err := tx.Exec(ctx, clearQ, meetingID, isVideo, isAudio); err != nil {
 		return err
 	}
 
@@ -213,7 +225,11 @@ func (s *Service) OnEgressEnded(ctx context.Context, info *livekit.EgressInfo) e
 		if err := tx.Commit(ctx); err != nil {
 			return err
 		}
-		return fmt.Errorf("egress %s ended without file (status=%s, error=%s)", info.EgressID, info.Status, info.Error)
+		// Не возвращаем ошибку — иначе LiveKit будет ретраить webhook
+		// (мы уже зачистили pointer'ы). Просто логируем.
+		s.logf("egress %s ended without file (status=%s, error=%s)",
+			info.EgressID, info.Status, info.Error)
+		return nil
 	}
 
 	bucket, key := splitS3Path(fr.Filename, fr.Location, s.recDeps.S3.Bucket)
@@ -254,24 +270,35 @@ func (s *Service) OnEgressEnded(ctx context.Context, info *livekit.EgressInfo) e
 			"size":       sizeBytes, "duration_ns": fr.DurationNs(),
 		})
 		var transcriptID uuid.UUID
+		// ON CONFLICT по уникальному partial-индексу transcript_recording_active_uniq
+		// (миграция 000013). Защищает от ретрая webhook'а — повторный INSERT
+		// обновит engine_metadata, но НЕ создаст вторую расшифровку и не пошлёт
+		// дубль в очередь.
 		const insTx = `
 			INSERT INTO transcript (recording_id, status, engine, engine_metadata, retention_until)
 			SELECT $1, 'queued', 'gigaam', $2, r.retention_until + interval '30 days'
 			  FROM recording r WHERE r.id = $1
-			RETURNING id
+			ON CONFLICT (recording_id) WHERE status IN ('queued','processing','completed','partial')
+			DO UPDATE SET engine_metadata = EXCLUDED.engine_metadata
+			RETURNING id, (xmax = 0) AS inserted
 		`
-		if err := tx.QueryRow(ctx, insTx, recordingID, rawMeta).Scan(&transcriptID); err != nil {
+		var inserted bool
+		if err := tx.QueryRow(ctx, insTx, recordingID, rawMeta).Scan(&transcriptID, &inserted); err != nil {
 			return fmt.Errorf("insert transcript: %w", err)
 		}
-		payload, _ := json.Marshal(map[string]any{
-			"transcript_id": transcriptID,
-			"recording_id":  recordingID,
-		})
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO job (kind, payload, scheduled_at, max_attempts, priority)
-			VALUES ('transcribe_recording', $1, NOW(), 5, 50)
-		`, payload); err != nil {
-			return fmt.Errorf("enqueue transcribe: %w", err)
+		// Job ставим только когда реально создали новую транскрипцию (а не
+		// обновили существующую от ретрая webhook'а), иначе дубль обработки.
+		if inserted {
+			payload, _ := json.Marshal(map[string]any{
+				"transcript_id": transcriptID,
+				"recording_id":  recordingID,
+			})
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO job (kind, payload, scheduled_at, max_attempts, priority)
+				VALUES ('transcribe_recording', $1, NOW(), 5, 50)
+			`, payload); err != nil {
+				return fmt.Errorf("enqueue transcribe: %w", err)
+			}
 		}
 	}
 

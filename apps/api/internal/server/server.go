@@ -27,6 +27,7 @@ import (
 
 	"github.com/HSMM/toolkit/internal/admin"
 	"github.com/HSMM/toolkit/internal/auth"
+	"github.com/HSMM/toolkit/internal/sysset"
 	"github.com/HSMM/toolkit/internal/config"
 	"github.com/HSMM/toolkit/internal/db"
 	"github.com/HSMM/toolkit/internal/gigaam"
@@ -185,12 +186,18 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 				r.Mount("/meetings", meetingsHandlers.Routes())
 			}
 
+			// Системные настройки — read-only для всех authenticated
+			// (фронт фильтрует NAV по module_access).
+			sysHandlers := sysset.NewHandlers(pool)
+			r.Mount("/system-settings", sysHandlers.ReadRoutes())
+
 			// Admin-only endpoints, доступные через /api/v1/admin/* (NPM
 			// проксирует /api/v1 → api). Старая /admin/* группа (внизу)
 			// тоже остаётся — для прямых запросов к api без NPM-проксирования.
 			r.Group(func(r chi.Router) {
 				r.Use(middleware.RequireRole(auth.RoleAdmin))
 				r.Mount("/admin/users", admin.NewUsersHandlers(pool).Routes())
+				r.Mount("/admin/system-settings", sysHandlers.WriteRoutes())
 			})
 		})
 	})
