@@ -74,6 +74,7 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 				logger.Warn("LIVEKIT_PUBLIC_WS_URL пуст — фронт не сможет подключиться к комнате")
 			}
 			meetingsService = meetings.New(pool, lkClient, publicWS)
+			meetingsService.SetLogger(logger)
 			meetingsHandlers = meetings.NewHandlers(meetingsService)
 		}
 	}

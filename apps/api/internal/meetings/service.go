@@ -16,6 +16,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -36,11 +37,18 @@ type Service struct {
 	// recDeps — настроены в server.go через AttachRecording (E5.2). Если nil,
 	// все методы записи возвращают ErrRecordingNotConfigured.
 	recDeps *RecordingDeps
+	// log — для асинхронных операций (auto-start recording, OnEgressEnded
+	// диагностика). Может быть nil — тогда сообщения проглатываются.
+	log *slog.Logger
 }
 
 func New(db *pgxpool.Pool, lk *livekit.Client, publicWS string) *Service {
 	return &Service{db: db, lk: lk, publicWS: publicWS}
 }
+
+// SetLogger подключает logger для async-сообщений. Вызывается из server.go
+// после New (Service создаётся до того как logger передан).
+func (s *Service) SetLogger(l *slog.Logger) { s.log = l }
 
 // PublicWS возвращает URL, который фронт должен передать в LiveKitRoom.
 func (s *Service) PublicWS() string { return s.publicWS }
@@ -287,12 +295,20 @@ func (s *Service) Join(ctx context.Context, subj *auth.Subject, meetingID uuid.U
 	// автоматически стартуем (best-effort, асинхронно, чтобы не задержать join).
 	// Сама StartRecording идемпотентна: повторный вызов на active recording
 	// вернёт nil без побочек.
+	if s.log != nil {
+		s.log.Info("join evaluated for auto-record",
+			"meeting_id", m.ID, "role", role,
+			"record_enabled", m.RecordEnabled, "recording_active", m.RecordingActive,
+			"rec_deps_set", s.recDeps != nil)
+	}
 	if role == "host" && m.RecordEnabled && !m.RecordingActive && s.recDeps != nil {
 		subjCopy := subj
 		mID := m.ID
 		go func() {
 			if err := s.StartRecording(context.Background(), subjCopy, mID); err != nil {
-				s.logf("auto-start recording on host join: %v", err)
+				s.logf("auto-start recording on host join FAILED: %v", err)
+			} else {
+				s.logf("auto-start recording on host join OK meeting=%s", mID)
 			}
 		}()
 	}

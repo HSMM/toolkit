@@ -268,7 +268,7 @@ func (s *Service) OnEgressEnded(ctx context.Context, info *livekit.EgressInfo) e
 			"recording_id":  recordingID,
 		})
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO job (kind, payload, run_after, max_attempts, priority)
+			INSERT INTO job (kind, payload, scheduled_at, max_attempts, priority)
 			VALUES ('transcribe_recording', $1, NOW(), 5, 50)
 		`, payload); err != nil {
 			return fmt.Errorf("enqueue transcribe: %w", err)
@@ -310,7 +310,10 @@ func splitS3Path(filename, location, defaultBucket string) (bucket, key string) 
 }
 
 func (s *Service) logf(format string, args ...any) {
-	_ = format; _ = args
+	if s.log == nil {
+		return
+	}
+	s.log.Info(fmt.Sprintf(format, args...))
 }
 
 // ─── список и скачивание готовых файлов ─────────────────────────────────
