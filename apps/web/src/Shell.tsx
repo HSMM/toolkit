@@ -2133,7 +2133,8 @@ function PhoneSettingsPage({ hideHeader }: { hideHeader?: boolean } = {}) {
 function PhoneWebrtcTab() {
   const q = usePhoneConfig();
   const upd = useUpdatePhoneConfig();
-  type ExtRow = { ext: string; pwd: string; hasPwd: boolean };
+  const users = useAdminUsers();
+  type ExtRow = { ext: string; pwd: string; hasPwd: boolean; assigned: string | null };
   const [wssUrl, setWssUrl] = useState("");
   const [exts, setExts] = useState<ExtRow[]>([]);
   const [newExt, setNewExt] = useState("");
@@ -2142,20 +2143,26 @@ function PhoneWebrtcTab() {
   useEffect(() => {
     if (q.data) {
       setWssUrl(q.data.wss_url || "");
-      setExts(q.data.extensions.map((e) => ({ ext: e.ext, pwd: "", hasPwd: e.has_password })));
+      setExts(q.data.extensions.map((e) => ({
+        ext: e.ext, pwd: "", hasPwd: e.has_password,
+        assigned: e.assigned_to ?? null,
+      })));
     }
   }, [q.data]);
 
   const dirty = q.data
     ? wssUrl !== (q.data.wss_url || "") || exts.length !== q.data.extensions.length ||
-      exts.some((e, i) => e.ext !== q.data!.extensions[i]?.ext || e.pwd !== "")
+      exts.some((e, i) => {
+        const orig = q.data!.extensions[i];
+        return e.ext !== orig?.ext || e.pwd !== "" || e.assigned !== (orig?.assigned_to ?? null);
+      })
     : (wssUrl.length > 0 || exts.length > 0);
 
   const save = async () => {
     try {
       await upd.mutateAsync({
         wss_url: wssUrl.trim(),
-        extensions: exts.map((e) => ({ ext: e.ext, password: e.pwd })),
+        extensions: exts.map((e) => ({ ext: e.ext, password: e.pwd, assigned_to: e.assigned })),
       });
     } catch (e) {
       alert("Не удалось сохранить: " + (e instanceof Error ? e.message : String(e)));
@@ -2165,11 +2172,17 @@ function PhoneWebrtcTab() {
   const addNew = () => {
     if (!newExt.trim() || !newPwd.trim()) return;
     if (exts.some((x) => x.ext === newExt.trim())) return;
-    setExts((f) => [{ ext: newExt.trim(), pwd: newPwd, hasPwd: true }, ...f]);
+    setExts((f) => [{ ext: newExt.trim(), pwd: newPwd, hasPwd: true, assigned: null }, ...f]);
     setNewExt(""); setNewPwd("");
   };
   const updPwd = (i: number, v: string) => setExts((f) => f.map((x, idx) => idx === i ? { ...x, pwd: v } : x));
+  const updAssigned = (i: number, v: string) => setExts((f) => f.map((x, idx) => idx === i ? { ...x, assigned: v || null } : x));
   const rm = (i: number) => setExts((f) => f.filter((_, idx) => idx !== i));
+
+  // Пользователь не должен быть привязан к двум номерам одновременно — занятые id'шники
+  // прячем в чужих селектах (но оставляем в собственном, чтобы не терялся выбор).
+  const takenBy = new Map<string, string>();
+  exts.forEach((e) => { if (e.assigned) takenBy.set(e.assigned, e.ext); });
 
   return (
     <div style={{ padding: 24, maxWidth: 640 }}>
@@ -2208,14 +2221,29 @@ function PhoneWebrtcTab() {
               Номера · {exts.length}
             </div>
             {exts.map((n, i) => (
-              <div key={n.ext} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", background: C.bg2, border: `1px solid ${C.border}`, borderRadius: 8, marginBottom: 6 }}>
+              <div key={n.ext} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", background: C.bg2, border: `1px solid ${C.border}`, borderRadius: 8, marginBottom: 6, flexWrap: "wrap" }}>
                 <div style={{ width: 28, height: 28, borderRadius: "50%", background: C.border, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                   <Hash size={13} color={C.text2} />
                 </div>
-                <span style={{ flex: 1, fontSize: 13, fontWeight: 600, fontFamily: "'DM Mono', monospace", color: C.text }}>#{n.ext}</span>
+                <span style={{ width: 70, fontSize: 13, fontWeight: 600, fontFamily: "'DM Mono', monospace", color: C.text }}>#{n.ext}</span>
                 <input type="password" value={n.pwd} onChange={(e) => updPwd(i, e.target.value)}
                   placeholder={n.hasPwd ? "•••••••• сохранён" : "Пароль*"}
                   style={{ width: 160, padding: "5px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12, fontFamily: "'DM Mono', monospace", color: C.text, outline: "none", background: C.card }} />
+                <select value={n.assigned ?? ""} onChange={(e) => updAssigned(i, e.target.value)}
+                  disabled={users.isLoading}
+                  style={{ flex: 1, minWidth: 180, padding: "5px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12, color: C.text, outline: "none", background: C.card, cursor: "pointer", fontFamily: "inherit" }}>
+                  <option value="">— Не привязан —</option>
+                  {users.data?.filter((u) => !takenBy.has(u.id) || takenBy.get(u.id) === n.ext)
+                    .map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.full_name}{u.email ? ` · ${u.email}` : ""}
+                      </option>
+                    ))}
+                  {/* Если привязанный пользователь удалён/заблокирован и не в списке — покажем placeholder */}
+                  {n.assigned && !users.data?.some((u) => u.id === n.assigned) && (
+                    <option value={n.assigned}>(пользователь #{n.assigned.slice(0, 8)} недоступен)</option>
+                  )}
+                </select>
                 <button onClick={() => rm(i)} title="Удалить номер" style={{ width: 26, height: 26, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", background: "transparent", cursor: "pointer", color: C.text3, border: "none" }}>
                   <X size={14} />
                 </button>
