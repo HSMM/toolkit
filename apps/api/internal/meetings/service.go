@@ -13,6 +13,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -61,6 +62,7 @@ type CreateInput struct {
 	RecordEnabled   bool
 	AutoTranscribe  bool
 	ParticipantIDs  []uuid.UUID // приглашённые сотрудники (могут быть пусты)
+	InviteeEmails   []string    // внешние адресаты — получат email со ссылкой на guest-вход
 }
 
 type Meeting struct {
@@ -152,10 +154,52 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*Meeting, error) 
 		}
 	}
 
+	// Email-приглашения для внешних адресатов: создаём строки в meeting_invitation
+	// (UNIQUE по (meeting_id, lower(email)) защищает от дублей) и ставим job на отправку.
+	emails := dedupEmails(in.InviteeEmails)
+	for _, email := range emails {
+		var invID uuid.UUID
+		err := tx.QueryRow(ctx, `
+			INSERT INTO meeting_invitation (meeting_id, email, invited_by)
+			VALUES ($1, $2, $3)
+			ON CONFLICT (meeting_id, LOWER(email)) DO UPDATE SET email = EXCLUDED.email
+			RETURNING id
+		`, m.ID, email, in.CreatorID).Scan(&invID)
+		if err != nil {
+			return nil, fmt.Errorf("insert invitation: %w", err)
+		}
+		payload, _ := json.Marshal(map[string]any{
+			"invitation_id": invID,
+			"meeting_id":    m.ID,
+		})
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO job (kind, payload, scheduled_at, max_attempts, priority)
+			VALUES ($1, $2, NOW(), 5, 50)
+		`, JobKindSendMeetingInvitation, payload); err != nil {
+			return nil, fmt.Errorf("enqueue invitation: %w", err)
+		}
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("commit: %w", err)
 	}
 	return m, nil
+}
+
+// dedupEmails — нормализация (lower + trim) и удаление дублей. Невалидные
+// (без @) выбрасываются — лучше тихо проигнорировать чем падать на UI-вводе.
+func dedupEmails(in []string) []string {
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, raw := range in {
+		e := strings.ToLower(strings.TrimSpace(raw))
+		if e == "" || !strings.Contains(e, "@") || seen[e] {
+			continue
+		}
+		seen[e] = true
+		out = append(out, e)
+	}
+	return out
 }
 
 // List возвращает встречи, в которых пользователь — создатель или приглашённый.

@@ -33,7 +33,8 @@ import { C, LOGO_URL } from "@/styles/tokens";
 import { useAuth } from "@/auth/AuthContext";
 import { type Me } from "@/api/me";
 import {
-  useMeetings, useCreateMeeting, useEndMeeting, useShareMeeting,
+  useMeetings, useCreateMeeting, useEndMeeting, useShareMeeting, useUserSearch,
+  type UserProfile,
   useMeetingRecordings, downloadMeetingRecording,
   type Meeting as ApiMeeting, type RecordingFile,
 } from "@/api/meetings";
@@ -882,8 +883,14 @@ function VcsPage({ me, onOpenTranscriptions }: { me: Me; onOpenTranscriptions?: 
   // Транскрибация триггерится вручную из истории встреч (см. модуль
   // «Транскрибация»). На форме создания не показываем.
   const [record, setRecord] = useState(true);
+  // Приглашения: сотрудники из таблицы user (multi-select по ID) + внешние email'ы.
+  const [invitedUsers, setInvitedUsers] = useState<UserProfile[]>([]);
+  const [invitedEmails, setInvitedEmails] = useState<string[]>([]);
 
-  const resetForm = () => { setTitle(""); setRecord(true); };
+  const resetForm = () => {
+    setTitle(""); setRecord(true);
+    setInvitedUsers([]); setInvitedEmails([]);
+  };
   const openModal = (m: "schedule" | "instant") => { resetForm(); setMode(m); setModal(true); };
   const closeModal = () => setModal(false);
 
@@ -899,12 +906,15 @@ function VcsPage({ me, onOpenTranscriptions }: { me: Me; onOpenTranscriptions?: 
         scheduled_at: scheduledISO,
         record_enabled: record,
         auto_transcribe: false,
+        participant_ids: invitedUsers.length ? invitedUsers.map((u) => u.id) : undefined,
+        invitee_emails: invitedEmails.length ? invitedEmails : undefined,
       });
       closeModal();
+      const inviteCount = invitedUsers.length + invitedEmails.length;
       push({
         type: "meeting",
         title: mode === "schedule" ? "Встреча запланирована" : "Встреча запущена",
-        desc: `«${m.title}» · ${m.livekit_room_id}`,
+        desc: `«${m.title}» · ${m.livekit_room_id}` + (inviteCount ? ` · приглашено: ${inviteCount}` : ""),
       });
       if (mode === "instant") setActive(m);
     } catch (e) {
@@ -1064,8 +1074,14 @@ function VcsPage({ me, onOpenTranscriptions }: { me: Me; onOpenTranscriptions?: 
                   </div>
                 </label>
               ))}
-              <div style={{ marginTop: 12, padding: "10px 12px", background: C.warnBg, border: `1px solid ${C.warnBrd}`, borderRadius: 8, fontSize: 12, color: C.warnTx, lineHeight: 1.4 }}>
-                В этой версии ссылка на встречу — только у создателя. Приглашение коллег по email и поиск участников появятся после синхронизации пользователей с Bitrix24.
+              <div style={{ marginTop: 14 }}>
+                <InviteParticipantsField
+                  meId={me.user_id}
+                  selectedUsers={invitedUsers}
+                  setSelectedUsers={setInvitedUsers}
+                  emails={invitedEmails}
+                  setEmails={setInvitedEmails}
+                />
               </div>
             </div>
             <div style={{ padding: "14px 22px", borderTop: `1px solid ${C.border}`, display: "flex", gap: 10, justifyContent: "flex-end", background: C.card, flexShrink: 0 }}>
@@ -1080,6 +1096,154 @@ function VcsPage({ me, onOpenTranscriptions }: { me: Me; onOpenTranscriptions?: 
       )}
 
       {active && <MeetingRoom meeting={active} isHost={isHost(active)} onClose={() => setActive(null)} />}
+    </div>
+  );
+}
+
+// InviteParticipantsField — multi-select сотрудников (поверх useUserSearch)
+// + свободный ввод внешних email'ов. Сотрудники получат встречу в свой
+// список, внешние — email со ссылкой на guest-вход (job send_meeting_invitation).
+function InviteParticipantsField({
+  meId, selectedUsers, setSelectedUsers, emails, setEmails,
+}: {
+  meId: string;
+  selectedUsers: UserProfile[];
+  setSelectedUsers: (u: UserProfile[]) => void;
+  emails: string[];
+  setEmails: (e: string[]) => void;
+}) {
+  const [q, setQ] = useState("");
+  const [debouncedQ, setDebouncedQ] = useState("");
+  const [open, setOpen] = useState(false);
+  const [emailDraft, setEmailDraft] = useState("");
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQ(q.trim()), 200);
+    return () => clearTimeout(t);
+  }, [q]);
+
+  const search = useUserSearch(debouncedQ);
+  const selectedIds = new Set(selectedUsers.map((u) => u.id));
+  const candidates = (search.data ?? []).filter(
+    (u) => u.id !== meId && !selectedIds.has(u.id),
+  );
+
+  const addUser = (u: UserProfile) => {
+    setSelectedUsers([...selectedUsers, u]);
+    setQ("");
+  };
+  const removeUser = (id: string) => {
+    setSelectedUsers(selectedUsers.filter((u) => u.id !== id));
+  };
+  const tryAddEmail = (raw: string) => {
+    const e = raw.trim().toLowerCase();
+    if (!e) return;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) return;
+    if (emails.includes(e)) { setEmailDraft(""); return; }
+    setEmails([...emails, e]);
+    setEmailDraft("");
+  };
+  const removeEmail = (e: string) => setEmails(emails.filter((x) => x !== e));
+
+  return (
+    <div>
+      <div style={{ fontSize: 11, fontWeight: 600, color: C.text2, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>
+        Участники
+      </div>
+
+      {/* Сотрудники: поиск + dropdown */}
+      <div style={{ position: "relative", marginBottom: 10 }}>
+        <input
+          value={q}
+          onChange={(e) => { setQ(e.target.value); setOpen(true); }}
+          onFocus={() => setOpen(true)}
+          onBlur={() => setTimeout(() => setOpen(false), 150)}
+          placeholder="Найти сотрудника по имени, email, отделу…"
+          style={inp()}
+        />
+        {open && (debouncedQ.length > 0 || candidates.length > 0) && (
+          <div style={{
+            position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0, zIndex: 10,
+            background: C.card, border: `1px solid ${C.border}`, borderRadius: 8,
+            boxShadow: "0 6px 20px rgba(0,0,0,0.10)", maxHeight: 240, overflowY: "auto",
+          }}>
+            {search.isLoading ? (
+              <div style={{ padding: 12, fontSize: 12, color: C.text3 }}>Загрузка…</div>
+            ) : candidates.length === 0 ? (
+              <div style={{ padding: 12, fontSize: 12, color: C.text3 }}>
+                {debouncedQ ? "Никого не найдено" : "Начните вводить запрос…"}
+              </div>
+            ) : (
+              candidates.map((u) => (
+                <button key={u.id} type="button" onMouseDown={(e) => { e.preventDefault(); addUser(u); }}
+                  style={{ width: "100%", padding: "9px 12px", background: "transparent", border: "none", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 10, cursor: "pointer", textAlign: "left", fontFamily: "inherit" }}>
+                  <Av i={(u.full_name || u.email).split(/\s+/).map((p) => p[0] || "").slice(0, 2).join("").toUpperCase()} sz={28} src={u.avatar_url} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 500, color: C.text }}>{u.full_name || u.email}</div>
+                    <div style={{ fontSize: 11.5, color: C.text3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {u.email}{u.department ? ` · ${u.department}` : ""}
+                    </div>
+                  </div>
+                  <Plus size={14} color={C.text3} />
+                </button>
+              ))
+            )}
+          </div>
+        )}
+      </div>
+
+      {selectedUsers.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
+          {selectedUsers.map((u) => (
+            <span key={u.id} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 6px 4px 4px", background: C.accBg, border: `1px solid ${C.accBrd}`, borderRadius: 999, fontSize: 12, color: C.accTx }}>
+              <Av i={(u.full_name || u.email).split(/\s+/).map((p) => p[0] || "").slice(0, 2).join("").toUpperCase()} sz={20} src={u.avatar_url} />
+              <span style={{ maxWidth: 180, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{u.full_name || u.email}</span>
+              <button onClick={() => removeUser(u.id)} title="Убрать"
+                style={{ width: 18, height: 18, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", background: "transparent", border: "none", color: C.accTx, cursor: "pointer" }}>
+                <X size={11} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Внешние email'ы */}
+      <div style={{ fontSize: 11, fontWeight: 600, color: C.text2, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>
+        Внешние email'ы
+      </div>
+      <input
+        value={emailDraft}
+        onChange={(e) => setEmailDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === ",") {
+            e.preventDefault();
+            tryAddEmail(emailDraft);
+          } else if (e.key === "Backspace" && !emailDraft && emails.length > 0) {
+            removeEmail(emails[emails.length - 1]!);
+          }
+        }}
+        onBlur={() => emailDraft && tryAddEmail(emailDraft)}
+        placeholder="email@example.com и Enter"
+        style={{ ...inp(), fontFamily: "'DM Mono', monospace", fontSize: 13 }}
+      />
+      {emails.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+          {emails.map((e) => (
+            <span key={e} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 8px", background: C.bg2, border: `1px solid ${C.border}`, borderRadius: 999, fontSize: 12, fontFamily: "'DM Mono', monospace", color: C.text }}>
+              {e}
+              <button onClick={() => removeEmail(e)} title="Убрать"
+                style={{ width: 16, height: 16, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", background: "transparent", border: "none", color: C.text3, cursor: "pointer" }}>
+                <X size={10} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      {emails.length > 0 && (
+        <div style={{ fontSize: 11, color: C.text3, marginTop: 6, lineHeight: 1.4 }}>
+          Адресатам будет отправлен email со ссылкой на гостевой вход. SMTP должен быть настроен в Настройки → SMTP.
+        </div>
+      )}
     </div>
   );
 }

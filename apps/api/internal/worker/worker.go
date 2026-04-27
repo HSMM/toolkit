@@ -12,6 +12,8 @@ import (
 	"github.com/HSMM/toolkit/internal/config"
 	"github.com/HSMM/toolkit/internal/db"
 	"github.com/HSMM/toolkit/internal/gigaam"
+	"github.com/HSMM/toolkit/internal/mailer"
+	"github.com/HSMM/toolkit/internal/meetings"
 	"github.com/HSMM/toolkit/internal/queue"
 	"github.com/HSMM/toolkit/internal/storage"
 	"github.com/HSMM/toolkit/internal/transcription"
@@ -53,6 +55,13 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 			registry.Register(transcription.JobKindTranscribeRecording, tw.Handle)
 		}
 	}
+
+	// Email-приглашения на встречи (handler kind = send_meeting_invitation).
+	// SMTP-конфиг тянется из system_setting на лету; если не настроен —
+	// handler вернёт error и job уйдёт на ретрай (admin успеет настроить).
+	mailerClient := mailer.New(pool)
+	invWorker := meetings.NewInvitationWorker(pool, mailerClient, cfg.BaseURL)
+	registry.Register(meetings.JobKindSendMeetingInvitation, invWorker.Handle)
 
 	logger.Info("worker handlers registered", "count", len(registry.Kinds()), "kinds", registry.Kinds())
 

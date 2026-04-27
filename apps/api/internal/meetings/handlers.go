@@ -3,6 +3,7 @@ package meetings
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -50,6 +51,7 @@ type createReq struct {
 	RecordEnabled  bool        `json:"record_enabled"`
 	AutoTranscribe bool        `json:"auto_transcribe"`
 	ParticipantIDs []uuid.UUID `json:"participant_ids,omitempty"`
+	InviteeEmails  []string    `json:"invitee_emails,omitempty"`
 }
 
 func (h *Handlers) create(w http.ResponseWriter, r *http.Request) {
@@ -67,12 +69,30 @@ func (h *Handlers) create(w http.ResponseWriter, r *http.Request) {
 		RecordEnabled:  req.RecordEnabled,
 		AutoTranscribe: req.AutoTranscribe,
 		ParticipantIDs: req.ParticipantIDs,
+		InviteeEmails:  req.InviteeEmails,
 	})
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "create_failed", err.Error())
 		return
 	}
 	writeJSON(w, http.StatusCreated, m)
+}
+
+// SearchUsers — отдельный публичный handler, монтируется НЕ под /meetings,
+// а как /api/v1/users/search (auth-only). Используется multi-select'ом
+// в диалоге создания встречи.
+func (h *Handlers) SearchUsers(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query().Get("q")
+	limit := 0 // service подставит default
+	if v := r.URL.Query().Get("limit"); v != "" {
+		_, _ = fmt.Sscanf(v, "%d", &limit)
+	}
+	users, err := h.svc.SearchUsers(r.Context(), q, limit)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "search_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": users})
 }
 
 func (h *Handlers) list(w http.ResponseWriter, r *http.Request) {

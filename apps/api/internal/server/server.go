@@ -179,6 +179,10 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 			}
 			if meetingsHandlers != nil {
 				r.Mount("/meetings", meetingsHandlers.Routes())
+				// Поиск пользователей для multi-select'а в диалоге создания
+				// встречи. Доступен любому авторизованному (не admin only) —
+				// возвращает только публичные поля (имя/email/отдел).
+				r.Get("/users/search", meetingsHandlers.SearchUsers)
 			}
 
 			// Системные настройки — read-only для всех authenticated

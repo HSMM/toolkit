@@ -48,8 +48,32 @@ export type CreateMeetingInput = {
   scheduled_at?: string; // RFC3339; пусто = instant
   record_enabled?: boolean;
   auto_transcribe?: boolean;
-  participant_ids?: string[];
+  participant_ids?: string[]; // toolkit user UUIDs (приглашённые сотрудники)
+  invitee_emails?: string[];  // внешние адресаты — получат email со ссылкой на guest-вход
 };
+
+// Минимальный профиль user'а для multi-select'а в диалоге создания встречи.
+// Эндпоинт /api/v1/users/search доступен любому authenticated user'у.
+export type UserProfile = {
+  id: string;
+  full_name: string;
+  email: string;
+  department?: string;
+  position?: string;
+  avatar_url?: string;
+};
+
+export function useUserSearch(query: string) {
+  return useQuery({
+    queryKey: ["user-search", query],
+    queryFn: ({ signal }) =>
+      api<{ items: UserProfile[] }>(
+        `/api/v1/users/search?q=${encodeURIComponent(query)}`,
+        { signal },
+      ).then((r) => r.items),
+    staleTime: 30_000,
+  });
+}
 
 export function useMeetings() {
   return useQuery({
