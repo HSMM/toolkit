@@ -114,29 +114,52 @@ func (c *Client) CurrentUser(ctx context.Context, accessToken string) (*User, er
 	return &envelope.Result, nil
 }
 
-// ListEmployees вызывает user.get через входящий webhook (FILTER USER_TYPE=employee
-// исключает экстранет). Bitrix24 отдаёт по 50 пользователей за страницу;
-// `next` в ответе — start-параметр для следующей страницы (0/-1 = конец).
-//
-// webhookBase — полный URL вида https://portal.bitrix24.ru/rest/{user_id}/{token}/
-// (с трейлинг-слэшем). Хранится в системной настройке (или env-переменной).
-func (c *Client) ListEmployees(ctx context.Context, webhookBase string, start int) (users []User, next int, err error) {
-	if strings.TrimSpace(webhookBase) == "" {
-		return nil, 0, fmt.Errorf("bitrix: webhook URL is empty")
-	}
-	base := strings.TrimRight(webhookBase, "/") + "/user.get.json"
-	u, err := url.Parse(base)
+// RefreshAccessToken обменивает refresh_token на пару новых токенов.
+// Bitrix24 одноразовые refresh — после успешного обмена старый невалиден,
+// новый из ответа нужно сохранить (TokenResponse.RefreshToken).
+func (c *Client) RefreshAccessToken(ctx context.Context, refreshToken, serverDomain string) (*TokenResponse, error) {
+	endpoint, err := c.oauthEndpoint(serverDomain, "/oauth/token/")
 	if err != nil {
-		return nil, 0, fmt.Errorf("bitrix webhook url: %w", err)
+		return nil, err
 	}
-	q := u.Query()
+	q := endpoint.Query()
+	q.Set("grant_type", "refresh_token")
+	q.Set("client_id", c.ClientID)
+	q.Set("client_secret", c.ClientSecret)
+	q.Set("refresh_token", refreshToken)
+	endpoint.RawQuery = q.Encode()
+
+	var out TokenResponse
+	if err := c.getJSON(ctx, endpoint.String(), &out); err != nil {
+		return nil, fmt.Errorf("bitrix refresh_token: %w", err)
+	}
+	if out.AccessToken == "" {
+		return nil, fmt.Errorf("bitrix: refresh response without access_token")
+	}
+	return &out, nil
+}
+
+// ListEmployees вызывает user.get через OAuth-токен локального приложения.
+// FILTER USER_TYPE=employee исключает экстранет. Bitrix24 отдаёт по 50
+// пользователей за страницу; `next` в ответе — start-параметр для следующей
+// страницы (0/-1 = конец).
+func (c *Client) ListEmployees(ctx context.Context, accessToken string, start int) (users []User, next int, err error) {
+	if strings.TrimSpace(accessToken) == "" {
+		return nil, 0, fmt.Errorf("bitrix: access token is empty")
+	}
+	endpoint, err := c.restEndpoint("/rest/user.get.json")
+	if err != nil {
+		return nil, 0, err
+	}
+	q := endpoint.Query()
+	q.Set("auth", accessToken)
 	q.Set("FILTER[USER_TYPE]", "employee")
 	q.Set("FILTER[ACTIVE]", "Y")
 	q.Set("ADMIN_MODE", "true") // вернуть всех, не только видимых вызывающему
 	if start > 0 {
 		q.Set("start", fmt.Sprint(start))
 	}
-	u.RawQuery = q.Encode()
+	endpoint.RawQuery = q.Encode()
 
 	var envelope struct {
 		Result []User      `json:"result"`
@@ -144,7 +167,7 @@ func (c *Client) ListEmployees(ctx context.Context, webhookBase string, start in
 		Error  string      `json:"error"`
 		Desc   string      `json:"error_description"`
 	}
-	if err := c.getJSON(ctx, u.String(), &envelope); err != nil {
+	if err := c.getJSON(ctx, endpoint.String(), &envelope); err != nil {
 		return nil, 0, err
 	}
 	if envelope.Error != "" {

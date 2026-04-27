@@ -14,18 +14,16 @@ import (
 )
 
 type UsersHandlers struct {
-	db          *pgxpool.Pool
-	bxClient    *bitrix.Client
-	bxSyncURL   string
+	db       *pgxpool.Pool
+	bxClient *bitrix.Client
 }
 
 func NewUsersHandlers(db *pgxpool.Pool) *UsersHandlers { return &UsersHandlers{db: db} }
 
-// SetBitrixSync включает endpoint /sync/bitrix. Если bxClient или url пустые —
-// endpoint вернёт 503.
-func (h *UsersHandlers) SetBitrixSync(client *bitrix.Client, webhookURL string) {
+// SetBitrixSync включает endpoint /sync/bitrix. Sync использует OAuth-токен
+// активной admin-сессии (см. usersync.refreshAdminToken).
+func (h *UsersHandlers) SetBitrixSync(client *bitrix.Client) {
 	h.bxClient = client
-	h.bxSyncURL = webhookURL
 }
 
 // Routes монтируются под /admin/users.
@@ -39,12 +37,12 @@ func (h *UsersHandlers) Routes() http.Handler {
 }
 
 func (h *UsersHandlers) syncBitrix(w http.ResponseWriter, r *http.Request) {
-	if h.bxClient == nil || h.bxSyncURL == "" {
+	if h.bxClient == nil {
 		writeErr(w, http.StatusServiceUnavailable, "sync_not_configured",
-			"BITRIX_SYNC_WEBHOOK_URL не задан в конфиге")
+			"Bitrix24 OAuth не настроен (BITRIX_PORTAL_URL/CLIENT_ID/CLIENT_SECRET)")
 		return
 	}
-	res, err := usersync.Run(r.Context(), h.db, h.bxClient, h.bxSyncURL)
+	res, err := usersync.Run(r.Context(), h.db, h.bxClient)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "sync_failed", err.Error())
 		return

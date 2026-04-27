@@ -196,7 +196,7 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 					PortalURL:    cfg.BitrixPortalURL,
 					ClientID:     cfg.BitrixClientID,
 					ClientSecret: cfg.BitrixClientSecret,
-				}, cfg.BitrixSyncWebhookURL)
+				})
 				r.Mount("/admin/users", adminUsers.Routes())
 				r.Mount("/admin/system-settings", sysHandlers.WriteRoutes())
 			})
@@ -215,7 +215,7 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 			PortalURL:    cfg.BitrixPortalURL,
 			ClientID:     cfg.BitrixClientID,
 			ClientSecret: cfg.BitrixClientSecret,
-		}, cfg.BitrixSyncWebhookURL)
+		})
 		r.Mount("/users", legacyAdminUsers.Routes())
 	})
 
