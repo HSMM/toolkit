@@ -201,13 +201,11 @@ type S3Config struct {
 // (audio_only=true). Файл — OGG (Opus); путь содержит {participant_identity}
 // и {time}, чтобы файл был уникален и узнаваем.
 //
-// Используем direct_file_outputs (а не file_outputs) — это RAW-дамп
-// опубликованного Opus-трека участника без транскодинга. Контейнер OGG
-// LiveKit определяет по расширению .ogg в filepath. Транскодинг через
-// EncodedFileOutput для ParticipantEgress audio-only ломается с ошибкой
-// «no supported codec is compatible with all outputs» (LK не подбирает
-// codec из preset'а, а explicit advanced.audio_codec работает только
-// с composite egress).
+// ParticipantEgress принимает только EncodedFileOutput (direct_file_outputs
+// помечен в proto как «not used»), поэтому нужен транскодинг. Без явного
+// advanced.audio_codec LK не может подобрать кодек, совместимый с
+// file_type=OGG, и валится с «no supported codec is compatible with all
+// outputs». Указываем audio_codec=OPUS, что соответствует Opus в OGG-контейнере.
 //
 // Возвращает egress_id, который мы сохраняем в participant.current_egress_id.
 func (c *Client) StartParticipantAudioEgress(ctx context.Context, room, identity, filepath string, s3 S3Config) (string, error) {
@@ -215,10 +213,16 @@ func (c *Client) StartParticipantAudioEgress(ctx context.Context, room, identity
 		"room_name":  room,
 		"identity":   identity,
 		"audio_only": true,
-		"direct_file_outputs": []any{
+		"advanced": map[string]any{
+			"audio_codec":     "OPUS",
+			"audio_bitrate":   128,    // kbps; OPUS прозрачен на 96-128
+			"audio_frequency": 48000,  // OPUS native sampling rate
+		},
+		"file_outputs": []any{
 			map[string]any{
-				"filepath": filepath,
-				"s3":       s3.json(),
+				"file_type": "OGG",
+				"filepath":  filepath,
+				"s3":        s3.json(),
 			},
 		},
 	}

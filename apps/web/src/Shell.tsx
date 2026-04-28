@@ -1075,7 +1075,7 @@ function RecordingsMenu({ meetingId }: { meetingId: string }) {
   );
 }
 
-function VcsPage({ me, onOpenTranscriptions }: { me: Me; onOpenTranscriptions?: (meetingId: string) => void }) {
+function VcsPage({ me }: { me: Me }) {
   const { push } = useApp();
   const meetingsQ = useMeetings();
   const create = useCreateMeeting();
@@ -1230,12 +1230,6 @@ function VcsPage({ me, onOpenTranscriptions }: { me: Me; onOpenTranscriptions?: 
                           <Bdg v="def">Завершена</Bdg>
                           {m.recording_started_at && (
                             <RecordingsMenu meetingId={m.id} />
-                          )}
-                          {m.recording_started_at && onOpenTranscriptions && (
-                            <button onClick={() => onOpenTranscriptions(m.id)} title="Открыть расшифровки этой встречи"
-                              style={{ background: C.accBg, color: C.accTx, padding: "8px 12px", borderRadius: 8, fontWeight: 500, fontSize: 13, border: `1px solid ${C.accBrd}`, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 5 }}>
-                              <FileText size={13} />Расшифровки
-                            </button>
                           )}
                         </>
                       ) : <>
@@ -3689,13 +3683,9 @@ export function Shell({ me }: { me: Me }) {
 
 function ShellInner({ me }: { me: Me }) {
   const [page, setPage] = useState<string>("vcs");
-  // Когда переходим на transcription по «Открыть расшифровки» с конкретной
-  // встречи — фильтруем список по meeting_id.
-  const [transcriptMeetingFilter, setTranscriptMeetingFilter] = useState<string | undefined>();
-  const goToTranscriptions = (meetingId?: string) => {
-    setTranscriptMeetingFilter(meetingId);
-    setPage("transcription");
-  };
+  // Когда переходим на transcription с конкретной встречи — фильтруем список
+  // по meeting_id. Сейчас входная точка только из NAV (без фильтра).
+  const [transcriptMeetingFilter] = useState<string | undefined>();
   const [profileOpen, setProfileOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -3787,7 +3777,7 @@ function ShellInner({ me }: { me: Me }) {
       </nav>
 
       <main style={{ flex: 1, overflow: "auto", display: "flex", flexDirection: "column" }}>
-        {allowedPage === "vcs"             && <VcsPage me={me} onOpenTranscriptions={goToTranscriptions} />}
+        {allowedPage === "vcs"             && <VcsPage me={me} />}
         {allowedPage === "transcription"   && <TranscriptionPage meetingFilter={transcriptMeetingFilter} />}
         {isAdmin && allowedPage === "monitoring" && <AnalyticsPage />}
         {isAdmin && allowedPage === "settings"   && <SystemSettingsPage />}
