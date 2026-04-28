@@ -10,9 +10,10 @@ import { X, Loader2, Check, UserPlus, Circle, Square } from "lucide-react";
 import { C } from "@/styles/tokens";
 import {
   useJoinMeeting, useEndMeeting, useLeaveMeeting, useMeetingPoll, useAdmitGuest,
-  useStartRecording, useStopRecording,
+  useStartRecording, useStopRecording, useShareMeeting,
   type Meeting, type Participant,
 } from "@/api/meetings";
+import { useMe } from "@/api/me";
 import { loadPrefs } from "@/meetSettings/prefs";
 
 type Props = {
@@ -32,6 +33,22 @@ export function MeetingRoom({ meeting, isHost, onClose }: Props) {
   // на монтирование комнаты; смена prefs во время разговора не требует
   // переподключения (для применения нужно перезайти).
   const prefs = useMemo(() => loadPrefs(), []);
+  const meQ = useMe();
+  const share = useShareMeeting();
+  const [guestUrl, setGuestUrl] = useState<string>("");
+
+  // На монтирование (после получения creds) попробуем достать гостевую ссылку
+  // — для кнопки «Скопировать» в нижнем-левом углу комнаты.
+  useEffect(() => {
+    if (!isHost || !creds) return;
+    let cancelled = false;
+    share.mutateAsync(meeting.id).then(
+      (r) => { if (!cancelled) setGuestUrl(`${window.location.origin}/g/${r.token}`); },
+      () => undefined,
+    );
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isHost, creds, meeting.id]);
 
   // На монтирование запрашиваем токен.
   useEffect(() => {
@@ -137,7 +154,16 @@ export function MeetingRoom({ meeting, isHost, onClose }: Props) {
             style={{ height: "100%", width: "100%" }}
             onDisconnected={close}
           >
-            <RussianRoomUI />
+            <RussianRoomUI
+              account={meQ.data ? {
+                full_name: meQ.data.full_name,
+                email: meQ.data.email,
+                role: meQ.data.role,
+              } : undefined}
+              isHost={isHost}
+              meetingId={meeting.id}
+              guestUrl={guestUrl}
+            />
           </LiveKitRoom>
         )}
 

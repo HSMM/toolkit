@@ -5,14 +5,43 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Image as ImageIcon, Mic, Video as VideoIcon, X, Plus, Ban, Play,
+  User as UserIcon, Shield,
 } from "lucide-react";
 import { C } from "@/styles/tokens";
 import { usePrefs, type MeetPrefs, type MeetBackground } from "./prefs";
 
-type Tab = "background" | "sound" | "video";
+type Tab = "account" | "permissions" | "background" | "sound" | "video";
 
-export function MeetingSettingsModal({ onClose }: { onClose: () => void }) {
-  const [tab, setTab] = useState<Tab>("sound");
+export type AccountInfo = {
+  full_name?: string;
+  email?: string;
+  role?: string;
+};
+
+export type MeetingPermissions = {
+  /** Разрешить ли участникам делать локальную запись на компьютер. */
+  allow_local_recording: boolean;
+};
+
+export type MeetingSettingsModalProps = {
+  onClose: () => void;
+  /** initialTab позволяет открыть модалку сразу на нужной вкладке. */
+  initialTab?: Tab;
+  /** Если задан account/permissions — модалка показывает соответствующие табы. */
+  account?: AccountInfo;
+  permissions?: MeetingPermissions;
+  /** Можно ли редактировать права (только хост встречи). */
+  canEditPermissions?: boolean;
+  onPermissionsChange?: (perms: MeetingPermissions) => void;
+};
+
+export function MeetingSettingsModal({
+  onClose, initialTab, account, permissions, canEditPermissions, onPermissionsChange,
+}: MeetingSettingsModalProps) {
+  const showAccount = !!account;
+  const showPermissions = !!permissions;
+  const defaultTab: Tab = initialTab ?? (showPermissions ? "permissions" : "sound");
+  const [tab, setTab] = useState<Tab>(defaultTab);
 
   return (
     <div onClick={onClose}
@@ -31,6 +60,14 @@ export function MeetingSettingsModal({ onClose }: { onClose: () => void }) {
           width: 230, padding: 14, borderRight: `1px solid ${C.border}`,
           display: "flex", flexDirection: "column", flexShrink: 0, background: C.bg2,
         }}>
+          {showAccount && (
+            <SidebarItem active={tab === "account"} icon={<UserIcon size={16} />}
+              label="Аккаунт" onClick={() => setTab("account")} />
+          )}
+          {showPermissions && (
+            <SidebarItem active={tab === "permissions"} icon={<Shield size={16} />}
+              label="Права участников" onClick={() => setTab("permissions")} />
+          )}
           <SidebarItem active={tab === "background"} icon={<ImageIcon size={16} />}
             label="Фон на встрече" onClick={() => setTab("background")} />
           <SidebarItem active={tab === "sound"}      icon={<Mic size={16} />}
@@ -45,7 +82,7 @@ export function MeetingSettingsModal({ onClose }: { onClose: () => void }) {
           <div style={{ padding: "12px 16px", display: "flex", justifyContent: "space-between",
                         alignItems: "center", borderBottom: `1px solid ${C.border}` }}>
             <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>
-              {tab === "background" ? "Фон на встрече" : tab === "sound" ? "Звук" : "Видео"}
+              {tabTitle(tab)}
             </div>
             <button onClick={onClose}
               style={{ width: 30, height: 30, borderRadius: 7, background: "transparent",
@@ -55,6 +92,12 @@ export function MeetingSettingsModal({ onClose }: { onClose: () => void }) {
             </button>
           </div>
           <div style={{ flex: 1, overflowY: "auto", padding: 22, background: C.card }}>
+            {tab === "account" && account     && <AccountTab info={account} />}
+            {tab === "permissions" && permissions && (
+              <PermissionsTab perms={permissions}
+                canEdit={canEditPermissions ?? false}
+                onChange={onPermissionsChange} />
+            )}
             {tab === "background" && <BackgroundTab />}
             {tab === "sound"      && <SoundTab />}
             {tab === "video"      && <VideoTab />}
@@ -82,6 +125,87 @@ function SidebarItem({ active, icon, label, onClick }: {
       }}>
       {icon}{label}
     </button>
+  );
+}
+
+function tabTitle(tab: Tab): string {
+  switch (tab) {
+    case "account":     return "Аккаунт";
+    case "permissions": return "Права участников";
+    case "background":  return "Фон на встрече";
+    case "sound":       return "Звук";
+    case "video":       return "Видео";
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// ACCOUNT TAB
+// ──────────────────────────────────────────────────────────────────────────
+
+function AccountTab({ info }: { info: AccountInfo }) {
+  const initials = (info.full_name || info.email || "?").trim()
+    .split(/\s+/).slice(0, 2).map((s) => s[0]).join("").toUpperCase();
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={{ background: C.bg2, border: `1px solid ${C.border}`, borderRadius: 10,
+                    padding: 18, display: "flex", alignItems: "center", gap: 14 }}>
+        <div style={{ width: 56, height: 56, borderRadius: "50%", background: C.accBg,
+                      color: C.acc, display: "flex", alignItems: "center", justifyContent: "center",
+                      fontSize: 18, fontWeight: 700 }}>
+          {initials}
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 14.5, fontWeight: 600, color: C.text }}>
+            {info.full_name || "Без имени"}
+          </div>
+          {info.email && (
+            <div style={{ fontSize: 12.5, color: C.text2, marginTop: 2 }}>{info.email}</div>
+          )}
+          {info.role && (
+            <div style={{ fontSize: 11, color: C.text3, marginTop: 4, textTransform: "uppercase",
+                          letterSpacing: "0.04em" }}>
+              {info.role === "admin" ? "Администратор" : "Сотрудник"}
+            </div>
+          )}
+        </div>
+      </div>
+      <div style={{ fontSize: 12.5, color: C.text2, lineHeight: 1.55 }}>
+        Учётная запись подтянута из Bitrix24. Изменить ФИО, email и должность можно
+        только через корпоративный портал — после синхронизации правки
+        отобразятся здесь.
+      </div>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// PERMISSIONS TAB
+// ──────────────────────────────────────────────────────────────────────────
+
+function PermissionsTab({ perms, canEdit, onChange }: {
+  perms: MeetingPermissions;
+  canEdit: boolean;
+  onChange?: (p: MeetingPermissions) => void;
+}) {
+  const apply = (p: MeetingPermissions) => { if (canEdit && onChange) onChange(p); };
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <div>
+        <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>Права участников на этой встрече</div>
+        <div style={{ fontSize: 12, color: C.text2, marginTop: 4 }}>
+          {canEdit
+            ? "У соорганизаторов всегда есть все возможности"
+            : "Изменять права может только организатор встречи"}
+        </div>
+      </div>
+
+      <Toggle
+        label="Записывать встречу на компьютер"
+        sub="Любой участник сможет сохранить локальную запись на свой компьютер"
+        value={perms.allow_local_recording}
+        onChange={(v) => apply({ ...perms, allow_local_recording: v })}
+      />
+    </div>
   );
 }
 
