@@ -5,7 +5,7 @@
 import "@livekit/components-styles";
 import { LiveKitRoom } from "@livekit/components-react";
 import { RussianRoomUI } from "@/RoomUI";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { X, Loader2, Check, UserPlus, Circle, Square } from "lucide-react";
 import { C } from "@/styles/tokens";
 import {
@@ -13,6 +13,7 @@ import {
   useStartRecording, useStopRecording,
   type Meeting, type Participant,
 } from "@/api/meetings";
+import { loadPrefs } from "@/meetSettings/prefs";
 
 type Props = {
   meeting: Meeting;
@@ -26,6 +27,11 @@ export function MeetingRoom({ meeting, isHost, onClose }: Props) {
   const end = useEndMeeting();
   const [creds, setCreds] = useState<{ token: string; wsURL: string } | null>(null);
   const [err, setErr] = useState<string | null>(null);
+
+  // Пользовательские preferences из шестерёнки на VcsPage. Снимок один раз
+  // на монтирование комнаты; смена prefs во время разговора не требует
+  // переподключения (для применения нужно перезайти).
+  const prefs = useMemo(() => loadPrefs(), []);
 
   // На монтирование запрашиваем токен.
   useEffect(() => {
@@ -101,11 +107,32 @@ export function MeetingRoom({ meeting, isHost, onClose }: Props) {
             token={creds.token}
             serverUrl={creds.wsURL}
             connect
-            // video/audio НЕ выставляем здесь — иначе LK сразу делает
-            // getUserMedia({audio:true, video:true}), и если в системе нет
-            // камеры (или микрофона), весь захват падает с NotFoundError.
-            // Пользователь включит микрофон/камеру сам через контролы внизу;
-            // VideoConference UI сразу покажет правильное состояние "muted".
+            // audio/video автоматически публикуются только если пользователь
+            // явно опт-ин'ил в Настройках (joinMuted=false / joinVideoOff=false).
+            // Если в системе нет устройства, LK эмитит onMediaDeviceFailure
+            // и продолжает подключение к комнате; пользователь включит
+            // нужное устройство через контролы внизу.
+            audio={!prefs.joinMuted}
+            video={!prefs.joinVideoOff}
+            options={{
+              audioCaptureDefaults: {
+                deviceId: prefs.audioDeviceId || undefined,
+                noiseSuppression: prefs.noiseSuppression,
+                echoCancellation: true,
+                autoGainControl: true,
+              },
+              videoCaptureDefaults: {
+                deviceId: prefs.videoDeviceId || undefined,
+              },
+              audioOutput: prefs.speakerDeviceId
+                ? { deviceId: prefs.speakerDeviceId }
+                : undefined,
+            }}
+            onMediaDeviceFailure={(failure) => {
+              // Не валим всё подключение — LK уже игнорирует упавший трек
+              // и пускает в комнату без него. Только логируем.
+              console.warn("[MeetingRoom] media device failure:", failure);
+            }}
             data-lk-theme="default"
             style={{ height: "100%", width: "100%" }}
             onDisconnected={close}
