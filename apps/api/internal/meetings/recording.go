@@ -50,10 +50,11 @@ func (s *Service) AttachRecording(deps RecordingDeps) {
 		deps.AudioFilepathTmpl = "meetings/{room_name}/{time}.ogg"
 	}
 	if deps.ParticipantAudioFilepathTmpl == "" {
-		// MP4 контейнер с AAC внутри (см. livekit/client.go
-		// StartParticipantAudioEgress). .m4a — это alias для MP4 audio-only,
-		// проигрыватели его понимают.
-		deps.ParticipantAudioFilepathTmpl = "meetings/{room_name}/per-track/{participant_identity}-{time}.m4a"
+		// LK для ParticipantEgress подставляет {publisher_identity}
+		// (НЕ {participant_identity} — будет литерально записан как есть)
+		// и {time}. Расширение НЕ ставим — LK сам добавит .mp4 для
+		// file_type=MP4. Проигрыватели понимают audio-only MP4 как M4A.
+		deps.ParticipantAudioFilepathTmpl = "meetings/{room_name}/per-track/{publisher_identity}-{time}"
 	}
 	s.recDeps = &deps
 }

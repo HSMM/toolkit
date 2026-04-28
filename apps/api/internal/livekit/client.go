@@ -210,22 +210,27 @@ type S3Config struct {
 //
 // Возвращает egress_id, который мы сохраняем в participant.current_egress_id.
 func (c *Client) StartParticipantAudioEgress(ctx context.Context, room, identity, filepath string, s3 S3Config) (string, error) {
-	// MP4 (audio-only) вместо OGG. LK для MP4-выхода с audio_only=true
-	// дефолтно ставит AAC, и валидация проходит без явного codec'а в
-	// advanced (которое всё равно не парсится Twirp'ом из-за proto3 oneof).
-	// Файлы получаются M4A-совместимые (AAC в MP4-контейнере), играются в
-	// любом плеере, ASR-движки тоже принимают.
+	// MP4 audio-only. Дублируем поля в snake_case и camelCase: ParticipantEgress
+	// в LK Twirp по факту читает только camelCase (audioOnly, videoOnly,
+	// fileOutputs), но снаряжаем оба варианта для совместимости с разными
+	// сборками. Если послать только snake_case — флаг audio_only теряется,
+	// и в файле оказывается видео+аудио.
+	out := map[string]any{
+		"file_type": "MP4",
+		"fileType":  "MP4",
+		"filepath":  filepath,
+		"s3":        s3.json(),
+	}
 	body := map[string]any{
-		"room_name":  room,
-		"identity":   identity,
-		"audio_only": true,
-		"file_outputs": []any{
-			map[string]any{
-				"file_type": "MP4",
-				"filepath":  filepath,
-				"s3":        s3.json(),
-			},
-		},
+		"room_name":    room,
+		"roomName":     room,
+		"identity":     identity,
+		"audio_only":   true,
+		"audioOnly":    true,
+		"video_only":   false,
+		"videoOnly":    false,
+		"file_outputs": []any{out},
+		"fileOutputs":  []any{out},
 	}
 	var resp egressInfoMin
 	if err := c.twirp(ctx, "Egress", room, "StartParticipantEgress", body, &resp); err != nil {
