@@ -115,3 +115,61 @@ export function usePrefs(): [MeetPrefs, (patch: Partial<MeetPrefs>) => void] {
 
   return [prefs, patch];
 }
+
+// ──────────────────────────────────────────────────────────────────────────
+// Backgrounds (пресеты + helpers)
+// ──────────────────────────────────────────────────────────────────────────
+
+/**
+ * Пресет-фоны без сетевых картинок (закрытый контур): хранятся как описание
+ * градиента, на лету рендерятся в JPEG-data-URL для VirtualBackground'а.
+ */
+export const BACKGROUND_PRESETS: { id: string; gradient: string }[] = [
+  { id: "office",   gradient: "linear-gradient(135deg,#5b8aa9 0%,#cdd6df 100%)" },
+  { id: "warm",     gradient: "linear-gradient(135deg,#c79762 0%,#f6e3c5 100%)" },
+  { id: "forest",   gradient: "linear-gradient(135deg,#3a6b56 0%,#a8c8a0 100%)" },
+  { id: "yellow",   gradient: "linear-gradient(135deg,#c5a13b 0%,#fff1bc 100%)" },
+  { id: "wood",     gradient: "linear-gradient(135deg,#7a4d2c 0%,#d8b48a 100%)" },
+  { id: "sky",      gradient: "linear-gradient(135deg,#5fa8d3 0%,#e0f3ff 100%)" },
+  { id: "rose",     gradient: "linear-gradient(135deg,#b8556e 0%,#f6c4ce 100%)" },
+  { id: "graphite", gradient: "linear-gradient(135deg,#2d3138 0%,#727680 100%)" },
+  { id: "lavender", gradient: "linear-gradient(135deg,#6e5d9e 0%,#dbd0ee 100%)" },
+  { id: "teal",     gradient: "linear-gradient(135deg,#2f7d7d 0%,#bce4e4 100%)" },
+  { id: "sand",     gradient: "linear-gradient(135deg,#a48259 0%,#ecdcc1 100%)" },
+  { id: "night",    gradient: "linear-gradient(135deg,#1a233a 0%,#5a6b8a 100%)" },
+];
+
+/**
+ * Конвертирует preset.id (или строку src=`gradient:<id>`) в JPEG data-URL.
+ * Используется VirtualBackground'ом — ему нужен реальный URL картинки, а не CSS.
+ */
+export function gradientToDataURL(idOrSrc: string, w = 1280, h = 720): string {
+  const id = idOrSrc.startsWith("gradient:") ? idOrSrc.slice("gradient:".length) : idOrSrc;
+  const preset = BACKGROUND_PRESETS.find((p) => p.id === id);
+  if (!preset) return "";
+  const colors = preset.gradient.match(/#[0-9a-f]{6}/gi);
+  if (!colors || colors.length < 2) return "";
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return "";
+    // 135deg = top-left → bottom-right.
+    const grad = ctx.createLinearGradient(0, 0, w, h);
+    grad.addColorStop(0, colors[0]!);
+    grad.addColorStop(1, colors[1]!);
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, w, h);
+    return canvas.toDataURL("image/jpeg", 0.85);
+  } catch {
+    return "";
+  }
+}
+
+/** Резолвер любого MeetBackground.image src → реальный URL картинки. */
+export function resolveBackgroundImageUrl(src: string): string {
+  if (!src) return "";
+  if (src.startsWith("data:")) return src;
+  if (src.startsWith("gradient:")) return gradientToDataURL(src);
+  return src;
+}

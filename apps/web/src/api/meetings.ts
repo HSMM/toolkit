@@ -190,10 +190,27 @@ export async function downloadMeetingRecording(meetingId: string, recordingId: s
   const r = await apiFetch(`/api/v1/meetings/${meetingId}/recordings/${recordingId}/download`);
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   const blob = await r.blob();
+  triggerBlobDownload(blob, suggestedName);
+}
+
+// downloadMeetingAudioArchive — стрим zip со всеми per-track audio-записями
+// (по одному OGG на спикера). Имя файла приходит в Content-Disposition,
+// fallback берём от вызывающего.
+export async function downloadMeetingAudioArchive(meetingId: string, fallbackName: string) {
+  const r = await apiFetch(`/api/v1/meetings/${meetingId}/recordings/audio-archive`);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const cd = r.headers.get("Content-Disposition") || "";
+  const m = /filename="([^"]+)"/.exec(cd);
+  const name = m?.[1] || fallbackName;
+  const blob = await r.blob();
+  triggerBlobDownload(blob, name);
+}
+
+function triggerBlobDownload(blob: Blob, name: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = suggestedName;
+  a.download = name;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);

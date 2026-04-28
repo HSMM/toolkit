@@ -35,7 +35,7 @@ import { type Me } from "@/api/me";
 import {
   useMeetings, useCreateMeeting, useEndMeeting, useShareMeeting, useUserSearch,
   type UserProfile,
-  useMeetingRecordings, downloadMeetingRecording,
+  useMeetingRecordings, downloadMeetingRecording, downloadMeetingAudioArchive,
   type Meeting as ApiMeeting, type RecordingFile,
 } from "@/api/meetings";
 import { MeetingRoom } from "@/MeetingRoom";
@@ -998,10 +998,23 @@ function RecordingsMenu({ meetingId }: { meetingId: string }) {
     return { icon: FileAudio, text: "Дорожка участника", sub: r.mime_type };
   };
 
+  // Видео + общий аудио показываем как «топ-уровневые» опции; per-track отдельно
+  // объединяем под одну кнопку «Архив аудио всех (zip)».
+  const items = q.data ?? [];
+  const top = items.filter((r) => r.kind !== "meeting_per_track");
+  const perTrackCount = items.filter((r) => r.kind === "meeting_per_track").length;
+
   const dl = async (r: RecordingFile) => {
     setBusy(r.id);
     try { await downloadMeetingRecording(meetingId, r.id, r.filename); }
     catch (e) { alert("Не удалось скачать: " + (e instanceof Error ? e.message : String(e))); }
+    finally { setBusy(null); }
+  };
+
+  const dlArchive = async () => {
+    setBusy("archive");
+    try { await downloadMeetingAudioArchive(meetingId, `meeting-${meetingId}-audio.zip`); }
+    catch (e) { alert("Не удалось скачать архив: " + (e instanceof Error ? e.message : String(e))); }
     finally { setBusy(null); }
   };
 
@@ -1017,27 +1030,44 @@ function RecordingsMenu({ meetingId }: { meetingId: string }) {
           <div style={{ position: "absolute", top: "calc(100% + 6px)", right: 0, minWidth: 280, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, boxShadow: "0 8px 24px rgba(0,0,0,0.12)", zIndex: 40, padding: 6 }}>
             {q.isLoading ? (
               <div style={{ padding: "12px 14px", color: C.text3, fontSize: 12.5 }}>Загрузка…</div>
-            ) : (q.data ?? []).length === 0 ? (
+            ) : items.length === 0 ? (
               <div style={{ padding: "12px 14px", color: C.text3, fontSize: 12.5 }}>
                 Записи ещё не появились. Это может занять минуту после остановки записи.
               </div>
-            ) : (q.data ?? []).map((r) => {
-              const L = labelFor(r);
-              const sizeMb = (r.size_bytes / 1_048_576).toFixed(1);
-              return (
-                <button key={r.id} onClick={() => void dl(r)} disabled={busy === r.id}
-                  style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "9px 10px", border: "none", borderRadius: 7, background: "transparent", cursor: busy === r.id ? "default" : "pointer", textAlign: "left", fontFamily: "inherit", opacity: busy === r.id ? 0.6 : 1 }}>
-                  <div style={{ width: 32, height: 32, borderRadius: 8, background: C.accBg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                    <L.icon size={15} color={C.acc} />
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 500, color: C.text }}>{L.text}</div>
-                    <div style={{ fontSize: 11, color: C.text3 }}>{L.sub} · {sizeMb} МБ</div>
-                  </div>
-                  {busy === r.id ? <RefreshCw size={14} color={C.text3} className="lk-spin" /> : <Download size={14} color={C.text2} />}
-                </button>
-              );
-            })}
+            ) : (
+              <>
+                {top.map((r) => {
+                  const L = labelFor(r);
+                  const sizeMb = (r.size_bytes / 1_048_576).toFixed(1);
+                  return (
+                    <button key={r.id} onClick={() => void dl(r)} disabled={busy === r.id}
+                      style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "9px 10px", border: "none", borderRadius: 7, background: "transparent", cursor: busy === r.id ? "default" : "pointer", textAlign: "left", fontFamily: "inherit", opacity: busy === r.id ? 0.6 : 1 }}>
+                      <div style={{ width: 32, height: 32, borderRadius: 8, background: C.accBg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                        <L.icon size={15} color={C.acc} />
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 500, color: C.text }}>{L.text}</div>
+                        <div style={{ fontSize: 11, color: C.text3 }}>{L.sub} · {sizeMb} МБ</div>
+                      </div>
+                      {busy === r.id ? <RefreshCw size={14} color={C.text3} className="lk-spin" /> : <Download size={14} color={C.text2} />}
+                    </button>
+                  );
+                })}
+                {perTrackCount > 0 && (
+                  <button onClick={() => void dlArchive()} disabled={busy === "archive"}
+                    style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "9px 10px", border: "none", borderRadius: 7, background: "transparent", cursor: busy === "archive" ? "default" : "pointer", textAlign: "left", fontFamily: "inherit", opacity: busy === "archive" ? 0.6 : 1 }}>
+                    <div style={{ width: 32, height: 32, borderRadius: 8, background: C.accBg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                      <FileAudio size={15} color={C.acc} />
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 500, color: C.text }}>Архив аудио всех спикеров</div>
+                      <div style={{ fontSize: 11, color: C.text3 }}>ZIP · {perTrackCount} {pluralRus(perTrackCount, ["дорожка","дорожки","дорожек"])} OGG</div>
+                    </div>
+                    {busy === "archive" ? <RefreshCw size={14} color={C.text3} className="lk-spin" /> : <Download size={14} color={C.text2} />}
+                  </button>
+                )}
+              </>
+            )}
           </div>
         </>
       )}
@@ -1073,15 +1103,16 @@ function VcsPage({ me, onOpenTranscriptions }: { me: Me; onOpenTranscriptions?: 
   const [title, setTitle] = useState("");
   const [date, setDate] = useState(() => new Date(Date.now() + 86_400_000).toISOString().slice(0, 10));
   const [time, setTime] = useState("10:00");
-  // Транскрибация триггерится вручную из истории встреч (см. модуль
-  // «Транскрибация»). На форме создания не показываем.
-  const [record, setRecord] = useState(true);
+  // Запись и транскрибация теперь триггерятся вручную из комнаты:
+  // • client-side recording через ⋮ → «Записать на компьютер»;
+  // • server-side egress через кнопку «Начать запись» у хоста.
+  // На форме создания соответствующих опций нет.
   // Приглашения: сотрудники из таблицы user (multi-select по ID) + внешние email'ы.
   const [invitedUsers, setInvitedUsers] = useState<UserProfile[]>([]);
   const [invitedEmails, setInvitedEmails] = useState<string[]>([]);
 
   const resetForm = () => {
-    setTitle(""); setRecord(true);
+    setTitle("");
     setInvitedUsers([]); setInvitedEmails([]);
   };
   const openModal = (m: "schedule" | "instant") => { resetForm(); setMode(m); setModal(true); };
@@ -1097,7 +1128,7 @@ function VcsPage({ me, onOpenTranscriptions }: { me: Me; onOpenTranscriptions?: 
       const m = await create.mutateAsync({
         title: title.trim(),
         scheduled_at: scheduledISO,
-        record_enabled: record,
+        record_enabled: false,
         auto_transcribe: false,
         participant_ids: invitedUsers.length ? invitedUsers.map((u) => u.id) : undefined,
         invitee_emails: invitedEmails.length ? invitedEmails : undefined,
@@ -1260,20 +1291,6 @@ function VcsPage({ me, onOpenTranscriptions }: { me: Me; onOpenTranscriptions?: 
                   <Field label="Время"><input type="time" value={time} onChange={(e) => setTime(e.target.value)} style={inp()} /></Field>
                 </div>
               )}
-              {[
-                { v: record, set: setRecord, t: "Запись встречи", d: "Композитная запись (видео+аудио MP4 + отдельная аудио-дорожка для транскрибации) сохраняется в MinIO." },
-              ].map((opt, i) => (
-                <label key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", border: `1px solid ${opt.v ? C.acc : C.border}`, borderRadius: 10, cursor: "pointer", background: opt.v ? C.accBg : C.card, marginBottom: 8 }}>
-                  <div style={{ position: "relative", width: 36, height: 20, background: opt.v ? C.acc : C.border2, borderRadius: 10, flexShrink: 0 }}>
-                    <div style={{ position: "absolute", top: 2, left: opt.v ? 18 : 2, width: 16, height: 16, background: "white", borderRadius: "50%", transition: "left .15s", boxShadow: "0 1px 3px rgba(0,0,0,0.15)" }} />
-                  </div>
-                  <input type="checkbox" checked={opt.v} onChange={(e) => opt.set(e.target.checked)} style={{ display: "none" }} />
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 13.5, fontWeight: 600, color: C.text }}>{opt.t}</div>
-                    <div style={{ fontSize: 12, color: C.text2, marginTop: 2, lineHeight: 1.4 }}>{opt.d}</div>
-                  </div>
-                </label>
-              ))}
               <div style={{ marginTop: 14 }}>
                 <InviteParticipantsField
                   meId={me.user_id}

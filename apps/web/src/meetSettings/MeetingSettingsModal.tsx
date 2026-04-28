@@ -1,59 +1,71 @@
 // Настройки видеоконференций (вызываются по шестерёнке в шапке VcsPage).
-// Layout: тёмная модалка, слева сайдбар-табы, справа содержимое таба.
-// Прототип — Yandex Telemost.
+// Layout: модалка светлой темы Toolkit (как остальные настройки), слева
+// сайдбар-табы, справа содержимое таба.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Image as ImageIcon, Mic, Video as VideoIcon, HelpCircle, X, Plus, Ban, Play,
+  Image as ImageIcon, Mic, Video as VideoIcon, X, Plus, Ban, Play,
 } from "lucide-react";
-import { usePrefs, type MeetPrefs, type MeetBackground } from "./prefs";
+import { C } from "@/styles/tokens";
+import { usePrefs, BACKGROUND_PRESETS, type MeetPrefs, type MeetBackground } from "./prefs";
 
-type Tab = "background" | "sound" | "video" | "help";
+type Tab = "background" | "sound" | "video";
 
-export function MeetingSettingsModal({ onClose }: { onClose: () => void }) {
-  const [tab, setTab] = useState<Tab>("sound");
+export type MeetingSettingsModalProps = {
+  onClose: () => void;
+  /** initialTab позволяет открыть модалку сразу на нужной вкладке. */
+  initialTab?: Tab;
+};
+
+export function MeetingSettingsModal({
+  onClose, initialTab,
+}: MeetingSettingsModalProps) {
+  const [tab, setTab] = useState<Tab>(initialTab ?? "sound");
 
   return (
     <div onClick={onClose}
-      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 250,
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 250,
                display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
       <div onClick={(e) => e.stopPropagation()}
         style={{
           width: "min(900px, 96vw)", height: "min(620px, 92vh)",
-          background: "#1c1c1f", border: "1px solid #2a2a2e", borderRadius: 14,
-          boxShadow: "0 30px 70px rgba(0,0,0,0.5)",
-          display: "flex", overflow: "hidden", color: "#e5e7eb",
+          background: C.card, border: `1px solid ${C.border}`, borderRadius: 14,
+          boxShadow: "0 24px 60px rgba(0,0,0,0.18)",
+          display: "flex", overflow: "hidden", color: C.text,
         }}>
 
         {/* Sidebar */}
-        <div style={{ width: 230, padding: 14, borderRight: "1px solid #2a2a2e", display: "flex", flexDirection: "column", flexShrink: 0 }}>
+        <div style={{
+          width: 230, padding: 14, borderRight: `1px solid ${C.border}`,
+          display: "flex", flexDirection: "column", flexShrink: 0, background: C.bg2,
+        }}>
           <SidebarItem active={tab === "background"} icon={<ImageIcon size={16} />}
             label="Фон на встрече" onClick={() => setTab("background")} />
           <SidebarItem active={tab === "sound"}      icon={<Mic size={16} />}
             label="Звук" onClick={() => setTab("sound")} />
           <SidebarItem active={tab === "video"}      icon={<VideoIcon size={16} />}
             label="Видео" onClick={() => setTab("video")} />
-          <SidebarItem active={tab === "help"}       icon={<HelpCircle size={16} />}
-            label="Справка и поддержка" onClick={() => setTab("help")} />
           <div style={{ flex: 1 }} />
-          <div style={{ fontSize: 11, color: "#71717a", textAlign: "center" }}>Toolkit · {appVersion()}</div>
         </div>
 
         {/* Right: header + content */}
         <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
-          <div style={{ padding: "12px 16px", display: "flex", justifyContent: "flex-end", borderBottom: "1px solid #2a2a2e" }}>
+          <div style={{ padding: "12px 16px", display: "flex", justifyContent: "space-between",
+                        alignItems: "center", borderBottom: `1px solid ${C.border}` }}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>
+              {tabTitle(tab)}
+            </div>
             <button onClick={onClose}
               style={{ width: 30, height: 30, borderRadius: 7, background: "transparent",
-                       color: "#9ca3af", border: "none", cursor: "pointer",
+                       color: C.text2, border: "none", cursor: "pointer",
                        display: "flex", alignItems: "center", justifyContent: "center" }}>
               <X size={18} />
             </button>
           </div>
-          <div style={{ flex: 1, overflowY: "auto", padding: 22 }}>
+          <div style={{ flex: 1, overflowY: "auto", padding: 22, background: C.card }}>
             {tab === "background" && <BackgroundTab />}
             {tab === "sound"      && <SoundTab />}
             {tab === "video"      && <VideoTab />}
-            {tab === "help"       && <HelpTab />}
           </div>
         </div>
       </div>
@@ -68,19 +80,25 @@ function SidebarItem({ active, icon, label, onClick }: {
     <button onClick={onClick}
       style={{
         display: "flex", alignItems: "center", gap: 10, padding: "10px 12px",
-        marginBottom: 2, borderRadius: 8, border: "none",
-        background: active ? "#2a2a2e" : "transparent",
-        color: active ? "#fff" : "#c4c4c8",
+        marginBottom: 2, borderRadius: 8,
+        border: `1px solid ${active ? C.border : "transparent"}`,
+        background: active ? C.card : "transparent",
+        color: active ? C.text : C.text2,
         fontSize: 13.5, fontWeight: active ? 600 : 500,
         cursor: "pointer", fontFamily: "inherit", textAlign: "left",
+        boxShadow: active ? "0 1px 2px rgba(0,0,0,0.04)" : "none",
       }}>
       {icon}{label}
     </button>
   );
 }
 
-function appVersion(): string {
-  return "v1.0";
+function tabTitle(tab: Tab): string {
+  switch (tab) {
+    case "background":  return "Фон на встрече";
+    case "sound":       return "Звук";
+    case "video":       return "Видео";
+  }
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -124,14 +142,12 @@ function SoundTab() {
         const tick = () => {
           if (cancelled || !analyser || !buf) return;
           analyser.getByteTimeDomainData(buf);
-          // RMS вокруг 128 (нулевая линия для PCM).
           let sum = 0;
           for (let i = 0; i < buf.length; i++) {
             const v = (buf[i]! - 128) / 128;
             sum += v * v;
           }
           const rms = Math.sqrt(sum / buf.length);
-          // Чуть приподнимем для наглядности.
           setMeterLevel(Math.min(1, rms * 3));
           raf = requestAnimationFrame(tick);
         };
@@ -144,9 +160,7 @@ function SoundTab() {
     return () => {
       cancelled = true;
       if (raf) cancelAnimationFrame(raf);
-      if (started) {
-        try { ctx?.close(); } catch { /* noop */ }
-      }
+      if (started) { try { ctx?.close(); } catch { /* noop */ } }
       if (stream) stream.getTracks().forEach((t) => t.stop());
       meterStreamRef.current = null;
     };
@@ -175,7 +189,6 @@ function SoundTab() {
   };
 
   const testSpeaker = async () => {
-    // Короткий приятный тон через WebAudio.
     try {
       const Ctor = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
       const ctx = new Ctor!();
@@ -201,7 +214,7 @@ function SoundTab() {
         <DeviceSelect devices={audioDevices.list} value={prefs.audioDeviceId}
           onChange={(v) => patch({ audioDeviceId: v })}
           fallback="По умолчанию" />
-        <DarkButton onClick={testMic} icon={<Play size={13} />} label="Проверить" />
+        <SecondaryButton onClick={testMic} icon={<Play size={13} />} label="Проверить" />
       </Card>
 
       <Toggle label="Подключаться с выключенным микрофоном"
@@ -211,7 +224,7 @@ function SoundTab() {
         <DeviceSelect devices={speakerDevices.list} value={prefs.speakerDeviceId}
           onChange={(v) => patch({ speakerDeviceId: v })}
           fallback="По умолчанию" />
-        <DarkButton onClick={testSpeaker} icon={<Play size={13} />} label="Проверить" />
+        <SecondaryButton onClick={testSpeaker} icon={<Play size={13} />} label="Проверить" />
       </Card>
 
       <Card title="Дополнительно" levelMeter={null}>
@@ -244,9 +257,7 @@ function VideoTab() {
         });
         if (cancelled) { stream.getTracks().forEach((t) => t.stop()); return; }
         if (videoEl.current) videoEl.current.srcObject = stream;
-      } catch {
-        // нет камеры или отказ — preview останется пустой
-      }
+      } catch { /* нет камеры или отказ */ }
     })();
     return () => {
       cancelled = true;
@@ -257,11 +268,12 @@ function VideoTab() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <div style={{ background: "#0f0f12", border: "1px solid #2a2a2e", borderRadius: 10, aspectRatio: "16 / 9", overflow: "hidden", position: "relative" }}>
+      {/* Превью камеры — оставляем тёмным фоном, как любое видео-окно. */}
+      <div style={{ background: "#1a1a1d", border: `1px solid ${C.border}`, borderRadius: 10, aspectRatio: "16 / 9", overflow: "hidden", position: "relative" }}>
         <video ref={videoEl} autoPlay playsInline muted
           style={{ width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)" }} />
         {cameras.list.length === 0 && (
-          <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: "#71717a", fontSize: 13 }}>
+          <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: "#9ca3af", fontSize: 13 }}>
             Камеры не найдены
           </div>
         )}
@@ -288,23 +300,6 @@ function VideoTab() {
 // ──────────────────────────────────────────────────────────────────────────
 // BACKGROUND TAB
 // ──────────────────────────────────────────────────────────────────────────
-
-// Демо-набор градиентов как пресет-фоны (без сетевых картинок — чтобы фича
-// работала в закрытом контуре). 12 штук, минимум зависимостей.
-const BACKGROUND_PRESETS: { id: string; gradient: string }[] = [
-  { id: "office",   gradient: "linear-gradient(135deg,#5b8aa9 0%,#cdd6df 100%)" },
-  { id: "warm",     gradient: "linear-gradient(135deg,#c79762 0%,#f6e3c5 100%)" },
-  { id: "forest",   gradient: "linear-gradient(135deg,#3a6b56 0%,#a8c8a0 100%)" },
-  { id: "yellow",   gradient: "linear-gradient(135deg,#c5a13b 0%,#fff1bc 100%)" },
-  { id: "wood",     gradient: "linear-gradient(135deg,#7a4d2c 0%,#d8b48a 100%)" },
-  { id: "sky",      gradient: "linear-gradient(135deg,#5fa8d3 0%,#e0f3ff 100%)" },
-  { id: "rose",     gradient: "linear-gradient(135deg,#b8556e 0%,#f6c4ce 100%)" },
-  { id: "graphite", gradient: "linear-gradient(135deg,#2d3138 0%,#727680 100%)" },
-  { id: "lavender", gradient: "linear-gradient(135deg,#6e5d9e 0%,#dbd0ee 100%)" },
-  { id: "teal",     gradient: "linear-gradient(135deg,#2f7d7d 0%,#bce4e4 100%)" },
-  { id: "sand",     gradient: "linear-gradient(135deg,#a48259 0%,#ecdcc1 100%)" },
-  { id: "night",    gradient: "linear-gradient(135deg,#1a233a 0%,#5a6b8a 100%)" },
-];
 
 function BackgroundTab() {
   const [prefs, patch] = usePrefs();
@@ -338,8 +333,9 @@ function BackgroundTab() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      <div style={{ fontSize: 12, color: "#9ca3af", lineHeight: 1.5 }}>
-        Виртуальный фон применяется к вашему видео в комнате. Реальное наложение появится в следующей версии — сейчас выбор сохраняется и будет применён, когда включим сегментацию.
+      <div style={{ fontSize: 12, color: C.text2, lineHeight: 1.5 }}>
+        Фон применяется к вашему видео в комнате через сегментацию людей.
+        При первом включении модель загружается (~3 МБ), затем работает локально в браузере.
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 8 }}>
@@ -347,7 +343,7 @@ function BackgroundTab() {
           onClick={() => patch({ background: { kind: "none" } })}
           content={
             <div style={{ width: "100%", height: "100%", display: "flex",
-                          alignItems: "center", justifyContent: "center", color: "#71717a" }}>
+                          alignItems: "center", justifyContent: "center", color: C.text3, background: C.bg3 }}>
               <Ban size={20} />
             </div>}
           label="Нет фона" />
@@ -356,7 +352,7 @@ function BackgroundTab() {
           onClick={() => fileInput.current?.click()}
           content={
             <div style={{ width: "100%", height: "100%", display: "flex",
-                          alignItems: "center", justifyContent: "center", color: "#71717a" }}>
+                          alignItems: "center", justifyContent: "center", color: C.text3, background: C.bg3 }}>
               <Plus size={22} />
             </div>}
           label="Свой" />
@@ -395,44 +391,13 @@ function PresetTile({ selected, onClick, content, label }: {
       <button onClick={onClick}
         style={{
           width: "100%", aspectRatio: "1 / 1", borderRadius: 8,
-          border: `2px solid ${selected ? "#10b981" : "#2a2a2e"}`,
-          background: "#0f0f12", padding: 0, overflow: "hidden", cursor: "pointer",
+          border: `2px solid ${selected ? C.acc : C.border}`,
+          background: C.card, padding: 0, overflow: "hidden", cursor: "pointer",
           display: "block",
         }}>
         {content}
       </button>
-      {label && <div style={{ marginTop: 4, fontSize: 10.5, color: "#71717a", textAlign: "center" }}>{label}</div>}
-    </div>
-  );
-}
-
-// ──────────────────────────────────────────────────────────────────────────
-// HELP TAB
-// ──────────────────────────────────────────────────────────────────────────
-
-function HelpTab() {
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      <Card title="О приложении" levelMeter={null}>
-        <Row label="Версия" value="Toolkit 1.0" />
-        <Row label="WebRTC" value="LiveKit SFU · собственный контур" />
-      </Card>
-
-      <Card title="Поддержка" levelMeter={null}>
-        <div style={{ fontSize: 12.5, color: "#c4c4c8", lineHeight: 1.55 }}>
-          Если что-то работает не так — обратитесь к администратору Toolkit
-          в вашей компании. Логи диагностики собираются автоматически в Grafana.
-        </div>
-      </Card>
-    </div>
-  );
-}
-
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: "1px dashed #2a2a2e", fontSize: 13 }}>
-      <span style={{ color: "#9ca3af" }}>{label}</span>
-      <span style={{ color: "#e5e7eb" }}>{value}</span>
+      {label && <div style={{ marginTop: 4, fontSize: 10.5, color: C.text2, textAlign: "center" }}>{label}</div>}
     </div>
   );
 }
@@ -443,13 +408,13 @@ function Row({ label, value }: { label: string; value: string }) {
 
 function Card({ title, levelMeter, children }: {
   title: string;
-  levelMeter: number | null; // null = не показывать meter в шапке
+  levelMeter: number | null;
   children: React.ReactNode;
 }) {
   return (
-    <div style={{ background: "#252528", border: "1px solid #2a2a2e", borderRadius: 10, padding: 14 }}>
+    <div style={{ background: C.bg2, border: `1px solid ${C.border}`, borderRadius: 10, padding: 14 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: "#fff" }}>{title}</div>
+        <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{title}</div>
         {levelMeter !== null && <Meter level={levelMeter} />}
       </div>
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>{children}</div>
@@ -465,7 +430,9 @@ function Meter({ level }: { level: number }) {
       {Array.from({ length: segs }, (_, i) => (
         <div key={i} style={{
           width: 6, height: 14, borderRadius: 2,
-          background: i < filled ? (i >= 7 ? "#ef4444" : i >= 5 ? "#facc15" : "#10b981") : "#3a3a3e",
+          background: i < filled
+            ? (i >= 7 ? C.err : i >= 5 ? C.warn : C.ok)
+            : C.bg3,
         }} />
       ))}
     </div>
@@ -480,8 +447,8 @@ function DeviceSelect({ devices, value, onChange, fallback, full }: {
     <select value={value} onChange={(e) => onChange(e.target.value)}
       style={{
         flex: full ? "1 1 100%" : 1, minWidth: 0,
-        padding: "8px 10px", borderRadius: 8, border: "1px solid #2a2a2e",
-        background: "#16161a", color: "#e5e7eb", fontSize: 13, fontFamily: "inherit",
+        padding: "8px 10px", borderRadius: 8, border: `1px solid ${C.border}`,
+        background: C.card, color: C.text, fontSize: 13, fontFamily: "inherit",
         outline: "none", cursor: "pointer",
       }}>
       <option value="">{fallback}</option>
@@ -494,13 +461,13 @@ function DeviceSelect({ devices, value, onChange, fallback, full }: {
   );
 }
 
-function DarkButton({ onClick, icon, label }: { onClick: () => void; icon: React.ReactNode; label: string }) {
+function SecondaryButton({ onClick, icon, label }: { onClick: () => void; icon: React.ReactNode; label: string }) {
   return (
     <button onClick={onClick}
       style={{
         display: "flex", alignItems: "center", gap: 6,
-        padding: "8px 14px", borderRadius: 8, border: "1px solid #2a2a2e",
-        background: "#16161a", color: "#e5e7eb", fontSize: 12.5, fontWeight: 500,
+        padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.border}`,
+        background: C.card, color: C.text, fontSize: 12.5, fontWeight: 500,
         cursor: "pointer", fontFamily: "inherit", flexShrink: 0,
       }}>
       {icon} {label}
@@ -513,12 +480,12 @@ function Toggle({ label, sub, value, onChange, inline }: {
 }) {
   const wrap = inline
     ? { padding: 0, border: "none", background: "transparent" }
-    : { padding: "12px 14px", border: "1px solid #2a2a2e", borderRadius: 10, background: "#252528" };
+    : { padding: "12px 14px", border: `1px solid ${C.border}`, borderRadius: 10, background: C.bg2 };
   return (
     <label style={{ ...wrap, display: "flex", alignItems: "center", gap: 12, cursor: "pointer" }}>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13, color: "#e5e7eb" }}>{label}</div>
-        {sub && <div style={{ fontSize: 11.5, color: "#71717a", marginTop: 2 }}>{sub}</div>}
+        <div style={{ fontSize: 13, color: C.text }}>{label}</div>
+        {sub && <div style={{ fontSize: 11.5, color: C.text2, marginTop: 2 }}>{sub}</div>}
       </div>
       <Switch on={value} onClick={() => onChange(!value)} />
     </label>
@@ -530,19 +497,19 @@ function Switch({ on, onClick }: { on: boolean; onClick: () => void }) {
     <button onClick={(e) => { e.preventDefault(); onClick(); }}
       style={{
         position: "relative", width: 36, height: 20, borderRadius: 10,
-        background: on ? "#10b981" : "#3a3a3e", border: "none", cursor: "pointer", flexShrink: 0,
+        background: on ? C.acc : C.border2, border: "none", cursor: "pointer", flexShrink: 0,
       }}>
       <div style={{
         position: "absolute", top: 2, left: on ? 18 : 2, width: 16, height: 16,
         background: "white", borderRadius: "50%", transition: "left .15s",
-        boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
+        boxShadow: "0 1px 3px rgba(0,0,0,0.18)",
       }} />
     </button>
   );
 }
 
 function Lbl({ children }: { children: React.ReactNode }) {
-  return <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 6, fontWeight: 500 }}>{children}</div>;
+  return <div style={{ fontSize: 11, color: C.text2, marginBottom: 6, fontWeight: 500 }}>{children}</div>;
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -556,9 +523,6 @@ function useDevices(kind: MediaDeviceInfo["kind"]) {
     let cancelled = false;
     const refresh = async () => {
       try {
-        // Чтобы получить labels, нужен permission. Запрашиваем минимально:
-        // микрофон для аудио-устройств, камеру для видео. Если уже есть
-        // permission — getUserMedia ничего не показывает пользователю.
         if (kind === "audioinput" || kind === "audiooutput") {
           await navigator.mediaDevices
             .getUserMedia({ audio: true })
@@ -591,17 +555,13 @@ function useDevices(kind: MediaDeviceInfo["kind"]) {
 
 async function playOnSpeaker(audio: HTMLAudioElement, deviceId: string) {
   try {
-    // setSinkId — Chromium-only. В Firefox/Safari проигрывание уйдёт в default device.
     type WithSink = HTMLAudioElement & { setSinkId?: (id: string) => Promise<void> };
     const a = audio as WithSink;
     if (deviceId && typeof a.setSinkId === "function") {
       await a.setSinkId(deviceId);
     }
-  } catch {
-    // не критично, играем как есть
-  }
+  } catch { /* не критично */ }
   try { await audio.play(); } catch { /* user gesture может потребоваться */ }
 }
 
-// Используется снаружи, чтобы прокинуть unused import-warning'и не было.
 export type { MeetPrefs };

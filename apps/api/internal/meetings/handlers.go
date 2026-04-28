@@ -31,6 +31,7 @@ func (h *Handlers) Routes() http.Handler {
 	r.Post("/{id}/recording/start", h.recordingStart)
 	r.Post("/{id}/recording/stop", h.recordingStop)
 	r.Get("/{id}/recordings", h.recordingsList)
+	r.Get("/{id}/recordings/audio-archive", h.recordingsAudioArchive)
 	r.Get("/{id}/recordings/{recId}/download", h.recordingDownload)
 	return r
 }
@@ -283,6 +284,26 @@ func (h *Handlers) recordingsList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (h *Handlers) recordingsAudioArchive(w http.ResponseWriter, r *http.Request) {
+	subj := auth.MustSubject(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_id", "invalid meeting id")
+		return
+	}
+	if err := h.svc.StreamPerTrackArchive(r.Context(), subj, w, r, id); err != nil {
+		if errors.Is(err, ErrRecordingNotConfigured) {
+			writeErr(w, http.StatusServiceUnavailable, "recording_unavailable", err.Error())
+			return
+		}
+		if errors.Is(err, ErrNotFound) || errors.Is(err, ErrForbidden) {
+			writeServiceErr(w, err)
+			return
+		}
+		// уже могли начать писать body — просто логируем
+	}
 }
 
 func (h *Handlers) recordingDownload(w http.ResponseWriter, r *http.Request) {
