@@ -54,6 +54,7 @@ import {
   type AdminListFilter, type AdminPhoneExtensionRequest,
 } from "@/api/phone-requests";
 import { useWsEvent } from "@/ws/useWs";
+import { MeetingSettingsModal } from "@/meetSettings/MeetingSettingsModal";
 import {
   useTranscripts, useTranscript, useUploadTranscript,
   useDeleteTranscript, useRetryTranscript,
@@ -1052,6 +1053,7 @@ function VcsPage({ me, onOpenTranscriptions }: { me: Me; onOpenTranscriptions?: 
   const share = useShareMeeting();
 
   const [modal, setModal] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [active, setActive] = useState<ApiMeeting | null>(null); // открытая комната
   const [copiedFor, setCopiedFor] = useState<string | null>(null); // meetingId для checkmark
   const shareLink = async (m: ApiMeeting) => {
@@ -1129,16 +1131,23 @@ function VcsPage({ me, onOpenTranscriptions }: { me: Me; onOpenTranscriptions?: 
     <div style={{ minHeight: "100%", background: C.bg2 }}>
       <PgHdr title="Видеоконференции" sub="LiveKit SFU · собственный контур"
         action={
-          <div style={{ display: "flex", gap: 10 }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
             <button onClick={() => openModal("schedule")} style={{ display: "flex", alignItems: "center", gap: 7, background: C.card, color: C.text, padding: "9px 16px", borderRadius: 8, fontWeight: 500, fontSize: 14, border: `1px solid ${C.border}`, cursor: "pointer", fontFamily: "inherit" }}>
               <Clock size={15} />Запланировать
             </button>
             <button onClick={() => openModal("instant")} style={{ display: "flex", alignItems: "center", gap: 7, background: C.acc, color: "white", padding: "9px 18px", borderRadius: 8, fontWeight: 500, fontSize: 14, border: "none", cursor: "pointer", fontFamily: "inherit" }}>
               <Video size={15} />Создать сейчас
             </button>
+            <button onClick={() => setSettingsOpen(true)} title="Настройки видеоконференций"
+              style={{ width: 38, height: 38, borderRadius: 8, background: C.card, color: C.text2,
+                       border: `1px solid ${C.border}`, cursor: "pointer", fontFamily: "inherit",
+                       display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <Settings size={16} />
+            </button>
           </div>
         }
       />
+      {settingsOpen && <MeetingSettingsModal onClose={() => setSettingsOpen(false)} />}
       <div style={{ padding: 24 }}>
         {meetingsQ.isLoading ? (
           <div style={{ padding: 40, textAlign: "center", color: C.text3, fontSize: 13 }}>Загрузка…</div>
