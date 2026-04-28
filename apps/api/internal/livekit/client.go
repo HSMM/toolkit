@@ -210,27 +210,20 @@ type S3Config struct {
 //
 // Возвращает egress_id, который мы сохраняем в participant.current_egress_id.
 func (c *Client) StartParticipantAudioEgress(ctx context.Context, room, identity, filepath string, s3 S3Config) (string, error) {
-	// MP4 audio-only. Дублируем поля в snake_case и camelCase: ParticipantEgress
-	// в LK Twirp по факту читает только camelCase (audioOnly, videoOnly,
-	// fileOutputs), но снаряжаем оба варианта для совместимости с разными
-	// сборками. Если послать только snake_case — флаг audio_only теряется,
-	// и в файле оказывается видео+аудио.
-	out := map[string]any{
-		"file_type": "MP4",
-		"fileType":  "MP4",
-		"filepath":  filepath,
-		"s3":        s3.json(),
-	}
+	// MP4 audio-only. ParticipantEgress в LK Twirp принимает поля только в
+	// lowerCamelCase (proto3 JSON convention). Snake_case формы (audio_only)
+	// silently игнорируются — флаг теряется, в файле оказывается видео+аудио.
 	body := map[string]any{
-		"room_name":    room,
-		"roomName":     room,
-		"identity":     identity,
-		"audio_only":   true,
-		"audioOnly":    true,
-		"video_only":   false,
-		"videoOnly":    false,
-		"file_outputs": []any{out},
-		"fileOutputs":  []any{out},
+		"roomName":  room,
+		"identity":  identity,
+		"audioOnly": true,
+		"fileOutputs": []any{
+			map[string]any{
+				"fileType": "MP4",
+				"filepath": filepath,
+				"s3":       s3.json(),
+			},
+		},
 	}
 	var resp egressInfoMin
 	if err := c.twirp(ctx, "Egress", room, "StartParticipantEgress", body, &resp); err != nil {
