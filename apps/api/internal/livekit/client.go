@@ -210,24 +210,29 @@ type S3Config struct {
 //
 // Возвращает egress_id, который мы сохраняем в participant.current_egress_id.
 func (c *Client) StartParticipantAudioEgress(ctx context.Context, room, identity, filepath string, s3 S3Config) (string, error) {
+	// LK Twirp egress использует protojson на стороне сервера: для enum'ов
+	// принимает либо JSON-имя ("OPUS"), либо число (1). Поля в lowerCamelCase
+	// (audioCodec, fileType) — стандартный proto3 JSON. snake_case формы
+	// тоже принимаются для большинства полей, но НЕ для enum value names
+	// внутри EncodingOptions — там именно camelCase ключи. Шлём обе формы
+	// для надёжности (advanced и fileOutputs внешние ключи, audioCodec /
+	// audioBitrate / audioFrequency / fileType внутри — camelCase).
+	enc := map[string]any{
+		"audioCodec":     "OPUS",
+		"audioBitrate":   128,
+		"audioFrequency": 48000,
+	}
+	out := map[string]any{
+		"fileType": "OGG",
+		"filepath": filepath,
+		"s3":       s3.json(),
+	}
 	body := map[string]any{
-		"room_name":  room,
-		"identity":   identity,
-		"audio_only": true,
-		"advanced": map[string]any{
-			// AudioCodec enum: DEFAULT_AC=0, OPUS=1, AAC=2 (см. livekit_models.proto).
-			// json.Unmarshal на сервере ожидает int, не имя.
-			"audio_codec":     1,
-			"audio_bitrate":   128,
-			"audio_frequency": 48000,
-		},
-		"file_outputs": []any{
-			map[string]any{
-				"file_type": "OGG",
-				"filepath":  filepath,
-				"s3":        s3.json(),
-			},
-		},
+		"room_name":    room,
+		"identity":     identity,
+		"audio_only":   true,
+		"advanced":     enc,
+		"file_outputs": []any{out},
 	}
 	var resp egressInfoMin
 	if err := c.twirp(ctx, "Egress", room, "StartParticipantEgress", body, &resp); err != nil {
@@ -323,6 +328,11 @@ func (c *Client) twirp(ctx context.Context, service, room, method string, in any
 	body, err := json.Marshal(in)
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
+	}
+	// TEMP: логируем тело StartParticipantEgress, чтобы понять какие поля LK
+	// принимает. Уберём после отладки codec'а.
+	if method == "StartParticipantEgress" {
+		fmt.Printf("[LK twirp] %s body: %s\n", method, string(body))
 	}
 	url := fmt.Sprintf("%s/twirp/livekit.%s/%s", c.baseURL, service, method)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
