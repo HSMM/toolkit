@@ -198,8 +198,16 @@ type S3Config struct {
 }
 
 // StartParticipantAudioEgress стартует ParticipantEgress только для audio
-// (audio_only=true). Файл — OGG (Opus); путь содержит {publisher_identity}
+// (audio_only=true). Файл — OGG (Opus); путь содержит {participant_identity}
 // и {time}, чтобы файл был уникален и узнаваем.
+//
+// Используем direct_file_outputs (а не file_outputs) — это RAW-дамп
+// опубликованного Opus-трека участника без транскодинга. Контейнер OGG
+// LiveKit определяет по расширению .ogg в filepath. Транскодинг через
+// EncodedFileOutput для ParticipantEgress audio-only ломается с ошибкой
+// «no supported codec is compatible with all outputs» (LK не подбирает
+// codec из preset'а, а explicit advanced.audio_codec работает только
+// с composite egress).
 //
 // Возвращает egress_id, который мы сохраняем в participant.current_egress_id.
 func (c *Client) StartParticipantAudioEgress(ctx context.Context, room, identity, filepath string, s3 S3Config) (string, error) {
@@ -207,18 +215,10 @@ func (c *Client) StartParticipantAudioEgress(ctx context.Context, room, identity
 		"room_name":  room,
 		"identity":   identity,
 		"audio_only": true,
-		"file_outputs": []any{
+		"direct_file_outputs": []any{
 			map[string]any{
-				"file_type": "OGG",
-				"filepath":  filepath,
-				"s3": map[string]any{
-					"access_key":       s3.AccessKey,
-					"secret":           s3.Secret,
-					"endpoint":         s3.Endpoint,
-					"region":           s3.Region,
-					"bucket":           s3.Bucket,
-					"force_path_style": s3.ForcePathStyle,
-				},
+				"filepath": filepath,
+				"s3":       s3.json(),
 			},
 		},
 	}
