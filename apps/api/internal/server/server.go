@@ -188,7 +188,7 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 
 			// Системные настройки — read-only для всех authenticated
 			// (фронт фильтрует NAV по module_access).
-			sysHandlers := sysset.NewHandlers(pool)
+			sysHandlers := sysset.NewHandlersWithHub(pool, hub)
 			r.Mount("/system-settings", sysHandlers.ReadRoutes())
 
 			// Заявки на внутренние номера. User-side (создать/отозвать/мою-последнюю).

@@ -613,6 +613,25 @@ function SoftphoneWidget() {
     void myReq.refetch();
   });
 
+  // Админ снял привязку extension'а → отключаемся от FreePBX, очищаем
+  // sessionStorage-кеш (иначе автостарт виджета подтянет старые креды
+  // оттуда после 404 от /phone/me) и переходим в "не назначен".
+  useWsEvent<{ prev_extension?: string }>("phone_extension_unassigned", (e) => {
+    const prev = e.payload?.prev_extension;
+    push({
+      type: "system",
+      title: "Внутренний номер отвязан",
+      desc: prev
+        ? `Администратор снял с вас привязку номера ${prev}`
+        : "Администратор снял с вас привязку номера",
+    });
+    phone.stop();
+    saveSoftphoneConfig(null);
+    startedKeyRef.current = ""; // чтобы autoStart не считал, что мы уже стартовали
+    void creds.refetch();
+    void myReq.refetch();
+  });
+
   // Тикер для таймера активного разговора.
   useEffect(() => {
     if (phone.state.kind !== "active") return;

@@ -12,10 +12,12 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/HSMM/toolkit/internal/auth"
+	"github.com/HSMM/toolkit/internal/ws"
 )
 
 // ModuleAccess — флаги показа модулей в навигации (для non-admin).
@@ -82,9 +84,24 @@ type PhoneConfigPublic struct {
 	Extensions []PhoneExtensionPublic `json:"extensions"`
 }
 
-type Handlers struct{ db *pgxpool.Pool }
+// EventPhoneExtensionUnassigned — сервер шлёт пользователю, у которого админ
+// только что отвязал extension (или удалил extension вместе с привязкой). На
+// этот event фронт должен остановить JsSIP, очистить sessionStorage-creds и
+// перерисовать виджет в состояние «не назначен» (CTA «Запросить номер»).
+const EventPhoneExtensionUnassigned = "phone_extension_unassigned"
 
+type Handlers struct {
+	db  *pgxpool.Pool
+	hub *ws.Hub // опционально: если nil, broadcast-события не шлются
+}
+
+// NewHandlers — без hub'а: broadcast'ы выключены (для тестов / простых сценариев).
 func NewHandlers(db *pgxpool.Pool) *Handlers { return &Handlers{db: db} }
+
+// NewHandlersWithHub — основной конструктор; hub нужен для phone_extension_unassigned.
+func NewHandlersWithHub(db *pgxpool.Pool, hub *ws.Hub) *Handlers {
+	return &Handlers{db: db, hub: hub}
+}
 
 // ReadRoutes (auth-required) — фронт читает чтобы скрыть выключенные модули.
 func (h *Handlers) ReadRoutes() http.Handler {
@@ -280,7 +297,56 @@ func (h *Handlers) putPhone(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "save_failed", err.Error())
 		return
 	}
+
+	// Diff — кому стало «не назначено». Считаем «отвязали», если user_id
+	// был в cur.Extensions с этим ext, а в in.Extensions либо запись с этим
+	// ext удалили целиком, либо assigned_to сменили на nil/другого user'а.
+	h.publishUnassigned(diffUnassigned(cur, in))
+
 	h.getPhone(w, r) // вернём отдекредентенный публичный вид
+}
+
+// diffUnassigned — возвращает map user_id → previous extension для тех, кому
+// привязка была снята (а также для extension'ов, удалённых полностью или
+// переназначенных другому user'у).
+func diffUnassigned(cur, next PhoneConfig) map[uuid.UUID]string {
+	curAssign := map[string]string{} // user_id_str → ext
+	for _, e := range cur.Extensions {
+		if e.AssignedTo != nil && *e.AssignedTo != "" {
+			curAssign[*e.AssignedTo] = e.Ext
+		}
+	}
+	nextAssign := map[string]string{}
+	for _, e := range next.Extensions {
+		if e.AssignedTo != nil && *e.AssignedTo != "" {
+			nextAssign[*e.AssignedTo] = e.Ext
+		}
+	}
+	out := map[uuid.UUID]string{}
+	for uidStr, prevExt := range curAssign {
+		nextExt, stillAssigned := nextAssign[uidStr]
+		if !stillAssigned || nextExt != prevExt {
+			uid, err := uuid.Parse(uidStr)
+			if err != nil {
+				continue
+			}
+			out[uid] = prevExt
+		}
+	}
+	return out
+}
+
+func (h *Handlers) publishUnassigned(targets map[uuid.UUID]string) {
+	if h.hub == nil || len(targets) == 0 {
+		return
+	}
+	for uid, prevExt := range targets {
+		payload, err := json.Marshal(map[string]any{"prev_extension": prevExt})
+		if err != nil {
+			continue
+		}
+		h.hub.Publish(uid, ws.Event{Type: EventPhoneExtensionUnassigned, Payload: payload})
+	}
 }
 
 func (h *Handlers) loadPhone(ctx context.Context) (PhoneConfig, error) {
