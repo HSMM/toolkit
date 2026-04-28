@@ -50,7 +50,10 @@ func (s *Service) AttachRecording(deps RecordingDeps) {
 		deps.AudioFilepathTmpl = "meetings/{room_name}/{time}.ogg"
 	}
 	if deps.ParticipantAudioFilepathTmpl == "" {
-		deps.ParticipantAudioFilepathTmpl = "meetings/{room_name}/per-track/{participant_identity}-{time}.ogg"
+		// MP4 контейнер с AAC внутри (см. livekit/client.go
+		// StartParticipantAudioEgress). .m4a — это alias для MP4 audio-only,
+		// проигрыватели его понимают.
+		deps.ParticipantAudioFilepathTmpl = "meetings/{room_name}/per-track/{participant_identity}-{time}.m4a"
 	}
 	s.recDeps = &deps
 }
@@ -377,7 +380,7 @@ func (s *Service) OnEgressEnded(ctx context.Context, info *livekit.EgressInfo) e
 	case isAudio:
 		kind, mime, retentionKind = "meeting_audio", "audio/ogg", "meeting_audio"
 	default: // per-track participant audio
-		kind, mime, retentionKind = "meeting_per_track", "audio/ogg", "meeting_per_track"
+		kind, mime, retentionKind = "meeting_per_track", "audio/mp4", "meeting_per_track"
 	}
 
 	// Для per-track ставим participant_id; для room-wide — NULL.
@@ -663,11 +666,16 @@ func (s *Service) StreamPerTrackArchive(ctx context.Context, subj *auth.Subject,
 	for _, it := range items {
 		who := pickSpeakerName(it.fullName, it.extName, it.identity)
 		base := sanitizeFilename(who) + "_" + it.createdAt.Format("150405")
+		// Расширение берём от реального S3-объекта (.m4a / .ogg / ...).
+		ext := strings.ToLower(path.Ext(it.s3Key))
+		if ext == "" {
+			ext = ".m4a"
+		}
 		// Если несколько файлов от одного спикера в одну секунду — добавим суффикс.
 		used[base]++
-		name := base + ".ogg"
+		name := base + ext
 		if used[base] > 1 {
-			name = fmt.Sprintf("%s_%d.ogg", base, used[base])
+			name = fmt.Sprintf("%s_%d%s", base, used[base], ext)
 		}
 
 		fw, err := zw.Create(name)
