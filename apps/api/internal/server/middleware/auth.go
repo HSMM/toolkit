@@ -73,10 +73,23 @@ func RequireRole(roles ...auth.Role) func(http.Handler) http.Handler {
 }
 
 func bearerToken(r *http.Request) string {
+	// 1. Стандартный заголовок — Authorization: Bearer <token>.
 	h := r.Header.Get("Authorization")
 	const prefix = "Bearer "
 	if len(h) > len(prefix) && strings.EqualFold(h[:len(prefix)], prefix) {
 		return strings.TrimSpace(h[len(prefix):])
+	}
+	// 2. WebSocket-handshake — браузер не разрешает кастомные заголовки на WS,
+	// поэтому JWT передаётся в Sec-WebSocket-Protocol: «bearer.<token>».
+	// Может быть несколько subprotocol'ов через запятую.
+	if proto := r.Header.Get("Sec-WebSocket-Protocol"); proto != "" {
+		const wsPrefix = "bearer."
+		for _, p := range strings.Split(proto, ",") {
+			p = strings.TrimSpace(p)
+			if strings.HasPrefix(p, wsPrefix) {
+				return p[len(wsPrefix):]
+			}
+		}
 	}
 	return ""
 }

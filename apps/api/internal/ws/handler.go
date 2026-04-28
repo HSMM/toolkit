@@ -2,6 +2,7 @@ package ws
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
@@ -34,9 +35,23 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Echo back any "bearer.<token>" subprotocol браузер прислал в handshake'е,
+	// иначе библиотека выберет пустой subprotocol и Chrome/Safari закроют WS
+	// со статусом 1006. Сами субпротоколы в payload не используем — это просто
+	// способ доставить JWT через WS-handshake (header нельзя выставить из JS).
+	var subprotocols []string
+	if proto := r.Header.Get("Sec-WebSocket-Protocol"); proto != "" {
+		for _, p := range strings.Split(proto, ",") {
+			p = strings.TrimSpace(p)
+			if strings.HasPrefix(p, "bearer.") {
+				subprotocols = append(subprotocols, p)
+			}
+		}
+	}
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		OriginPatterns:    h.allowedOrigins,
+		OriginPatterns:     h.allowedOrigins,
 		InsecureSkipVerify: len(h.allowedOrigins) == 0,
+		Subprotocols:       subprotocols,
 	})
 	if err != nil {
 		// Accept already wrote a response on failure.

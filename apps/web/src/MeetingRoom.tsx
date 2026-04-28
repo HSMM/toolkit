@@ -6,7 +6,7 @@ import "@livekit/components-styles";
 import { LiveKitRoom } from "@livekit/components-react";
 import { RussianRoomUI } from "@/RoomUI";
 import { useEffect, useMemo, useState } from "react";
-import { X, Loader2, Check, UserPlus, Circle, Square } from "lucide-react";
+import { X, Loader2, Check, UserPlus, Circle, Square, Clock, Timer } from "lucide-react";
 import { C } from "@/styles/tokens";
 import {
   useJoinMeeting, useEndMeeting, useLeaveMeeting, useMeetingPoll, useAdmitGuest,
@@ -86,6 +86,7 @@ export function MeetingRoom({ meeting, isHost, onClose }: Props) {
             {meeting.livekit_room_id}
           </div>
         </div>
+        <Timers meetingStartedAt={meeting.started_at || meeting.created_at} joinReady={!!creds} />
         {isHost && <RecordingButton meetingId={meeting.id} />}
         {isHost && (
           <button onClick={endForAll}
@@ -161,6 +162,53 @@ export function MeetingRoom({ meeting, isHost, onClose }: Props) {
       </div>
     </div>
   );
+}
+
+// Timers — два таймера в шапке комнаты:
+//   • общий — длительность встречи с момента её первого старта (started_at);
+//   • «вы» — сколько текущий участник в комнате (с момента получения creds).
+// Тикают раз в секунду; при размонтировании interval очищается.
+function Timers({ meetingStartedAt, joinReady }: { meetingStartedAt: string; joinReady: boolean }) {
+  const [now, setNow] = useState(() => Date.now());
+  // Снимок момента, когда клиент получил creds (т.е. реально подключился).
+  const [meJoinedAt, setMeJoinedAt] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (joinReady && meJoinedAt === null) setMeJoinedAt(Date.now());
+  }, [joinReady, meJoinedAt]);
+
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  const totalMs = Math.max(0, now - new Date(meetingStartedAt).getTime());
+  const meMs = meJoinedAt === null ? 0 : Math.max(0, now - meJoinedAt);
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 12, fontFamily: "'DM Mono', monospace" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 5, color: "#e5e7eb", fontSize: 13 }}
+        title="Длительность встречи">
+        <Clock size={13} color="#9ca3af" />
+        <span>{fmtHMS(totalMs)}</span>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 5, color: "#9ca3af", fontSize: 12 }}
+        title="Вы на встрече">
+        <Timer size={12} />
+        <span>{fmtHMS(meMs)}</span>
+      </div>
+    </div>
+  );
+}
+
+function fmtHMS(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  if (h > 0) return `${h}:${pad(m)}:${pad(sec)}`;
+  return `${pad(m)}:${pad(sec)}`;
 }
 
 // RecordingButton — для host: «● Начать запись» / «■ Остановить запись».
