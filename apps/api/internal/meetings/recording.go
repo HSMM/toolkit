@@ -50,11 +50,11 @@ func (s *Service) AttachRecording(deps RecordingDeps) {
 		deps.AudioFilepathTmpl = "meetings/{room_name}/{time}.ogg"
 	}
 	if deps.ParticipantAudioFilepathTmpl == "" {
-		// LK для ParticipantEgress подставляет {publisher_identity}
-		// (НЕ {participant_identity} — будет литерально записан как есть)
-		// и {time}. Расширение НЕ ставим — LK сам добавит .mp4 для
-		// file_type=MP4. Проигрыватели понимают audio-only MP4 как M4A.
-		deps.ParticipantAudioFilepathTmpl = "meetings/{room_name}/per-track/{publisher_identity}-{time}"
+		// TrackEgress пишет RAW-трек: для микрофона это Opus → пакуется в
+		// OGG по расширению. Подстановки делаем сами в коде (нам нужен
+		// participant identity и timestamp, у TrackEgress нет автоплейсхолдеров).
+		// Шаблон: ROOM/per-track/IDENTITY-TIMESTAMP.ogg.
+		deps.ParticipantAudioFilepathTmpl = "meetings/{room_name}/per-track/{identity}-{time}.ogg"
 	}
 	s.recDeps = &deps
 }
@@ -168,9 +168,15 @@ func (s *Service) startAllParticipantEgresses(ctx context.Context, roomID string
 	}
 }
 
-// startParticipantAudioEgress — создаёт ParticipantEgress audio-only для
-// конкретного участника и сохраняет egress_id в participant.current_egress_id.
-// Идемпотентно: если у participant уже current_egress_id — выходит.
+// startParticipantAudioEgress — создаёт TrackEgress на аудио-трек участника
+// (RAW Opus → OGG, без транскодинга). Сохраняет egress_id в
+// participant.current_egress_id. Идемпотентно: если у participant уже
+// current_egress_id — выходит без действий.
+//
+// Микрофонный track SID не известен заранее: участник публикует трек
+// после connect'а, нужно сначала спросить LK через ListParticipants.
+// Если track ещё не опубликован (например, мик ещё инициализируется),
+// делаем 3 ретрая с задержкой 1.5с.
 func (s *Service) startParticipantAudioEgress(ctx context.Context, roomID string, meetingID, participantID uuid.UUID, identity string) error {
 	if s.recDeps == nil {
 		return nil
@@ -191,7 +197,21 @@ func (s *Service) startParticipantAudioEgress(ctx context.Context, roomID string
 	if cur != nil && *cur != "" {
 		return nil // уже запущен
 	}
-	egID, err := s.lk.StartParticipantAudioEgress(ctx, roomID, identity, s.recDeps.ParticipantAudioFilepathTmpl, s.recDeps.S3)
+
+	// Поиск audio-track SID этого участника. Делаем до 3 попыток.
+	trackID, err := s.findAudioTrackSID(ctx, roomID, identity)
+	if err != nil {
+		return fmt.Errorf("find audio track for %s: %w", identity, err)
+	}
+
+	// Подставляем placeholder'ы в шаблон.
+	filepath := strings.NewReplacer(
+		"{room_name}", roomID,
+		"{identity}", identity,
+		"{time}", time.Now().UTC().Format("2006-01-02T150405"),
+	).Replace(s.recDeps.ParticipantAudioFilepathTmpl)
+
+	egID, err := s.lk.StartTrackEgress(ctx, roomID, trackID, filepath, s.recDeps.S3)
 	if err != nil {
 		return err
 	}
@@ -200,6 +220,38 @@ func (s *Service) startParticipantAudioEgress(ctx context.Context, roomID string
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// findAudioTrackSID опрашивает LK ListParticipants и ищет microphone-track
+// у участника с указанной identity. До 3 попыток с задержкой 1.5с —
+// при join'е трек публикуется НЕ сразу.
+func (s *Service) findAudioTrackSID(ctx context.Context, roomID, identity string) (string, error) {
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(1500 * time.Millisecond):
+			}
+		}
+		parts, err := s.lk.ListParticipants(ctx, roomID)
+		if err != nil {
+			return "", err
+		}
+		for _, p := range parts {
+			if p.Identity != identity {
+				continue
+			}
+			for _, t := range p.Tracks {
+				// Источник микрофона определённо. Если LK не возвращает
+				// source — fallback на type=AUDIO.
+				if t.Source == "MICROPHONE" || (t.Source == "" && t.Type == "AUDIO") {
+					return t.Sid, nil
+				}
+			}
+		}
+	}
+	return "", fmt.Errorf("audio track not found for %s after retries", identity)
 }
 
 // StartParticipantAudioIfActive — вызывается из Join после upsert participant.
@@ -381,7 +433,7 @@ func (s *Service) OnEgressEnded(ctx context.Context, info *livekit.EgressInfo) e
 	case isAudio:
 		kind, mime, retentionKind = "meeting_audio", "audio/ogg", "meeting_audio"
 	default: // per-track participant audio
-		kind, mime, retentionKind = "meeting_per_track", "audio/mp4", "meeting_per_track"
+		kind, mime, retentionKind = "meeting_per_track", "audio/ogg", "meeting_per_track"
 	}
 
 	// Для per-track ставим participant_id; для room-wide — NULL.
@@ -667,10 +719,10 @@ func (s *Service) StreamPerTrackArchive(ctx context.Context, subj *auth.Subject,
 	for _, it := range items {
 		who := pickSpeakerName(it.fullName, it.extName, it.identity)
 		base := sanitizeFilename(who) + "_" + it.createdAt.Format("150405")
-		// Расширение берём от реального S3-объекта (.m4a / .ogg / ...).
+		// Расширение берём от реального S3-объекта (.ogg / .m4a / ...).
 		ext := strings.ToLower(path.Ext(it.s3Key))
 		if ext == "" {
-			ext = ".m4a"
+			ext = ".ogg"
 		}
 		// Если несколько файлов от одного спикера в одну секунду — добавим суффикс.
 		used[base]++
