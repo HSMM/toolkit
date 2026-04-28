@@ -22,7 +22,7 @@ import {
   Settings, Mic, MicOff, PhoneOff, Monitor, Search, Plus,
   Download, X, Check,
   RefreshCw, User, PhoneMissed,
-  Save, Wifi, Hash, Shield, Clock, Mail, Key, LogOut,
+  Save, Wifi, Hash, Shield, Clock, Mail, LogOut,
   Copy, Upload, FileAudio, Trash2, Send, ChevronRight, Inbox,
   Bell, Activity, BarChart3, Headphones, ArrowRightLeft, Minus,
   Sparkles, MessageCircle, Smile, Frown, Meh, AlertTriangle, AlertCircle,
@@ -1160,7 +1160,7 @@ function VcsPage({ me }: { me: Me }) {
 
   return (
     <div style={{ minHeight: "100%", background: C.bg2 }}>
-      <PgHdr title="Видеоконференции" sub="LiveKit SFU · собственный контур"
+      <PgHdr title="Видеоконференции"
         action={
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
             <button onClick={() => openModal("schedule")} style={{ display: "flex", alignItems: "center", gap: 7, background: C.card, color: C.text, padding: "9px 16px", borderRadius: 8, fontWeight: 500, fontSize: 14, border: `1px solid ${C.border}`, cursor: "pointer", fontFamily: "inherit" }}>
@@ -1552,7 +1552,7 @@ function TranscriptionPage({ meetingFilter }: { meetingFilter?: string } = {}) {
   return (
     <div style={{ height: "100%", background: C.bg2, display: "flex", flexDirection: "column" }}>
       <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
-      <PgHdr title="Транскрибация" sub="GigaAM ASR · диалог по каналам, аналитика, экспорт" />
+      <PgHdr title="Транскрибация" />
       {err && (
         <div style={{ background: C.errBg, borderBottom: `1px solid ${C.errBrd}`, padding: "10px 22px", color: C.errTx, fontSize: 13, display: "flex", alignItems: "center", gap: 10 }}>
           <X size={15} /><span style={{ flex: 1 }}>{err}</span>
@@ -3513,7 +3513,6 @@ function ProfileModal({ onClose, me }: { onClose: () => void; me: MockUser }) {
         <div style={{ padding: "16px 22px", borderBottom: `1px solid ${C.border}`, background: C.card, display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
           <div>
             <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: C.text }}>Мой профиль</h2>
-            <p style={{ margin: "3px 0 0", fontSize: 12.5, color: C.text2 }}>Учётные данные и доступы сотрудника</p>
           </div>
           <button onClick={onClose} style={{ width: 32, height: 32, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", background: "transparent", color: C.text2, cursor: "pointer", border: "none" }}>
             <X size={18} />
@@ -3614,10 +3613,7 @@ function ProfileModal({ onClose, me }: { onClose: () => void; me: MockUser }) {
             )}
           </div>
 
-          <div style={{ display: "flex", gap: 10 }}>
-            <button style={{ flex: 1, padding: "10px 16px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.card, color: C.text, fontWeight: 500, fontSize: 13.5, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 7 }}>
-              <Key size={14} />Сменить пароль
-            </button>
+          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
             <button onClick={() => { void logout(); }}
               style={{ padding: "10px 18px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.card, color: C.err, fontWeight: 500, fontSize: 13.5, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 7 }}>
               <LogOut size={14} />Выйти
