@@ -34,6 +34,9 @@ type Props = {
   topRight?: React.ReactNode;
   /** Гостевая ссылка — для кнопки «Скопировать» в нижнем-левом углу (только хост). */
   guestUrl?: string;
+  /** Момент подключения текущего пользователя к комнате (Date.now()) —
+   *  используется в чате для таймера «вы на встрече». null до подключения. */
+  meJoinedAt?: number | null;
 };
 
 type SidePanel = "none" | "chat" | "participants";
@@ -44,7 +47,7 @@ type HandRaiseMsg = { kind: "raise" | "lower" };
 
 const HAND_RAISE_TOPIC = "toolkit:hand-raise";
 
-export function RussianRoomUI({ topRight, guestUrl }: Props = {}) {
+export function RussianRoomUI({ topRight, guestUrl, meJoinedAt }: Props = {}) {
   // ─── Tracks ────────────────────────────────────────────────────────────
   const tracks = useTracks(
     [
@@ -220,7 +223,7 @@ export function RussianRoomUI({ topRight, guestUrl }: Props = {}) {
           )}
         </div>
 
-        {sidePanel === "chat" && <ChatPanel onClose={() => setSidePanel("none")} />}
+        {sidePanel === "chat" && <ChatPanel meJoinedAt={meJoinedAt ?? null} onClose={() => setSidePanel("none")} />}
         {sidePanel === "participants" && (
           <ParticipantsPanel
             participants={participants}
@@ -444,14 +447,25 @@ function MenuDivider() {
 // Side panels
 // ──────────────────────────────────────────────────────────────────────────
 
-function ChatPanel({ onClose }: { onClose: () => void }) {
+function ChatPanel({ meJoinedAt, onClose }: { meJoinedAt: number | null; onClose: () => void }) {
   const { send, chatMessages } = useChat();
   const [draft, setDraft] = useState("");
+  const [now, setNow] = useState(() => Date.now());
   const listRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
   }, [chatMessages]);
+
+  // Таймер «вы на встрече» обновляется раз в секунду пока чат открыт.
+  useEffect(() => {
+    if (meJoinedAt === null) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [meJoinedAt]);
+
+  const meMs = meJoinedAt === null ? 0 : Math.max(0, now - meJoinedAt);
+  const meTitle = meJoinedAt === null ? "Чат" : `Чат · вы на встрече ${fmtChatHMS(meMs)}`;
 
   const submit = async () => {
     const text = draft.trim();
@@ -461,7 +475,7 @@ function ChatPanel({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <SidePanelShell title="Чат" onClose={onClose}>
+    <SidePanelShell title={meTitle} onClose={onClose}>
       <div ref={listRef} style={{ flex: 1, overflowY: "auto", padding: "10px 12px", display: "flex", flexDirection: "column", gap: 10 }}>
         {chatMessages.length === 0 && (
           <div style={{ color: "#6b7280", fontSize: 12, textAlign: "center", marginTop: 24 }}>
@@ -569,6 +583,16 @@ function SidePanelShell({ title, onClose, children }: { title: string; onClose: 
 function fmtTime(ms: number): string {
   const d = new Date(ms);
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+function fmtChatHMS(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  if (h > 0) return `${h}:${pad(m)}:${pad(sec)}`;
+  return `${pad(m)}:${pad(sec)}`;
 }
 
 function iconBtnStyle(off: boolean, pending: boolean, active?: boolean): CSSProperties {

@@ -161,10 +161,20 @@ func (c *Client) EndRoom(ctx context.Context, room string) error {
 	return c.twirp(ctx, "RoomService", room, "DeleteRoom", map[string]string{"room": room}, nil)
 }
 
-// LKParticipant — минимальный срез из ListParticipants (нам нужны только identity).
+// LKTrack — срез TrackInfo из ListParticipants. Type: "AUDIO"|"VIDEO"|"DATA",
+// Source: "CAMERA"|"MICROPHONE"|"SCREEN_SHARE"|"SCREEN_SHARE_AUDIO"|"UNKNOWN".
+type LKTrack struct {
+	Sid    string `json:"sid"`
+	Type   string `json:"type"`
+	Source string `json:"source"`
+	Muted  bool   `json:"muted,omitempty"`
+}
+
+// LKParticipant — срез из ListParticipants. tracks нужны для TrackEgress.
 type LKParticipant struct {
-	Identity string `json:"identity"`
-	State    string `json:"state"` // ACTIVE | JOINED | DISCONNECTED — нас интересует ACTIVE
+	Identity string    `json:"identity"`
+	State    string    `json:"state"` // ACTIVE | JOINED | DISCONNECTED — нас интересует ACTIVE
+	Tracks   []LKTrack `json:"tracks,omitempty"`
 }
 
 // ListParticipants возвращает текущих participant'ов в комнате (по живой картинке LK,
@@ -197,38 +207,32 @@ type S3Config struct {
 	ForcePathStyle bool
 }
 
-// StartParticipantAudioEgress стартует ParticipantEgress только для audio
-// (audio_only=true). Файл — OGG/Opus; путь содержит {participant_identity}
-// и {time}, чтобы файл был уникален и узнаваем.
+// StartTrackEgress стартует TrackEgress (per-track raw dump в файл). По
+// сравнению с ParticipantEgress преимущества:
+//   • никакого транскодинга — записывается прямо опубликованный кодек,
+//     для микрофона это Opus, упакованный в OGG-контейнер по расширению;
+//   • никаких codec/encoding-options полей в proto — TrackEgress использует
+//     DirectFileOutput, он простой и не цепляет proto3 oneof issue;
+//   • ParticipantEgress в нашей версии LK не уважает audio_only — пишет
+//     видео+аудио MP4 даже когда флаг выставлен. TrackEgress по природе
+//     записывает строго один трек.
 //
-// ParticipantEgress принимает только EncodedFileOutput (direct_file_outputs
-// помечен в proto как «not used»), поэтому нужен транскодинг с явным
-// codec'ом. Без указания LK выдаёт «no supported codec is compatible with
-// all outputs»; со строковым "OPUS" — «format audio/ogg incompatible with
-// codec ""» (LK не парсит enum по имени через json.Unmarshal). Поэтому
-// шлём числовое значение AudioCodec.OPUS = 1, плюс preset для совместимости.
+// trackID — sid аудио-трека участника (получаем через ListParticipants).
+// filepath — расширение .ogg даст OGG/Opus, .webm — WebM/Opus и т.п.
 //
-// Возвращает egress_id, который мы сохраняем в participant.current_egress_id.
-func (c *Client) StartParticipantAudioEgress(ctx context.Context, room, identity, filepath string, s3 S3Config) (string, error) {
-	// MP4 (audio-only) вместо OGG. LK для MP4-выхода с audio_only=true
-	// дефолтно ставит AAC, и валидация проходит без явного codec'а в
-	// advanced (которое всё равно не парсится Twirp'ом из-за proto3 oneof).
-	// Файлы получаются M4A-совместимые (AAC в MP4-контейнере), играются в
-	// любом плеере, ASR-движки тоже принимают.
+// Возвращает egress_id.
+func (c *Client) StartTrackEgress(ctx context.Context, room, trackID, filepath string, s3 S3Config) (string, error) {
 	body := map[string]any{
-		"room_name":  room,
-		"identity":   identity,
-		"audio_only": true,
-		"file_outputs": []any{
-			map[string]any{
-				"file_type": "MP4",
-				"filepath":  filepath,
-				"s3":        s3.json(),
-			},
+		"room_name": room,
+		"track_id":  trackID,
+		// oneof output { file | websocket_url } — выставляем file.
+		"file": map[string]any{
+			"filepath": filepath,
+			"s3":       s3.json(),
 		},
 	}
 	var resp egressInfoMin
-	if err := c.twirp(ctx, "Egress", room, "StartParticipantEgress", body, &resp); err != nil {
+	if err := c.twirp(ctx, "Egress", room, "StartTrackEgress", body, &resp); err != nil {
 		return "", err
 	}
 	return resp.EgressID, nil

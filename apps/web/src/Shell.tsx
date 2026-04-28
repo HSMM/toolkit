@@ -1061,7 +1061,7 @@ function RecordingsMenu({ meetingId }: { meetingId: string }) {
                     </div>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 13, fontWeight: 500, color: C.text }}>Архив аудио всех спикеров</div>
-                      <div style={{ fontSize: 11, color: C.text3 }}>ZIP · {perTrackCount} {pluralRus(perTrackCount, ["дорожка","дорожки","дорожек"])} M4A</div>
+                      <div style={{ fontSize: 11, color: C.text3 }}>ZIP · {perTrackCount} {pluralRus(perTrackCount, ["дорожка","дорожки","дорожек"])} OGG</div>
                     </div>
                     {busy === "archive" ? <RefreshCw size={14} color={C.text3} className="lk-spin" /> : <Download size={14} color={C.text2} />}
                   </button>

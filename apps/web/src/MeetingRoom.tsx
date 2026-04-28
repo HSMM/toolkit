@@ -6,7 +6,7 @@ import "@livekit/components-styles";
 import { LiveKitRoom } from "@livekit/components-react";
 import { RussianRoomUI } from "@/RoomUI";
 import { useEffect, useMemo, useState } from "react";
-import { X, Loader2, Check, UserPlus, Circle, Square, Clock, Timer } from "lucide-react";
+import { X, Loader2, Check, UserPlus, Circle, Square, Clock } from "lucide-react";
 import { C } from "@/styles/tokens";
 import {
   useJoinMeeting, useEndMeeting, useLeaveMeeting, useMeetingPoll, useAdmitGuest,
@@ -34,6 +34,9 @@ export function MeetingRoom({ meeting, isHost, onClose }: Props) {
   const prefs = useMemo(() => loadPrefs(), []);
   const share = useShareMeeting();
   const [guestUrl, setGuestUrl] = useState<string>("");
+  // Момент моего реального присоединения к комнате (когда LK creds пришли).
+  // Передаётся в чат для таймера «вы на встрече».
+  const [meJoinedAt, setMeJoinedAt] = useState<number | null>(null);
 
   // На монтирование (после получения creds) попробуем достать гостевую ссылку
   // — для кнопки «Скопировать» в нижнем-левом углу комнаты.
@@ -47,6 +50,11 @@ export function MeetingRoom({ meeting, isHost, onClose }: Props) {
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isHost, creds, meeting.id]);
+
+  // Снимок момента подключения. Один раз, после получения creds.
+  useEffect(() => {
+    if (creds && meJoinedAt === null) setMeJoinedAt(Date.now());
+  }, [creds, meJoinedAt]);
 
   // На монтирование запрашиваем токен.
   useEffect(() => {
@@ -86,7 +94,10 @@ export function MeetingRoom({ meeting, isHost, onClose }: Props) {
             {meeting.livekit_room_id}
           </div>
         </div>
-        <Timers meetingStartedAt={meeting.started_at || meeting.created_at} joinReady={!!creds} />
+        <Timers
+          meetingId={meeting.id}
+          meetingStartedAt={meeting.started_at || meeting.created_at}
+        />
         {isHost && <RecordingButton meetingId={meeting.id} />}
         {isHost && (
           <button onClick={endForAll}
@@ -153,7 +164,7 @@ export function MeetingRoom({ meeting, isHost, onClose }: Props) {
             style={{ height: "100%", width: "100%" }}
             onDisconnected={close}
           >
-            <RussianRoomUI guestUrl={guestUrl} />
+            <RussianRoomUI guestUrl={guestUrl} meJoinedAt={meJoinedAt} />
           </LiveKitRoom>
         )}
 
@@ -166,16 +177,15 @@ export function MeetingRoom({ meeting, isHost, onClose }: Props) {
 
 // Timers — два таймера в шапке комнаты:
 //   • общий — длительность встречи с момента её первого старта (started_at);
-//   • «вы» — сколько текущий участник в комнате (с момента получения creds).
-// Тикают раз в секунду; при размонтировании interval очищается.
-function Timers({ meetingStartedAt, joinReady }: { meetingStartedAt: string; joinReady: boolean }) {
+//   • запись — длительность активной записи (отображается только если
+//     recording_active = true). Состояние подтягивается через useMeetingPoll
+//     (тот же query, что у RecordingButton — лишних запросов не будет).
+// Таймер «сколько Я в комнате» показываем не здесь, а в чате (см. RoomUI).
+function Timers({ meetingId, meetingStartedAt }: { meetingId: string; meetingStartedAt: string }) {
   const [now, setNow] = useState(() => Date.now());
-  // Снимок момента, когда клиент получил creds (т.е. реально подключился).
-  const [meJoinedAt, setMeJoinedAt] = useState<number | null>(null);
-
-  useEffect(() => {
-    if (joinReady && meJoinedAt === null) setMeJoinedAt(Date.now());
-  }, [joinReady, meJoinedAt]);
+  const q = useMeetingPoll(meetingId, 5000);
+  const recActive = q.data?.meeting?.recording_active === true;
+  const recStartedAt = q.data?.meeting?.recording_started_at;
 
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
@@ -183,7 +193,9 @@ function Timers({ meetingStartedAt, joinReady }: { meetingStartedAt: string; joi
   }, []);
 
   const totalMs = Math.max(0, now - new Date(meetingStartedAt).getTime());
-  const meMs = meJoinedAt === null ? 0 : Math.max(0, now - meJoinedAt);
+  const recMs = recActive && recStartedAt
+    ? Math.max(0, now - new Date(recStartedAt).getTime())
+    : 0;
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 12, fontFamily: "'DM Mono', monospace" }}>
@@ -192,11 +204,13 @@ function Timers({ meetingStartedAt, joinReady }: { meetingStartedAt: string; joi
         <Clock size={13} color="#9ca3af" />
         <span>{fmtHMS(totalMs)}</span>
       </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 5, color: "#9ca3af", fontSize: 12 }}
-        title="Вы на встрече">
-        <Timer size={12} />
-        <span>{fmtHMS(meMs)}</span>
-      </div>
+      {recActive && (
+        <div style={{ display: "flex", alignItems: "center", gap: 5, color: "#fca5a5", fontSize: 12 }}
+          title="Запись идёт">
+          <Circle size={10} fill="#ef4444" stroke="#ef4444" />
+          <span>{fmtHMS(recMs)}</span>
+        </div>
+      )}
     </div>
   );
 }
