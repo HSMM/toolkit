@@ -13,7 +13,6 @@ import {
   useStartRecording, useStopRecording, useShareMeeting,
   type Meeting, type Participant,
 } from "@/api/meetings";
-import { useMe } from "@/api/me";
 import { loadPrefs } from "@/meetSettings/prefs";
 
 type Props = {
@@ -33,7 +32,6 @@ export function MeetingRoom({ meeting, isHost, onClose }: Props) {
   // на монтирование комнаты; смена prefs во время разговора не требует
   // переподключения (для применения нужно перезайти).
   const prefs = useMemo(() => loadPrefs(), []);
-  const meQ = useMe();
   const share = useShareMeeting();
   const [guestUrl, setGuestUrl] = useState<string>("");
 
@@ -154,16 +152,7 @@ export function MeetingRoom({ meeting, isHost, onClose }: Props) {
             style={{ height: "100%", width: "100%" }}
             onDisconnected={close}
           >
-            <RussianRoomUI
-              account={meQ.data ? {
-                full_name: meQ.data.full_name,
-                email: meQ.data.email,
-                role: meQ.data.role,
-              } : undefined}
-              isHost={isHost}
-              meetingId={meeting.id}
-              guestUrl={guestUrl}
-            />
+            <RussianRoomUI guestUrl={guestUrl} />
           </LiveKitRoom>
         )}
 

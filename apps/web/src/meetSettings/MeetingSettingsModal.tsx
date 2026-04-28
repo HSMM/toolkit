@@ -5,43 +5,22 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Image as ImageIcon, Mic, Video as VideoIcon, X, Plus, Ban, Play,
-  User as UserIcon, Shield,
 } from "lucide-react";
 import { C } from "@/styles/tokens";
-import { usePrefs, type MeetPrefs, type MeetBackground } from "./prefs";
+import { usePrefs, BACKGROUND_PRESETS, type MeetPrefs, type MeetBackground } from "./prefs";
 
-type Tab = "account" | "permissions" | "background" | "sound" | "video";
-
-export type AccountInfo = {
-  full_name?: string;
-  email?: string;
-  role?: string;
-};
-
-export type MeetingPermissions = {
-  /** Разрешить ли участникам делать локальную запись на компьютер. */
-  allow_local_recording: boolean;
-};
+type Tab = "background" | "sound" | "video";
 
 export type MeetingSettingsModalProps = {
   onClose: () => void;
   /** initialTab позволяет открыть модалку сразу на нужной вкладке. */
   initialTab?: Tab;
-  /** Если задан account/permissions — модалка показывает соответствующие табы. */
-  account?: AccountInfo;
-  permissions?: MeetingPermissions;
-  /** Можно ли редактировать права (только хост встречи). */
-  canEditPermissions?: boolean;
-  onPermissionsChange?: (perms: MeetingPermissions) => void;
 };
 
 export function MeetingSettingsModal({
-  onClose, initialTab, account, permissions, canEditPermissions, onPermissionsChange,
+  onClose, initialTab,
 }: MeetingSettingsModalProps) {
-  const showAccount = !!account;
-  const showPermissions = !!permissions;
-  const defaultTab: Tab = initialTab ?? (showPermissions ? "permissions" : "sound");
-  const [tab, setTab] = useState<Tab>(defaultTab);
+  const [tab, setTab] = useState<Tab>(initialTab ?? "sound");
 
   return (
     <div onClick={onClose}
@@ -60,14 +39,6 @@ export function MeetingSettingsModal({
           width: 230, padding: 14, borderRight: `1px solid ${C.border}`,
           display: "flex", flexDirection: "column", flexShrink: 0, background: C.bg2,
         }}>
-          {showAccount && (
-            <SidebarItem active={tab === "account"} icon={<UserIcon size={16} />}
-              label="Аккаунт" onClick={() => setTab("account")} />
-          )}
-          {showPermissions && (
-            <SidebarItem active={tab === "permissions"} icon={<Shield size={16} />}
-              label="Права участников" onClick={() => setTab("permissions")} />
-          )}
           <SidebarItem active={tab === "background"} icon={<ImageIcon size={16} />}
             label="Фон на встрече" onClick={() => setTab("background")} />
           <SidebarItem active={tab === "sound"}      icon={<Mic size={16} />}
@@ -92,12 +63,6 @@ export function MeetingSettingsModal({
             </button>
           </div>
           <div style={{ flex: 1, overflowY: "auto", padding: 22, background: C.card }}>
-            {tab === "account" && account     && <AccountTab info={account} />}
-            {tab === "permissions" && permissions && (
-              <PermissionsTab perms={permissions}
-                canEdit={canEditPermissions ?? false}
-                onChange={onPermissionsChange} />
-            )}
             {tab === "background" && <BackgroundTab />}
             {tab === "sound"      && <SoundTab />}
             {tab === "video"      && <VideoTab />}
@@ -130,83 +95,10 @@ function SidebarItem({ active, icon, label, onClick }: {
 
 function tabTitle(tab: Tab): string {
   switch (tab) {
-    case "account":     return "Аккаунт";
-    case "permissions": return "Права участников";
     case "background":  return "Фон на встрече";
     case "sound":       return "Звук";
     case "video":       return "Видео";
   }
-}
-
-// ──────────────────────────────────────────────────────────────────────────
-// ACCOUNT TAB
-// ──────────────────────────────────────────────────────────────────────────
-
-function AccountTab({ info }: { info: AccountInfo }) {
-  const initials = (info.full_name || info.email || "?").trim()
-    .split(/\s+/).slice(0, 2).map((s) => s[0]).join("").toUpperCase();
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      <div style={{ background: C.bg2, border: `1px solid ${C.border}`, borderRadius: 10,
-                    padding: 18, display: "flex", alignItems: "center", gap: 14 }}>
-        <div style={{ width: 56, height: 56, borderRadius: "50%", background: C.accBg,
-                      color: C.acc, display: "flex", alignItems: "center", justifyContent: "center",
-                      fontSize: 18, fontWeight: 700 }}>
-          {initials}
-        </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 14.5, fontWeight: 600, color: C.text }}>
-            {info.full_name || "Без имени"}
-          </div>
-          {info.email && (
-            <div style={{ fontSize: 12.5, color: C.text2, marginTop: 2 }}>{info.email}</div>
-          )}
-          {info.role && (
-            <div style={{ fontSize: 11, color: C.text3, marginTop: 4, textTransform: "uppercase",
-                          letterSpacing: "0.04em" }}>
-              {info.role === "admin" ? "Администратор" : "Сотрудник"}
-            </div>
-          )}
-        </div>
-      </div>
-      <div style={{ fontSize: 12.5, color: C.text2, lineHeight: 1.55 }}>
-        Учётная запись подтянута из Bitrix24. Изменить ФИО, email и должность можно
-        только через корпоративный портал — после синхронизации правки
-        отобразятся здесь.
-      </div>
-    </div>
-  );
-}
-
-// ──────────────────────────────────────────────────────────────────────────
-// PERMISSIONS TAB
-// ──────────────────────────────────────────────────────────────────────────
-
-function PermissionsTab({ perms, canEdit, onChange }: {
-  perms: MeetingPermissions;
-  canEdit: boolean;
-  onChange?: (p: MeetingPermissions) => void;
-}) {
-  const apply = (p: MeetingPermissions) => { if (canEdit && onChange) onChange(p); };
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      <div>
-        <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>Права участников на этой встрече</div>
-        <div style={{ fontSize: 12, color: C.text2, marginTop: 4 }}>
-          {canEdit
-            ? "У соорганизаторов всегда есть все возможности"
-            : "Изменять права может только организатор встречи"}
-        </div>
-      </div>
-
-      <Toggle
-        label="Записывать встречу на компьютер"
-        sub="Любой участник сможет сохранить локальную запись на свой компьютер"
-        value={perms.allow_local_recording}
-        onChange={(v) => apply({ ...perms, allow_local_recording: v })}
-      />
-    </div>
-  );
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -409,21 +301,6 @@ function VideoTab() {
 // BACKGROUND TAB
 // ──────────────────────────────────────────────────────────────────────────
 
-const BACKGROUND_PRESETS: { id: string; gradient: string }[] = [
-  { id: "office",   gradient: "linear-gradient(135deg,#5b8aa9 0%,#cdd6df 100%)" },
-  { id: "warm",     gradient: "linear-gradient(135deg,#c79762 0%,#f6e3c5 100%)" },
-  { id: "forest",   gradient: "linear-gradient(135deg,#3a6b56 0%,#a8c8a0 100%)" },
-  { id: "yellow",   gradient: "linear-gradient(135deg,#c5a13b 0%,#fff1bc 100%)" },
-  { id: "wood",     gradient: "linear-gradient(135deg,#7a4d2c 0%,#d8b48a 100%)" },
-  { id: "sky",      gradient: "linear-gradient(135deg,#5fa8d3 0%,#e0f3ff 100%)" },
-  { id: "rose",     gradient: "linear-gradient(135deg,#b8556e 0%,#f6c4ce 100%)" },
-  { id: "graphite", gradient: "linear-gradient(135deg,#2d3138 0%,#727680 100%)" },
-  { id: "lavender", gradient: "linear-gradient(135deg,#6e5d9e 0%,#dbd0ee 100%)" },
-  { id: "teal",     gradient: "linear-gradient(135deg,#2f7d7d 0%,#bce4e4 100%)" },
-  { id: "sand",     gradient: "linear-gradient(135deg,#a48259 0%,#ecdcc1 100%)" },
-  { id: "night",    gradient: "linear-gradient(135deg,#1a233a 0%,#5a6b8a 100%)" },
-];
-
 function BackgroundTab() {
   const [prefs, patch] = usePrefs();
   const fileInput = useRef<HTMLInputElement | null>(null);
@@ -457,7 +334,8 @@ function BackgroundTab() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <div style={{ fontSize: 12, color: C.text2, lineHeight: 1.5 }}>
-        Виртуальный фон применяется к вашему видео в комнате. Реальное наложение появится в следующей версии — сейчас выбор сохраняется и будет применён, когда включим сегментацию.
+        Фон применяется к вашему видео в комнате через сегментацию людей.
+        При первом включении модель загружается (~3 МБ), затем работает локально в браузере.
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 8 }}>

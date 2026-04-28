@@ -297,7 +297,17 @@ func (s *Service) Join(ctx context.Context, subj *auth.Subject, meetingID uuid.U
 	}
 
 	identity := userIdentity(subj.UserID)
-	displayName := subj.Email // лучше full_name, но Subject его не содержит — фронт сам шлёт
+	// Display name: full_name из таблицы user (если пусто — fallback на email).
+	// LiveKit покажет name в плитке участника; identity остаётся техническим.
+	displayName := subj.Email
+	{
+		var fn string
+		if err := tx.QueryRow(ctx,
+			`SELECT COALESCE(full_name, '') FROM "user" WHERE id = $1`, subj.UserID,
+		).Scan(&fn); err == nil && fn != "" {
+			displayName = fn
+		}
+	}
 	role := "participant"
 	if subj.UserID == m.CreatedBy {
 		role = "host"

@@ -18,28 +18,21 @@ import {
   FocusLayoutContainer, FocusLayout, CarouselLayout, useDataChannel,
   useDisconnectButton,
 } from "@livekit/components-react";
-import { Track, RoomEvent } from "livekit-client";
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { Track, RoomEvent, LocalVideoTrack } from "livekit-client";
+import { BackgroundBlur, VirtualBackground } from "@livekit/track-processors";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import {
   Mic, MicOff, Video, VideoOff, Monitor, MessageSquare, PhoneOff, Send,
-  Hand, Users, MoreVertical, Circle, LayoutGrid, Shield,
+  Hand, Users, MoreVertical, Circle, LayoutGrid,
   Settings as SettingsIcon, Link2, Check, Square,
 } from "lucide-react";
-import {
-  MeetingSettingsModal,
-  type AccountInfo, type MeetingPermissions,
-} from "@/meetSettings/MeetingSettingsModal";
+import { MeetingSettingsModal } from "@/meetSettings/MeetingSettingsModal";
+import { usePrefs, gradientToDataURL, type MeetBackground } from "@/meetSettings/prefs";
 
 type Props = {
   /** Дополнительные кнопки в верхней панели — пробрасываем извне (host: кнопка серверной записи). */
   topRight?: React.ReactNode;
-  /** Текущий пользователь — для таба «Аккаунт» в настройках. */
-  account?: AccountInfo;
-  /** Хост встречи — может редактировать «Права участников». */
-  isHost?: boolean;
-  /** Идентификатор встречи — для localStorage ключа разрешений. */
-  meetingId?: string;
-  /** Гостевая ссылка — для кнопки «Скопировать» в нижнем-левом углу. */
+  /** Гостевая ссылка — для кнопки «Скопировать» в нижнем-левом углу (только хост). */
   guestUrl?: string;
 };
 
@@ -48,12 +41,10 @@ type LayoutMode = "grid" | "speaker";
 
 // Типы payload'ов на DataChannel.
 type HandRaiseMsg = { kind: "raise" | "lower" };
-type PermsMsg = { kind: "perms"; perms: MeetingPermissions };
 
 const HAND_RAISE_TOPIC = "toolkit:hand-raise";
-const PERMS_TOPIC = "toolkit:perms";
 
-export function RussianRoomUI({ topRight, account, isHost, meetingId, guestUrl }: Props = {}) {
+export function RussianRoomUI({ topRight, guestUrl }: Props = {}) {
   // ─── Tracks ────────────────────────────────────────────────────────────
   const tracks = useTracks(
     [
@@ -69,36 +60,11 @@ export function RussianRoomUI({ topRight, account, isHost, meetingId, guestUrl }
   const [layoutMode, setLayoutMode] = useState<LayoutMode>("grid");
   const [moreOpen, setMoreOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<"permissions" | "sound" | "video" | "background" | "account">("sound");
+  const [settingsTab, setSettingsTab] = useState<"sound" | "video" | "background">("sound");
 
-  // ─── Permissions ───────────────────────────────────────────────────────
-  const [perms, setPerms] = useState<MeetingPermissions>(() => loadPerms(meetingId));
-  // Хост рассылает изменения через DataChannel.
-  const { send: sendPerms } = useDataChannel(PERMS_TOPIC, (msg) => {
-    if (isHost) return; // хост — источник правды
-    try {
-      const parsed = JSON.parse(new TextDecoder().decode(msg.payload)) as PermsMsg;
-      if (parsed.kind === "perms") setPerms(parsed.perms);
-    } catch { /* noop */ }
-  });
-  const onPermissionsChange = useCallback((next: MeetingPermissions) => {
-    setPerms(next);
-    savePerms(meetingId, next);
-    if (isHost) {
-      const buf = new TextEncoder().encode(JSON.stringify({ kind: "perms", perms: next } as PermsMsg));
-      void sendPerms(buf, { topic: PERMS_TOPIC, reliable: true });
-    }
-  }, [isHost, meetingId, sendPerms]);
-  // При входе хоста в комнату — отправить актуальные права один раз
-  useEffect(() => {
-    if (!isHost) return;
-    const t = setTimeout(() => {
-      const buf = new TextEncoder().encode(JSON.stringify({ kind: "perms", perms } as PermsMsg));
-      void sendPerms(buf, { topic: PERMS_TOPIC, reliable: true });
-    }, 1500);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isHost]);
+  // ─── Background effect (виртуальный фон) ──────────────────────────────
+  const [prefs] = usePrefs();
+  useBackgroundEffect(prefs.background);
 
   // ─── Hand raise ────────────────────────────────────────────────────────
   const { localParticipant } = useLocalParticipant();
@@ -199,7 +165,7 @@ export function RussianRoomUI({ topRight, account, isHost, meetingId, guestUrl }
   const otherTracks = tracks.filter((t) => t !== focusTrack);
 
   // ─── Open settings on a specific tab ───────────────────────────────────
-  const openSettings = (tab: typeof settingsTab) => {
+  const openSettings = (tab: "sound" | "video" | "background") => {
     setSettingsTab(tab);
     setSettingsOpen(true);
     setMoreOpen(false);
@@ -305,13 +271,11 @@ export function RussianRoomUI({ topRight, account, isHost, meetingId, guestUrl }
               <MoreMenu
                 recording={recording}
                 speakerView={layoutMode === "speaker"}
-                canRecord={isHost || perms.allow_local_recording}
                 onToggleRecord={() => { toggleRecording(); setMoreOpen(false); }}
                 onToggleSpeakerView={() => {
                   setLayoutMode((m) => m === "speaker" ? "grid" : "speaker");
                   setMoreOpen(false);
                 }}
-                onOpenPermissions={() => openSettings("permissions")}
                 onOpenSettings={() => openSettings("sound")}
               />
             )}
@@ -333,10 +297,6 @@ export function RussianRoomUI({ topRight, account, isHost, meetingId, guestUrl }
         <MeetingSettingsModal
           onClose={() => setSettingsOpen(false)}
           initialTab={settingsTab}
-          account={account}
-          permissions={perms}
-          canEditPermissions={isHost ?? false}
-          onPermissionsChange={onPermissionsChange}
         />
       )}
     </div>
@@ -426,13 +386,12 @@ function LeaveButton() {
 // ──────────────────────────────────────────────────────────────────────────
 
 function MoreMenu({
-  recording, speakerView, canRecord,
-  onToggleRecord, onToggleSpeakerView, onOpenPermissions, onOpenSettings,
+  recording, speakerView,
+  onToggleRecord, onToggleSpeakerView, onOpenSettings,
 }: {
-  recording: boolean; speakerView: boolean; canRecord: boolean;
+  recording: boolean; speakerView: boolean;
   onToggleRecord: () => void;
   onToggleSpeakerView: () => void;
-  onOpenPermissions: () => void;
   onOpenSettings: () => void;
 }) {
   return (
@@ -441,20 +400,17 @@ function MoreMenu({
       background: "#1c1c1f", border: "1px solid #2a2a2e", borderRadius: 12,
       boxShadow: "0 16px 40px rgba(0,0,0,0.45)", padding: 6, zIndex: 20,
     }}>
-      {canRecord && (
-        <MenuItem
-          icon={recording
-            ? <Square size={16} fill="#ef4444" stroke="#ef4444" />
-            : <Circle size={16} stroke="#ef4444" />}
-          label={recording ? "Остановить запись" : "Записать на компьютер"}
-          onClick={onToggleRecord}
-          dot={recording} />
-      )}
+      <MenuItem
+        icon={recording
+          ? <Square size={16} fill="#ef4444" stroke="#ef4444" />
+          : <Circle size={16} stroke="#ef4444" />}
+        label={recording ? "Остановить запись" : "Записать на компьютер"}
+        onClick={onToggleRecord}
+        dot={recording} />
       <MenuDivider />
       <MenuItem icon={<LayoutGrid size={16} />}
         label={speakerView ? "Сетка участников" : "Вид докладчика"}
         onClick={onToggleSpeakerView} />
-      <MenuItem icon={<Shield size={16} />} label="Права участников" onClick={onOpenPermissions} />
       <MenuItem icon={<SettingsIcon size={16} />} label="Настройки" onClick={onOpenSettings} />
     </div>
   );
@@ -636,20 +592,68 @@ function centerBtnStyle(active: boolean): CSSProperties {
   };
 }
 
-function loadPerms(meetingId?: string): MeetingPermissions {
-  if (!meetingId) return { allow_local_recording: true };
-  try {
-    const raw = localStorage.getItem(`toolkit:meet:${meetingId}:perms`);
-    if (!raw) return { allow_local_recording: true };
-    return { allow_local_recording: true, ...JSON.parse(raw) } as MeetingPermissions;
-  } catch {
-    return { allow_local_recording: true };
-  }
+// ──────────────────────────────────────────────────────────────────────────
+// Virtual background effect
+// ──────────────────────────────────────────────────────────────────────────
+
+/**
+ * Применяет к локальной видео-дорожке processor из @livekit/track-processors:
+ * blur — BackgroundBlur, image — VirtualBackground (картинка / data-URL).
+ *
+ * Эффект автоматически реагирует на смену prefs.background и на смену
+ * камеры (videoTrack меняется, useEffect перезапускается).
+ */
+function useBackgroundEffect(background: MeetBackground) {
+  const cameraTracks = useTracks([Track.Source.Camera], { onlySubscribed: false });
+  // Локальная дорожка — та, у которой participant.isLocal.
+  const localTrackRef = cameraTracks.find((t) => t.participant.isLocal);
+  const localTrack = localTrackRef?.publication?.track;
+
+  // Сериализуем background для зависимостей useEffect.
+  const bgKey = background.kind === "image"
+    ? `image:${background.src}`
+    : background.kind;
+
+  useEffect(() => {
+    if (!(localTrack instanceof LocalVideoTrack)) return;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        if (background.kind === "none") {
+          if (localTrack.getProcessor()) {
+            await localTrack.stopProcessor();
+          }
+          return;
+        }
+        if (background.kind === "blur") {
+          const processor = BackgroundBlur(10);
+          if (cancelled) return;
+          await localTrack.setProcessor(processor);
+          return;
+        }
+        // image
+        const url = resolveBgImageUrl(background.src);
+        if (!url) return;
+        const processor = VirtualBackground(url);
+        if (cancelled) return;
+        await localTrack.setProcessor(processor);
+      } catch (e) {
+        console.warn("[bg-effect] applying processor failed:", e);
+      }
+    })();
+
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bgKey, localTrack]);
 }
 
-function savePerms(meetingId: string | undefined, p: MeetingPermissions) {
-  if (!meetingId) return;
-  try { localStorage.setItem(`toolkit:meet:${meetingId}:perms`, JSON.stringify(p)); } catch { /* noop */ }
+function resolveBgImageUrl(src: string): string {
+  // Лениво импортировать helper из prefs нельзя в hook — поэтому inline.
+  if (!src) return "";
+  if (src.startsWith("data:")) return src;
+  if (src.startsWith("gradient:")) return gradientToDataURL(src);
+  return src;
 }
 
 function defaultFilename(): string {
