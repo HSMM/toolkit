@@ -1073,15 +1073,16 @@ function VcsPage({ me, onOpenTranscriptions }: { me: Me; onOpenTranscriptions?: 
   const [title, setTitle] = useState("");
   const [date, setDate] = useState(() => new Date(Date.now() + 86_400_000).toISOString().slice(0, 10));
   const [time, setTime] = useState("10:00");
-  // Транскрибация триггерится вручную из истории встреч (см. модуль
-  // «Транскрибация»). На форме создания не показываем.
-  const [record, setRecord] = useState(true);
+  // Запись и транскрибация теперь триггерятся вручную из комнаты:
+  // • client-side recording через ⋮ → «Записать на компьютер»;
+  // • server-side egress через кнопку «Начать запись» у хоста.
+  // На форме создания соответствующих опций нет.
   // Приглашения: сотрудники из таблицы user (multi-select по ID) + внешние email'ы.
   const [invitedUsers, setInvitedUsers] = useState<UserProfile[]>([]);
   const [invitedEmails, setInvitedEmails] = useState<string[]>([]);
 
   const resetForm = () => {
-    setTitle(""); setRecord(true);
+    setTitle("");
     setInvitedUsers([]); setInvitedEmails([]);
   };
   const openModal = (m: "schedule" | "instant") => { resetForm(); setMode(m); setModal(true); };
@@ -1097,7 +1098,7 @@ function VcsPage({ me, onOpenTranscriptions }: { me: Me; onOpenTranscriptions?: 
       const m = await create.mutateAsync({
         title: title.trim(),
         scheduled_at: scheduledISO,
-        record_enabled: record,
+        record_enabled: false,
         auto_transcribe: false,
         participant_ids: invitedUsers.length ? invitedUsers.map((u) => u.id) : undefined,
         invitee_emails: invitedEmails.length ? invitedEmails : undefined,
@@ -1260,20 +1261,6 @@ function VcsPage({ me, onOpenTranscriptions }: { me: Me; onOpenTranscriptions?: 
                   <Field label="Время"><input type="time" value={time} onChange={(e) => setTime(e.target.value)} style={inp()} /></Field>
                 </div>
               )}
-              {[
-                { v: record, set: setRecord, t: "Запись встречи", d: "Композитная запись (видео+аудио MP4 + отдельная аудио-дорожка для транскрибации) сохраняется в MinIO." },
-              ].map((opt, i) => (
-                <label key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", border: `1px solid ${opt.v ? C.acc : C.border}`, borderRadius: 10, cursor: "pointer", background: opt.v ? C.accBg : C.card, marginBottom: 8 }}>
-                  <div style={{ position: "relative", width: 36, height: 20, background: opt.v ? C.acc : C.border2, borderRadius: 10, flexShrink: 0 }}>
-                    <div style={{ position: "absolute", top: 2, left: opt.v ? 18 : 2, width: 16, height: 16, background: "white", borderRadius: "50%", transition: "left .15s", boxShadow: "0 1px 3px rgba(0,0,0,0.15)" }} />
-                  </div>
-                  <input type="checkbox" checked={opt.v} onChange={(e) => opt.set(e.target.checked)} style={{ display: "none" }} />
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 13.5, fontWeight: 600, color: C.text }}>{opt.t}</div>
-                    <div style={{ fontSize: 12, color: C.text2, marginTop: 2, lineHeight: 1.4 }}>{opt.d}</div>
-                  </div>
-                </label>
-              ))}
               <div style={{ marginTop: 14 }}>
                 <InviteParticipantsField
                   meId={me.user_id}
