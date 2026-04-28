@@ -35,7 +35,7 @@ import { type Me } from "@/api/me";
 import {
   useMeetings, useCreateMeeting, useEndMeeting, useShareMeeting, useUserSearch,
   type UserProfile,
-  useMeetingRecordings, downloadMeetingRecording,
+  useMeetingRecordings, downloadMeetingRecording, downloadMeetingAudioArchive,
   type Meeting as ApiMeeting, type RecordingFile,
 } from "@/api/meetings";
 import { MeetingRoom } from "@/MeetingRoom";
@@ -998,10 +998,23 @@ function RecordingsMenu({ meetingId }: { meetingId: string }) {
     return { icon: FileAudio, text: "Дорожка участника", sub: r.mime_type };
   };
 
+  // Видео + общий аудио показываем как «топ-уровневые» опции; per-track отдельно
+  // объединяем под одну кнопку «Архив аудио всех (zip)».
+  const items = q.data ?? [];
+  const top = items.filter((r) => r.kind !== "meeting_per_track");
+  const perTrackCount = items.filter((r) => r.kind === "meeting_per_track").length;
+
   const dl = async (r: RecordingFile) => {
     setBusy(r.id);
     try { await downloadMeetingRecording(meetingId, r.id, r.filename); }
     catch (e) { alert("Не удалось скачать: " + (e instanceof Error ? e.message : String(e))); }
+    finally { setBusy(null); }
+  };
+
+  const dlArchive = async () => {
+    setBusy("archive");
+    try { await downloadMeetingAudioArchive(meetingId, `meeting-${meetingId}-audio.zip`); }
+    catch (e) { alert("Не удалось скачать архив: " + (e instanceof Error ? e.message : String(e))); }
     finally { setBusy(null); }
   };
 
@@ -1017,27 +1030,44 @@ function RecordingsMenu({ meetingId }: { meetingId: string }) {
           <div style={{ position: "absolute", top: "calc(100% + 6px)", right: 0, minWidth: 280, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, boxShadow: "0 8px 24px rgba(0,0,0,0.12)", zIndex: 40, padding: 6 }}>
             {q.isLoading ? (
               <div style={{ padding: "12px 14px", color: C.text3, fontSize: 12.5 }}>Загрузка…</div>
-            ) : (q.data ?? []).length === 0 ? (
+            ) : items.length === 0 ? (
               <div style={{ padding: "12px 14px", color: C.text3, fontSize: 12.5 }}>
                 Записи ещё не появились. Это может занять минуту после остановки записи.
               </div>
-            ) : (q.data ?? []).map((r) => {
-              const L = labelFor(r);
-              const sizeMb = (r.size_bytes / 1_048_576).toFixed(1);
-              return (
-                <button key={r.id} onClick={() => void dl(r)} disabled={busy === r.id}
-                  style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "9px 10px", border: "none", borderRadius: 7, background: "transparent", cursor: busy === r.id ? "default" : "pointer", textAlign: "left", fontFamily: "inherit", opacity: busy === r.id ? 0.6 : 1 }}>
-                  <div style={{ width: 32, height: 32, borderRadius: 8, background: C.accBg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                    <L.icon size={15} color={C.acc} />
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 500, color: C.text }}>{L.text}</div>
-                    <div style={{ fontSize: 11, color: C.text3 }}>{L.sub} · {sizeMb} МБ</div>
-                  </div>
-                  {busy === r.id ? <RefreshCw size={14} color={C.text3} className="lk-spin" /> : <Download size={14} color={C.text2} />}
-                </button>
-              );
-            })}
+            ) : (
+              <>
+                {top.map((r) => {
+                  const L = labelFor(r);
+                  const sizeMb = (r.size_bytes / 1_048_576).toFixed(1);
+                  return (
+                    <button key={r.id} onClick={() => void dl(r)} disabled={busy === r.id}
+                      style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "9px 10px", border: "none", borderRadius: 7, background: "transparent", cursor: busy === r.id ? "default" : "pointer", textAlign: "left", fontFamily: "inherit", opacity: busy === r.id ? 0.6 : 1 }}>
+                      <div style={{ width: 32, height: 32, borderRadius: 8, background: C.accBg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                        <L.icon size={15} color={C.acc} />
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 500, color: C.text }}>{L.text}</div>
+                        <div style={{ fontSize: 11, color: C.text3 }}>{L.sub} · {sizeMb} МБ</div>
+                      </div>
+                      {busy === r.id ? <RefreshCw size={14} color={C.text3} className="lk-spin" /> : <Download size={14} color={C.text2} />}
+                    </button>
+                  );
+                })}
+                {perTrackCount > 0 && (
+                  <button onClick={() => void dlArchive()} disabled={busy === "archive"}
+                    style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "9px 10px", border: "none", borderRadius: 7, background: "transparent", cursor: busy === "archive" ? "default" : "pointer", textAlign: "left", fontFamily: "inherit", opacity: busy === "archive" ? 0.6 : 1 }}>
+                    <div style={{ width: 32, height: 32, borderRadius: 8, background: C.accBg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                      <FileAudio size={15} color={C.acc} />
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 500, color: C.text }}>Архив аудио всех спикеров</div>
+                      <div style={{ fontSize: 11, color: C.text3 }}>ZIP · {perTrackCount} {pluralRus(perTrackCount, ["дорожка","дорожки","дорожек"])} OGG</div>
+                    </div>
+                    {busy === "archive" ? <RefreshCw size={14} color={C.text3} className="lk-spin" /> : <Download size={14} color={C.text2} />}
+                  </button>
+                )}
+              </>
+            )}
           </div>
         </>
       )}

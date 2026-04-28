@@ -321,9 +321,10 @@ func (s *Service) Join(ctx context.Context, subj *auth.Subject, meetingID uuid.U
 		   SET joined_at = COALESCE(participant.joined_at, EXCLUDED.joined_at),
 		       left_at   = NULL,
 		       role      = participant.role
-		RETURNING role
+		RETURNING id, role
 	`
-	if err := tx.QueryRow(ctx, upsert, m.ID, subj.UserID, identity, role).Scan(&role); err != nil {
+	var participantID uuid.UUID
+	if err := tx.QueryRow(ctx, upsert, m.ID, subj.UserID, identity, role).Scan(&participantID, &role); err != nil {
 		return nil, fmt.Errorf("upsert participant: %w", err)
 	}
 
@@ -364,6 +365,17 @@ func (s *Service) Join(ctx context.Context, subj *auth.Subject, meetingID uuid.U
 				s.logf("auto-start recording on host join OK meeting=%s", mID)
 			}
 		}()
+	}
+
+	// Per-participant audio: если запись уже идёт (либо хост стартовал, либо
+	// запустилось auto-record выше), поднимаем участнику его собственный
+	// audio-egress. Делаем асинхронно, чтобы не задержать join-response.
+	if s.recDeps != nil {
+		mID := m.ID
+		roomID := m.LiveKitRoomID
+		ident := identity
+		pid := participantID
+		go s.StartParticipantAudioIfActive(context.Background(), mID, pid, roomID, ident)
 	}
 
 	return &JoinResult{

@@ -11,6 +11,7 @@ package meetings
 // в очередь только для аудио-дорожки.
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -36,6 +37,9 @@ type RecordingDeps struct {
 	Storage           *storage.Client // для скачивания готовых файлов через api
 	VideoFilepathTmpl string          // "meetings/{room_name}/{time}.mp4"
 	AudioFilepathTmpl string          // "meetings/{room_name}/{time}.ogg"
+	// Per-participant audio recording (отдельный OGG на каждого спикера).
+	// LiveKit подставляет {participant_identity} в шаблон.
+	ParticipantAudioFilepathTmpl string // "meetings/{room_name}/{participant_identity}-{time}.ogg"
 }
 
 func (s *Service) AttachRecording(deps RecordingDeps) {
@@ -44,6 +48,9 @@ func (s *Service) AttachRecording(deps RecordingDeps) {
 	}
 	if deps.AudioFilepathTmpl == "" {
 		deps.AudioFilepathTmpl = "meetings/{room_name}/{time}.ogg"
+	}
+	if deps.ParticipantAudioFilepathTmpl == "" {
+		deps.ParticipantAudioFilepathTmpl = "meetings/{room_name}/per-track/{participant_identity}-{time}.ogg"
 	}
 	s.recDeps = &deps
 }
@@ -119,7 +126,92 @@ func (s *Service) StartRecording(ctx context.Context, subj *auth.Subject, meetin
 		_ = s.lk.StopEgress(ctx, audioID)
 		return fmt.Errorf("commit: %w", err)
 	}
+
+	// После того как composite-recording стартовал — запускаем per-participant
+	// audio egress для каждого УЖЕ присутствующего участника. Новые участники
+	// будут подхвачены в Join (см. StartParticipantAudioIfActive).
+	go s.startAllParticipantEgresses(context.Background(), m.LiveKitRoomID, meetingID)
+
 	return nil
+}
+
+// startAllParticipantEgresses — итеративно поднимает per-participant audio
+// egress для всех активных (left_at IS NULL) участников встречи.
+// Best-effort: ошибка отдельного egress'а логируется, но не валит остальные.
+func (s *Service) startAllParticipantEgresses(ctx context.Context, roomID string, meetingID uuid.UUID) {
+	if s.recDeps == nil {
+		return
+	}
+	rows, err := s.db.Query(ctx, `
+		SELECT id, livekit_identity FROM participant
+		WHERE meeting_id = $1 AND left_at IS NULL
+		  AND (current_egress_id IS NULL OR current_egress_id = '')
+	`, meetingID)
+	if err != nil {
+		s.logf("startAllParticipantEgresses query: %v", err)
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var pid uuid.UUID
+		var ident string
+		if err := rows.Scan(&pid, &ident); err != nil {
+			continue
+		}
+		if err := s.startParticipantAudioEgress(ctx, roomID, meetingID, pid, ident); err != nil {
+			s.logf("startParticipantAudioEgress %s: %v", ident, err)
+		}
+	}
+}
+
+// startParticipantAudioEgress — создаёт ParticipantEgress audio-only для
+// конкретного участника и сохраняет egress_id в participant.current_egress_id.
+// Идемпотентно: если у participant уже current_egress_id — выходит.
+func (s *Service) startParticipantAudioEgress(ctx context.Context, roomID string, meetingID, participantID uuid.UUID, identity string) error {
+	if s.recDeps == nil {
+		return nil
+	}
+	// Проверка через row-lock — защита от двойного старта.
+	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	var cur *string
+	if err := tx.QueryRow(ctx, `
+		SELECT current_egress_id FROM participant WHERE id = $1 FOR UPDATE
+	`, participantID).Scan(&cur); err != nil {
+		return err
+	}
+	if cur != nil && *cur != "" {
+		return nil // уже запущен
+	}
+	egID, err := s.lk.StartParticipantAudioEgress(ctx, roomID, identity, s.recDeps.ParticipantAudioFilepathTmpl, s.recDeps.S3)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE participant SET current_egress_id=$2 WHERE id=$1`, participantID, egID); err != nil {
+		_ = s.lk.StopEgress(ctx, egID)
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// StartParticipantAudioIfActive — вызывается из Join после upsert participant.
+// Если recording_active=true, поднимает per-participant audio egress для нового
+// участника. Best-effort: ошибки только логируются.
+func (s *Service) StartParticipantAudioIfActive(ctx context.Context, meetingID, participantID uuid.UUID, roomID, identity string) {
+	if s.recDeps == nil {
+		return
+	}
+	var active bool
+	if err := s.db.QueryRow(ctx, `SELECT recording_active FROM meeting WHERE id=$1`, meetingID).Scan(&active); err != nil || !active {
+		return
+	}
+	if err := s.startParticipantAudioEgress(ctx, roomID, meetingID, participantID, identity); err != nil {
+		s.logf("StartParticipantAudioIfActive %s: %v", identity, err)
+	}
 }
 
 // StopRecording (host/admin) — StopEgress на обе дорожки. Сами recording-rows
@@ -148,6 +240,23 @@ func (s *Service) StopRecording(ctx context.Context, subj *auth.Subject, meeting
 				s.logf("stop egress %s: %v", *id, err)
 			}
 		}
+	}
+
+	// Останавливаем все per-participant audio egress'ы. egress_ended webhook
+	// каждого участника создаст recording row с kind='meeting_per_track'.
+	rows, err := s.db.Query(ctx, `
+		SELECT current_egress_id FROM participant
+		WHERE meeting_id = $1 AND current_egress_id IS NOT NULL AND current_egress_id <> ''
+	`, meetingID)
+	if err == nil {
+		for rows.Next() {
+			var pegID string
+			if err := rows.Scan(&pegID); err != nil { continue }
+			if err := s.lk.StopEgress(ctx, pegID); err != nil {
+				s.logf("stop participant egress %s: %v", pegID, err)
+			}
+		}
+		rows.Close()
 	}
 
 	if _, err := s.db.Exec(ctx, `
@@ -191,30 +300,48 @@ func (s *Service) OnEgressEnded(ctx context.Context, info *livekit.EgressInfo) e
 	var (
 		meetingID        uuid.UUID
 		isVideo, isAudio bool
+		isPerTrack       bool
+		participantID    uuid.UUID
 	)
 	err = tx.QueryRow(ctx, findQ, info.EgressID).Scan(&meetingID, &isVideo, &isAudio)
 	if errors.Is(err, pgx.ErrNoRows) {
-		s.logf("OnEgressEnded: no meeting for egress %s (already cleared, retry?)", info.EgressID)
-		return nil
-	}
-	if err != nil {
+		// Проверяем, не per-participant ли это egress.
+		const findPart = `
+			SELECT id, meeting_id FROM participant
+			WHERE current_egress_id = $1 FOR UPDATE
+		`
+		if err := tx.QueryRow(ctx, findPart, info.EgressID).Scan(&participantID, &meetingID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				s.logf("OnEgressEnded: no row for egress %s (already cleared, retry?)", info.EgressID)
+				return nil
+			}
+			return err
+		}
+		isPerTrack = true
+	} else if err != nil {
 		return err
 	}
 
-	// Сбрасываем pointer на эту дорожку (видео или аудио, в зависимости),
-	// и в одном UPDATE снимаем recording_active если обе уже NULL.
-	const clearQ = `
-		UPDATE meeting
-		   SET current_egress_id       = CASE WHEN $2 THEN NULL ELSE current_egress_id END,
-		       current_audio_egress_id = CASE WHEN $3 THEN NULL ELSE current_audio_egress_id END,
-		       recording_active        = CASE
-		           WHEN ($2 OR current_egress_id       IS NULL)
-		            AND ($3 OR current_audio_egress_id IS NULL)
-		           THEN FALSE ELSE recording_active END
-		 WHERE id = $1
-	`
-	if _, err := tx.Exec(ctx, clearQ, meetingID, isVideo, isAudio); err != nil {
-		return err
+	// Сбрасываем pointer на эту дорожку. Для per-participant — обнуляем
+	// participant.current_egress_id; для room-wide — meeting.current_*.
+	if isPerTrack {
+		if _, err := tx.Exec(ctx, `UPDATE participant SET current_egress_id = NULL WHERE id = $1`, participantID); err != nil {
+			return err
+		}
+	} else {
+		const clearQ = `
+			UPDATE meeting
+			   SET current_egress_id       = CASE WHEN $2 THEN NULL ELSE current_egress_id END,
+			       current_audio_egress_id = CASE WHEN $3 THEN NULL ELSE current_audio_egress_id END,
+			       recording_active        = CASE
+			           WHEN ($2 OR current_egress_id       IS NULL)
+			            AND ($3 OR current_audio_egress_id IS NULL)
+			           THEN FALSE ELSE recording_active END
+			 WHERE id = $1
+		`
+		if _, err := tx.Exec(ctx, clearQ, meetingID, isVideo, isAudio); err != nil {
+			return err
+		}
 	}
 
 	// Без этого guard LiveKit для прерванного egress'а (например пользователь
@@ -244,23 +371,32 @@ func (s *Service) OnEgressEnded(ctx context.Context, info *livekit.EgressInfo) e
 	var (
 		kind, mime, retentionKind string
 	)
-	if isVideo {
+	switch {
+	case isVideo:
 		kind, mime, retentionKind = "meeting_composite", "video/mp4", "meeting_composite"
-	} else { // audio
+	case isAudio:
 		kind, mime, retentionKind = "meeting_audio", "audio/ogg", "meeting_audio"
+	default: // per-track participant audio
+		kind, mime, retentionKind = "meeting_per_track", "audio/ogg", "meeting_per_track"
+	}
+
+	// Для per-track ставим participant_id; для room-wide — NULL.
+	var partRef *uuid.UUID
+	if isPerTrack {
+		partRef = &participantID
 	}
 
 	const insRec = `
 		INSERT INTO recording
-		    (kind, meeting_id, s3_bucket, s3_key, mime_type,
+		    (kind, meeting_id, participant_id, s3_bucket, s3_key, mime_type,
 		     size_bytes, duration_ms, is_stereo, retention_until)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE,
-		        NOW() + (COALESCE((SELECT default_days FROM retention_policy WHERE kind = $8), 30) || ' days')::interval)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, FALSE,
+		        NOW() + (COALESCE((SELECT default_days FROM retention_policy WHERE kind = $9), 30) || ' days')::interval)
 		ON CONFLICT (s3_bucket, s3_key) DO UPDATE SET size_bytes = EXCLUDED.size_bytes
 		RETURNING id
 	`
 	var recordingID uuid.UUID
-	if err := tx.QueryRow(ctx, insRec, kind, meetingID, bucket, key, mime, sizeBytes, durationMs, retentionKind).Scan(&recordingID); err != nil {
+	if err := tx.QueryRow(ctx, insRec, kind, meetingID, partRef, bucket, key, mime, sizeBytes, durationMs, retentionKind).Scan(&recordingID); err != nil {
 		return fmt.Errorf("insert recording: %w", err)
 	}
 
@@ -457,6 +593,141 @@ func (s *Service) StreamRecording(ctx context.Context, subj *auth.Subject, w htt
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 	http.ServeContent(w, r, filename, createdAt, rs)
 	return nil
+}
+
+// StreamPerTrackArchive — стримит ZIP-архив со всеми meeting_per_track
+// recording'ами встречи. Внутри zip — `<participant>-<timestamp>.ogg`,
+// где <participant> = full_name пользователя (если был залогинен) или
+// внешнее имя гостя.
+func (s *Service) StreamPerTrackArchive(ctx context.Context, subj *auth.Subject, w http.ResponseWriter, _ *http.Request, meetingID uuid.UUID) error {
+	if s.recDeps == nil || s.recDeps.Storage == nil {
+		return ErrRecordingNotConfigured
+	}
+	m, err := s.loadMeeting(ctx, meetingID)
+	if err != nil {
+		return err
+	}
+	parts, err := s.loadParticipants(ctx, meetingID)
+	if err != nil {
+		return err
+	}
+	if !canViewMeeting(subj, m, parts) {
+		return ErrForbidden
+	}
+
+	type row struct {
+		s3Key     string
+		createdAt time.Time
+		fullName  string
+		extName   string
+		identity  string
+	}
+	const q = `
+		SELECT r.s3_key, r.created_at,
+		       COALESCE(u.full_name, ''), COALESCE(p.external_name, ''),
+		       COALESCE(p.livekit_identity, '')
+		FROM recording r
+		LEFT JOIN participant p ON p.id = r.participant_id
+		LEFT JOIN "user"      u ON u.id = p.user_id
+		WHERE r.meeting_id = $1 AND r.kind = 'meeting_per_track'
+		ORDER BY r.created_at
+	`
+	rows, err := s.db.Query(ctx, q, meetingID)
+	if err != nil {
+		return err
+	}
+	items := make([]row, 0, 4)
+	for rows.Next() {
+		var it row
+		if err := rows.Scan(&it.s3Key, &it.createdAt, &it.fullName, &it.extName, &it.identity); err != nil {
+			rows.Close()
+			return err
+		}
+		items = append(items, it)
+	}
+	rows.Close()
+
+	zipName := fmt.Sprintf("%s_audio_per_speaker.zip", strings.TrimSuffix(friendlyFilename(m, "meeting_composite", ""), ".mp4"))
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, zipName))
+	if len(items) == 0 {
+		// Пустой zip — UI отобразит «пусто».
+		zw := zip.NewWriter(w)
+		_ = zw.Close()
+		return nil
+	}
+
+	zw := zip.NewWriter(w)
+	defer zw.Close()
+	used := map[string]int{}
+	for _, it := range items {
+		who := pickSpeakerName(it.fullName, it.extName, it.identity)
+		base := sanitizeFilename(who) + "_" + it.createdAt.Format("150405")
+		// Если несколько файлов от одного спикера в одну секунду — добавим суффикс.
+		used[base]++
+		name := base + ".ogg"
+		if used[base] > 1 {
+			name = fmt.Sprintf("%s_%d.ogg", base, used[base])
+		}
+
+		fw, err := zw.Create(name)
+		if err != nil {
+			return err
+		}
+		rc, err := s.recDeps.Storage.GetRecording(ctx, it.s3Key)
+		if err != nil {
+			s.logf("zip skip %s: %v", it.s3Key, err)
+			continue
+		}
+		_, err = io.Copy(fw, rc)
+		_ = rc.Close()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func pickSpeakerName(fullName, extName, identity string) string {
+	if fullName != "" {
+		return fullName
+	}
+	if extName != "" {
+		return "guest_" + extName
+	}
+	if identity != "" {
+		return identity
+	}
+	return "speaker"
+}
+
+func sanitizeFilename(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "speaker"
+	}
+	out := strings.Map(func(r rune) rune {
+		switch {
+		case r == ' ' || r == '-' || r == '_':
+			return '_'
+		case r >= '0' && r <= '9':
+			return r
+		case r >= 'a' && r <= 'z':
+			return r
+		case r >= 'A' && r <= 'Z':
+			return r
+		case r >= 'А' && r <= 'я':
+			return r
+		case r == 'Ё' || r == 'ё':
+			return r
+		default:
+			return '_'
+		}
+	}, s)
+	if len(out) > 60 {
+		out = out[:60]
+	}
+	return out
 }
 
 func friendlyFilename(m *Meeting, kind, s3Key string) string {
