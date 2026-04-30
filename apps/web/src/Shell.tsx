@@ -45,6 +45,7 @@ import {
   useSmtpConfig, useUpdateSmtpConfig,
   usePhoneConfig, useUpdatePhoneConfig,
   useMyPhoneCredentials,
+  useTelegramConfig, useUpdateTelegramConfig,
 } from "@/api/system-settings";
 import { useSoftphone, loadSoftphoneConfig, saveSoftphoneConfig } from "@/softphone/useSoftphone";
 import { useSetUserRole, useSetUserStatus, useSyncBitrixUsers } from "@/api/admin";
@@ -55,6 +56,7 @@ import {
 } from "@/api/phone-requests";
 import { useWsEvent } from "@/ws/useWs";
 import { MeetingSettingsModal } from "@/meetSettings/MeetingSettingsModal";
+import { MessengerPage } from "@/messenger/MessengerPage";
 import {
   useTranscripts, useTranscript, useUploadTranscript,
   useDeleteTranscript, useRetryTranscript,
@@ -469,19 +471,22 @@ function StatusSelector({ expanded }: { expanded: boolean }) {
 }
 
 function PhoneToggle({ expanded }: { expanded: boolean }) {
-  const { phoneOpen, setPhoneOpen } = useApp();
+  const creds = useMyPhoneCredentials();
+  const online = !!(creds.data?.wss_url && creds.data?.extension);
+  const neon = online ? C.ok : C.err;
   return (
-    <button onClick={() => setPhoneOpen((o) => !o)} title={phoneOpen ? "Скрыть софтфон" : "Открыть софтфон"}
+    <button onClick={() => { window.location.href = "/softphone"; }} title={online ? "Софтфон онлайн" : "Софтфон выключен или не зарегистрирован"}
       style={{
         width: expanded ? 34 : "100%", height: 34, borderRadius: 8,
         display: "flex", alignItems: "center", justifyContent: "center",
-        background: phoneOpen ? C.acc : "transparent",
-        color: phoneOpen ? "white" : C.text2,
-        cursor: "pointer", border: phoneOpen ? "none" : `1px solid ${C.border}`,
+        background: "transparent",
+        color: neon,
+        cursor: "pointer", border: `1px solid ${neon}66`,
+        boxShadow: `0 0 10px ${neon}55, inset 0 0 8px ${neon}18`,
         flexShrink: 0, transition: "all .12s", fontFamily: "inherit",
       }}
-      onMouseEnter={(e) => { if (!phoneOpen) { e.currentTarget.style.background = C.bg3; e.currentTarget.style.color = C.text; } }}
-      onMouseLeave={(e) => { if (!phoneOpen) { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = C.text2; } }}>
+      onMouseEnter={(e) => { e.currentTarget.style.boxShadow = `0 0 16px ${neon}88, inset 0 0 10px ${neon}24`; }}
+      onMouseLeave={(e) => { e.currentTarget.style.boxShadow = `0 0 10px ${neon}55, inset 0 0 8px ${neon}18`; }}>
       <Phone size={15} strokeWidth={2} />
     </button>
   );
@@ -647,13 +652,14 @@ function SoftphoneWidget() {
 
   const pad = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"];
   const st = phone.state;
-  const inCall = st.kind === "incoming" || st.kind === "outgoing" || st.kind === "active";
+  const inCall = st.kind === "incoming" || st.kind === "outgoing" || st.kind === "ringing" || st.kind === "active";
   const statusDot = (() => {
     switch (st.kind) {
       case "registered":          return { col: C.acc,  txt: "Готов к звонкам" };
       case "active":              return { col: C.acc,  txt: `В разговоре · ${fmt(now - st.startedAt)}` };
       case "incoming":            return { col: C.warn, txt: `Входящий от ${st.from}` };
-      case "outgoing":            return { col: C.acc,  txt: `Звоним ${st.to}…` };
+      case "outgoing":            return { col: C.acc,  txt: `Соединение с ${st.to}…` };
+      case "ringing":             return { col: C.acc,  txt: `Вызов ${st.to}…` };
       case "connecting":          return { col: C.warn, txt: "Подключение…" };
       case "registration_failed": return { col: C.err,  txt: "Ошибка регистрации" };
       case "ended":               return { col: C.text3, txt: `Звонок завершён (${st.reason})` };
@@ -754,10 +760,11 @@ function SoftphoneWidget() {
           </>
         )}
 
-        {st.kind === "outgoing" && (
+        {(st.kind === "outgoing" || st.kind === "ringing") && (
           <div style={{ padding: "30px 18px 22px", textAlign: "center" }}>
-            <div style={{ fontSize: 13, color: C.text2, marginBottom: 6 }}>Звоним…</div>
+            <div style={{ fontSize: 13, color: C.text2, marginBottom: 6 }}>{st.kind === "ringing" ? "Вызов…" : "Соединение…"}</div>
             <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 22, fontWeight: 500, color: C.text }}>{st.to}</div>
+            {st.kind === "ringing" && st.earlyMedia && <div style={{ marginTop: 6, fontSize: 11, color: C.acc }}>Гудок от АТС</div>}
             <div style={{ marginTop: 14, marginBottom: 10, display: "flex", justifyContent: "center", gap: 5 }}>
               {[0, 1, 2].map((i) => <div key={i} style={{ width: 7, height: 7, borderRadius: "50%", background: C.acc, animation: `blink 1.2s ease-in-out ${i * 0.22}s infinite` }} />)}
             </div>
@@ -3159,7 +3166,7 @@ function SettingsSection({ title, sub, children }: { title: string; sub?: string
 // (Пользователи / Телефония / SMTP / AI)
 // ──────────────────────────────────────────────────────────────────────────
 
-type SettingsTab = "users" | "modules" | "phone" | "smtp" | "ai";
+type SettingsTab = "users" | "modules" | "phone" | "messengers" | "smtp" | "ai";
 
 function SystemSettingsPage(_: { users?: MockUser[] }) {
   const [tab, setTab] = useState<SettingsTab>("users");
@@ -3168,13 +3175,14 @@ function SystemSettingsPage(_: { users?: MockUser[] }) {
     { id: "users",   label: "Пользователи",     Icon: User },
     { id: "modules", label: "Доступ к модулям", Icon: Shield },
     { id: "phone",   label: "Телефония",        Icon: Phone },
+    { id: "messengers", label: "Мессенджеры",   Icon: MessageSquare },
     { id: "smtp",    label: "SMTP",             Icon: Send },
     { id: "ai",      label: "AI",               Icon: Sparkles },
   ];
 
   return (
     <div style={{ minHeight: "100%", background: C.bg2, display: "flex", flexDirection: "column" }}>
-      <PgHdr title="Настройки системы" sub="Пользователи · Доступ к модулям · Телефония · SMTP · AI" />
+      <PgHdr title="Настройки системы" sub="Пользователи · Доступ к модулям · Телефония · Мессенджеры · SMTP · AI" />
       <div style={{ padding: "0 24px", background: C.card, borderBottom: `1px solid ${C.border}`, display: "flex", gap: 4, flexShrink: 0 }}>
         {tabs.map((x) => (
           <button key={x.id} onClick={() => setTab(x.id)}
@@ -3194,6 +3202,7 @@ function SystemSettingsPage(_: { users?: MockUser[] }) {
         {tab === "users"   && <UsersPage hideHeader />}
         {tab === "modules" && <ModuleAccessPage />}
         {tab === "phone"   && <PhoneSettingsPage hideHeader />}
+        {tab === "messengers" && <MessengerSettingsPage hideHeader />}
         {tab === "smtp"    && <SmtpSettingsPage hideHeader />}
         {tab === "ai"      && <AISettingsPage hideHeader />}
       </div>
@@ -3259,6 +3268,146 @@ function ModuleAccessPage() {
             </label>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+function MessengerSettingsPage({ hideHeader }: { hideHeader?: boolean } = {}) {
+  const q = useTelegramConfig();
+  const upd = useUpdateTelegramConfig();
+  type Form = {
+    api_id: string;
+    api_hash: string;
+    session_encryption_key: string;
+    worker_url: string;
+    sync_enabled: boolean;
+    retention_days: string;
+    generate_encryption_key: boolean;
+  };
+  const [form, setForm] = useState<Form>({
+    api_id: "",
+    api_hash: "",
+    session_encryption_key: "",
+    worker_url: "http://telegram-worker:8090",
+    sync_enabled: true,
+    retention_days: "180",
+    generate_encryption_key: false,
+  });
+  const [apiHashTouched, setApiHashTouched] = useState(false);
+  const [keyTouched, setKeyTouched] = useState(false);
+
+  useEffect(() => {
+    if (!q.data) return;
+    setForm({
+      api_id: q.data.api_id ? String(q.data.api_id) : "",
+      api_hash: "",
+      session_encryption_key: "",
+      worker_url: q.data.worker_url || "http://telegram-worker:8090",
+      sync_enabled: q.data.sync_enabled,
+      retention_days: String(q.data.retention_days || 180),
+      generate_encryption_key: false,
+    });
+    setApiHashTouched(false);
+    setKeyTouched(false);
+  }, [q.data]);
+
+  const set = <K extends keyof Form>(k: K, v: Form[K]) => setForm((f) => ({ ...f, [k]: v }));
+  const dirty = !q.data || Number(form.api_id || 0) !== q.data.api_id ||
+    apiHashTouched || keyTouched || form.generate_encryption_key ||
+    form.worker_url !== (q.data.worker_url || "http://telegram-worker:8090") ||
+    form.sync_enabled !== q.data.sync_enabled ||
+    Number(form.retention_days || 180) !== q.data.retention_days;
+
+  const save = async () => {
+    try {
+      await upd.mutateAsync({
+        api_id: Number(form.api_id || 0),
+        api_hash: apiHashTouched ? form.api_hash.trim() : "",
+        session_encryption_key: keyTouched ? form.session_encryption_key.trim() : "",
+        worker_url: form.worker_url.trim() || "http://telegram-worker:8090",
+        sync_enabled: form.sync_enabled,
+        retention_days: Number(form.retention_days || 180),
+        generate_encryption_key: form.generate_encryption_key,
+      });
+      setApiHashTouched(false);
+      setKeyTouched(false);
+    } catch (e) {
+      alert("Не удалось сохранить: " + (e instanceof Error ? e.message : String(e)));
+    }
+  };
+
+  const saveBtn = (
+    <button onClick={() => void save()} disabled={!dirty || upd.isPending}
+      style={{ display: "flex", alignItems: "center", gap: 7, background: dirty && !upd.isPending ? C.acc : C.bg3, color: dirty && !upd.isPending ? "white" : C.text3, padding: "9px 18px", borderRadius: 8, fontWeight: 600, fontSize: 14, border: "none", cursor: dirty && !upd.isPending ? "pointer" : "default", fontFamily: "inherit" }}>
+      {upd.isPending ? <><RefreshCw size={15} className="lk-spin" />Сохраняем…</>
+        : upd.isSuccess && !dirty ? <><Check size={15} />Сохранено</>
+        : <><Save size={15} />Сохранить</>}
+    </button>
+  );
+
+  return (
+    <div style={{ minHeight: "100%", background: C.bg2 }}>
+      {!hideHeader && (
+        <PgHdr title="Настройки мессенджеров" sub="Telegram MTProto · учетные записи пользователей · cache retention" action={saveBtn} />
+      )}
+      <div style={{ padding: 24, maxWidth: 720 }}>
+        {hideHeader && <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 14 }}>{saveBtn}</div>}
+
+        <div style={{ marginBottom: 16, padding: "10px 12px", background: q.data?.configured ? C.okBg : C.warnBg, border: `1px solid ${q.data?.configured ? C.ok : C.warnBrd}`, borderRadius: 8, fontSize: 12, color: q.data?.configured ? C.ok : C.warnTx, lineHeight: 1.5 }}>
+          {q.data?.configured
+            ? "Telegram настроен. Пользователи смогут подключать свои аккаунты через QR-код в разделе «Мессенджеры»."
+            : "Чтобы включить вход по QR, укажите API ID и API Hash из my.telegram.org и создайте ключ шифрования сессий."}
+        </div>
+
+        <SettingsSection title="Telegram API" sub="Данные приложения Telegram для MTProto-подключения">
+          <Field label="API ID">
+            <input value={form.api_id} onChange={(e) => set("api_id", e.target.value.replace(/\D/g, ""))}
+              placeholder="12345678" style={{ ...inp(), fontFamily: "'DM Mono', monospace" }} />
+          </Field>
+          <Field label={`API Hash${q.data?.has_api_hash && !apiHashTouched ? " · сохранён" : ""}`}>
+            <input type="password" value={form.api_hash}
+              onChange={(e) => { set("api_hash", e.target.value); setApiHashTouched(true); }}
+              placeholder={q.data?.has_api_hash && !apiHashTouched ? "••••••••" : "Введите api_hash"}
+              style={{ ...inp(), fontFamily: "'DM Mono', monospace" }} />
+          </Field>
+          <div style={{ fontSize: 12, color: C.text3, lineHeight: 1.5 }}>
+            Создайте приложение в Telegram: <span style={{ fontFamily: "'DM Mono', monospace" }}>my.telegram.org/apps</span>.
+            Тип приложения можно оставить desktop/web, имя любое внутреннее.
+          </div>
+        </SettingsSection>
+
+        <SettingsSection title="Сессии и worker" sub="Шифрование Telegram-сессий и адрес фонового сервиса">
+          <Field label={`Ключ шифрования${q.data?.has_session_encryption_key && !keyTouched && !form.generate_encryption_key ? " · сохранён" : ""}`}>
+            <input type="password" value={form.session_encryption_key} disabled={form.generate_encryption_key}
+              onChange={(e) => { set("session_encryption_key", e.target.value); setKeyTouched(true); }}
+              placeholder={q.data?.has_session_encryption_key && !keyTouched ? "••••••••" : "32 байта или base64 от 32 байт"}
+              style={{ ...inp(), fontFamily: "'DM Mono', monospace", background: form.generate_encryption_key ? C.bg3 : C.card }} />
+          </Field>
+          <label style={{ display: "flex", alignItems: "center", gap: 10, margin: "-4px 0 14px", fontSize: 13, color: C.text, cursor: "pointer" }}>
+            <input type="checkbox" checked={form.generate_encryption_key}
+              onChange={(e) => { set("generate_encryption_key", e.target.checked); if (e.target.checked) setKeyTouched(false); }} />
+            Сгенерировать новый ключ на сервере при сохранении
+          </label>
+          <Field label="Worker URL">
+            <input value={form.worker_url} onChange={(e) => set("worker_url", e.target.value)}
+              placeholder="http://telegram-worker:8090" style={{ ...inp(), fontFamily: "'DM Mono', monospace" }} />
+          </Field>
+        </SettingsSection>
+
+        <SettingsSection title="Синхронизация" sub="MVP: личные чаты и группы, без каналов">
+          <label style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, fontSize: 13, color: C.text, cursor: "pointer" }}>
+            <input type="checkbox" checked={form.sync_enabled} onChange={(e) => set("sync_enabled", e.target.checked)} />
+            Включить синхронизацию Telegram
+          </label>
+          <Field label="Retention cache, дней">
+            <input value={form.retention_days} onChange={(e) => set("retention_days", e.target.value.replace(/\D/g, "").slice(0, 4))}
+              placeholder="180" style={{ ...inp(), width: 140, fontFamily: "'DM Mono', monospace" }} />
+          </Field>
+          <div style={{ fontSize: 12, color: C.text3, lineHeight: 1.5 }}>
+            Локальный cache сообщений и вложений хранится ограниченное время. Удаление cache не удаляет сообщения в Telegram.
+          </div>
+        </SettingsSection>
       </div>
     </div>
   );
@@ -3657,7 +3806,7 @@ function StubPage({ page }: { page: "messengers" | "contacts" | "helpdesk" }) {
 const NAV: NavItemDef[] = [
   { id: "vcs",           label: "Конференции",   Icon: Video },
   { id: "transcription", label: "Транскрибация", Icon: FileText },
-  { id: "messengers",    label: "Мессенджеры",   Icon: MessageSquare, stub: true },
+  { id: "messengers",    label: "Мессенджеры",   Icon: MessageSquare },
   { id: "contacts",      label: "Контакты",      Icon: Users,         stub: true },
   { id: "helpdesk",      label: "Хелпдэск",      Icon: HelpCircle,    stub: true },
 ];
@@ -3775,9 +3924,10 @@ function ShellInner({ me }: { me: Me }) {
       <main style={{ flex: 1, overflow: "auto", display: "flex", flexDirection: "column" }}>
         {allowedPage === "vcs"             && <VcsPage me={me} />}
         {allowedPage === "transcription"   && <TranscriptionPage meetingFilter={transcriptMeetingFilter} />}
+        {allowedPage === "messengers"      && <MessengerPage />}
         {isAdmin && allowedPage === "monitoring" && <AnalyticsPage />}
         {isAdmin && allowedPage === "settings"   && <SystemSettingsPage />}
-        {(["messengers", "contacts", "helpdesk"] as const).includes(allowedPage as any) && <StubPage page={allowedPage as "messengers" | "contacts" | "helpdesk"} />}
+        {(["contacts", "helpdesk"] as const).includes(allowedPage as any) && <StubPage page={allowedPage as "contacts" | "helpdesk"} />}
       </main>
 
       <SoftphoneWidget />

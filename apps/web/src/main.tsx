@@ -10,6 +10,17 @@ import { I18nProvider } from "@/i18n";
 
 import "@/styles/globals.css";
 
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker
+      .register("/sw.js")
+      .then((registration) => registration.update())
+      .catch(() => {
+        // PWA installability is nice-to-have; the app must keep working if SW is blocked.
+      });
+  });
+}
+
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>

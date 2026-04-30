@@ -33,6 +33,13 @@ type Config struct {
 	FreePBXExtension string
 	FreePBXExtPwd    string
 
+	TelegramAPIID                int
+	TelegramAPIHash              string
+	TelegramSessionEncryptionKey string
+	TelegramSyncEnabled          bool
+	TelegramRetentionDays        int
+	TelegramWorkerURL            string
+
 	GigaAMAPIURL          string
 	GigaAMAPIToken        string
 	GigaAMPollInterval    int // seconds
@@ -84,6 +91,10 @@ func Load() (*Config, error) {
 		FreePBXWSSURL:      getenv("FREEPBX_WSS_URL", ""),
 		FreePBXExtension:   getenv("FREEPBX_EXTENSION", ""),
 		FreePBXExtPwd:      getenv("FREEPBX_EXTENSION_PASSWORD", ""),
+		TelegramAPIHash:              getenv("TELEGRAM_API_HASH", ""),
+		TelegramSessionEncryptionKey: getenv("TELEGRAM_SESSION_ENCRYPTION_KEY", ""),
+		TelegramSyncEnabled:          getenv("TELEGRAM_SYNC_ENABLED", "true") == "true",
+		TelegramWorkerURL:            getenv("TELEGRAM_WORKER_URL", "http://telegram-worker:8090"),
 		GigaAMAPIURL:       getenv("GIGAAM_API_URL", ""),
 		GigaAMAPIToken:     getenv("GIGAAM_API_TOKEN", ""),
 		LiveKitAPIKey:    getenv("LIVEKIT_API_KEY", ""),
@@ -111,6 +122,8 @@ func Load() (*Config, error) {
 		func() error { var err error; cfg.GigaAMPollInterval, err = intEnv("GIGAAM_POLL_INTERVAL_SECONDS", 5); return err },
 		func() error { var err error; cfg.GigaAMMaxRetries, err = intEnv("GIGAAM_MAX_RETRIES", 3); return err },
 		func() error { var err error; cfg.GigaAMConcurrentLimit, err = intEnv("GIGAAM_CONCURRENT_LIMIT", 5); return err },
+		func() error { var err error; cfg.TelegramAPIID, err = intEnv("TELEGRAM_API_ID", 0); return err },
+		func() error { var err error; cfg.TelegramRetentionDays, err = intEnv("TELEGRAM_RETENTION_DAYS", 180); return err },
 		func() error { var err error; cfg.RateLimitGlobalPerMin, err = intEnv("RATELIMIT_GLOBAL_PER_MIN", 600); return err },
 		func() error { var err error; cfg.RateLimitUserPerMin, err = intEnv("RATELIMIT_USER_PER_MIN", 600); return err },
 	} {

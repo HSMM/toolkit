@@ -15,6 +15,7 @@ import { Loading, ErrorBox } from "@/components/states";
 import { useMe } from "@/api/me";
 import { Shell } from "@/Shell";
 import { GuestPage } from "@/GuestPage";
+import { SoftphonePage } from "@/SoftphonePage";
 
 // Публичные пути — обходят auth gate. Сейчас только /g/<token> (guest invite).
 function publicRoute(): { kind: "guest"; token: string } | null {
@@ -31,6 +32,9 @@ export function App() {
 
   if (state.status === "loading")   return <Loading label="Восстанавливаем сессию…" />;
   if (state.status === "anonymous") return <LoginPage />;
+  if (window.location.pathname === "/softphone") {
+    return <SoftphonePage />;
+  }
   return <AuthenticatedShell />;
 }
 

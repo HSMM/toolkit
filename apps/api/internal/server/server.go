@@ -25,17 +25,19 @@ import (
 	"github.com/HSMM/toolkit/internal/admin"
 	"github.com/HSMM/toolkit/internal/auth"
 	"github.com/HSMM/toolkit/internal/bitrix"
-	"github.com/HSMM/toolkit/internal/sysset"
 	"github.com/HSMM/toolkit/internal/config"
 	"github.com/HSMM/toolkit/internal/db"
 	"github.com/HSMM/toolkit/internal/gigaam"
 	livekitclient "github.com/HSMM/toolkit/internal/livekit"
 	"github.com/HSMM/toolkit/internal/meetings"
+	"github.com/HSMM/toolkit/internal/messenger"
 	"github.com/HSMM/toolkit/internal/phonereq"
 	"github.com/HSMM/toolkit/internal/queue"
 	"github.com/HSMM/toolkit/internal/server/middleware"
 	oauthhandlers "github.com/HSMM/toolkit/internal/server/oauth"
+	"github.com/HSMM/toolkit/internal/softphone"
 	"github.com/HSMM/toolkit/internal/storage"
+	"github.com/HSMM/toolkit/internal/sysset"
 	"github.com/HSMM/toolkit/internal/transcription"
 	"github.com/HSMM/toolkit/internal/ws"
 )
@@ -52,6 +54,14 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 	subjectLoader := auth.NewSubjectLoader(pool)
 	hub := ws.NewHub(logger)
 	oauthHandlers := oauthhandlers.New(cfg, pool, logger, jwtIssuer)
+	messengerHandlers := messenger.NewHandlers(pool, messenger.Config{
+		TelegramAPIID:                cfg.TelegramAPIID,
+		TelegramAPIHash:              cfg.TelegramAPIHash,
+		TelegramSessionEncryptionKey: cfg.TelegramSessionEncryptionKey,
+		TelegramSyncEnabled:          cfg.TelegramSyncEnabled,
+		TelegramRetentionDays:        cfg.TelegramRetentionDays,
+		TelegramWorkerURL:            cfg.TelegramWorkerURL,
+	}, hub)
 
 	// LiveKit + meetings.
 	var (
@@ -143,7 +153,6 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 	r.Get("/readyz", handleHealth(pool))
 	r.Get("/version", handleVersion())
 
-
 	r.Route("/oauth", func(r chi.Router) {
 		r.Get("/login", oauthHandlers.Login)
 		r.Get("/callback", oauthHandlers.Callback)
@@ -164,6 +173,7 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 		if lkClient != nil && meetingsService != nil {
 			r.Post("/livekit/webhook", handleLiveKitWebhook(lkClient, meetingsService, logger))
 		}
+		r.Mount("/messenger-internal", messengerHandlers.InternalRoutes())
 
 		// Authenticated API.
 		r.Group(func(r chi.Router) {
@@ -194,6 +204,8 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 			// Заявки на внутренние номера. User-side (создать/отозвать/мою-последнюю).
 			phoneReqHandlers := phonereq.NewHandlers(phonereq.NewService(pool, hub, logger))
 			r.Mount("/phone/extension-requests", phoneReqHandlers.MyRoutes())
+			r.Mount("/phone/calls", softphone.NewHandlers(pool).Routes())
+			r.Mount("/messenger", messengerHandlers.Routes())
 
 			// Admin-only endpoints, доступные через /api/v1/admin/* (NPM
 			// проксирует /api/v1 → api). Старая /admin/* группа (внизу)
