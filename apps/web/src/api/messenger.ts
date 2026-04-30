@@ -56,10 +56,14 @@ export type TelegramMessage = {
   sent_at: string;
   attachments: Array<{
     id: string;
-    kind: string;
+    kind: "photo" | "document" | "audio" | "voice" | "video" | "sticker" | "unknown";
     file_name: string;
     mime_type: string;
     size_bytes?: number;
+    width?: number;
+    height?: number;
+    duration_sec?: number;
+    download_url: string;
   }>;
 };
 
@@ -121,11 +125,16 @@ export function useSyncTelegramMessages() {
 export function useSendTelegramMessage() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: { chatId: string; text: string }) =>
-      api<TelegramMessage>(`/api/v1/messenger/telegram/chats/${input.chatId}/messages`, {
+    mutationFn: (input: { chatId: string; text: string; files?: File[] }) => {
+      const files = input.files ?? [];
+      const body = new FormData();
+      body.append("text", input.text);
+      files.forEach((file) => body.append("files", file, file.name));
+      return api<{ items: TelegramMessage[] }>(`/api/v1/messenger/telegram/chats/${input.chatId}/messages`, {
         method: "POST",
-        body: { text: input.text },
-      }),
+        body: files.length > 0 ? body : { text: input.text },
+      });
+    },
     onSuccess: (_data, input) => {
       void qc.invalidateQueries({ queryKey: messagesKey(input.chatId) });
       void qc.invalidateQueries({ queryKey: CHATS_KEY });

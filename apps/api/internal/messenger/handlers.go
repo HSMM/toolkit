@@ -12,7 +12,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,6 +30,7 @@ import (
 )
 
 const providerTelegram = "telegram"
+const maxTelegramUploadBytes = 50 << 20
 
 type Config struct {
 	TelegramAPIID                int
@@ -67,6 +70,7 @@ func (h *Handlers) Routes() http.Handler {
 	r.Post("/telegram/chats/{chatID}/sync", h.telegramChatSync)
 	r.Get("/telegram/chats/{chatID}/messages", h.telegramMessages)
 	r.Post("/telegram/chats/{chatID}/messages", h.telegramSendMessage)
+	r.Get("/telegram/attachments/{attachmentID}/download", h.telegramDownloadAttachment)
 	return r
 }
 
@@ -138,18 +142,46 @@ type workerSyncResponse struct {
 }
 
 type workerMessage struct {
-	ProviderMessageID string          `json:"provider_message_id"`
-	Direction         string          `json:"direction"`
-	SenderProviderID  string          `json:"sender_provider_id"`
-	SenderName        string          `json:"sender_name"`
-	Text              string          `json:"text"`
-	Status            string          `json:"status"`
-	SentAt            time.Time       `json:"sent_at"`
-	Raw               json.RawMessage `json:"raw,omitempty"`
+	ProviderMessageID string             `json:"provider_message_id"`
+	Direction         string             `json:"direction"`
+	SenderProviderID  string             `json:"sender_provider_id"`
+	SenderName        string             `json:"sender_name"`
+	Text              string             `json:"text"`
+	Status            string             `json:"status"`
+	SentAt            time.Time          `json:"sent_at"`
+	Attachments       []workerAttachment `json:"attachments"`
+	Raw               json.RawMessage    `json:"raw,omitempty"`
 }
 
 type workerMessagesResponse struct {
 	Items []workerMessage `json:"items"`
+}
+
+type workerAttachment struct {
+	ProviderFileID string `json:"provider_file_id"`
+	Kind           string `json:"kind"`
+	FileName       string `json:"file_name"`
+	MimeType       string `json:"mime_type"`
+	SizeBytes      *int64 `json:"size_bytes,omitempty"`
+	Width          *int   `json:"width,omitempty"`
+	Height         *int   `json:"height,omitempty"`
+	DurationSec    *int   `json:"duration_sec,omitempty"`
+}
+
+type workerUploadFile struct {
+	FileName string `json:"file_name"`
+	MimeType string `json:"mime_type"`
+	Data     string `json:"data"`
+}
+
+type workerSendResponse struct {
+	Items []workerMessage `json:"items"`
+}
+
+type workerMediaDownloadResponse struct {
+	FileName string `json:"file_name"`
+	MimeType string `json:"mime_type"`
+	Data     string `json:"data"`
 }
 
 type workerUpdateRequest struct {
@@ -159,7 +191,8 @@ type workerUpdateRequest struct {
 }
 
 type sendMessageRequest struct {
-	Text string `json:"text"`
+	Text  string             `json:"text"`
+	Files []workerUploadFile `json:"files,omitempty"`
 }
 
 type messageItem struct {
@@ -173,11 +206,15 @@ type messageItem struct {
 }
 
 type attachmentItem struct {
-	ID        uuid.UUID `json:"id"`
-	Kind      string    `json:"kind"`
-	FileName  string    `json:"file_name"`
-	MimeType  string    `json:"mime_type"`
-	SizeBytes *int64    `json:"size_bytes,omitempty"`
+	ID          uuid.UUID `json:"id"`
+	Kind        string    `json:"kind"`
+	FileName    string    `json:"file_name"`
+	MimeType    string    `json:"mime_type"`
+	SizeBytes   *int64    `json:"size_bytes,omitempty"`
+	Width       *int      `json:"width,omitempty"`
+	Height      *int      `json:"height,omitempty"`
+	DurationSec *int      `json:"duration_sec,omitempty"`
+	DownloadURL string    `json:"download_url"`
 }
 
 type telegramQRLogin struct {
@@ -510,10 +547,13 @@ func (h *Handlers) telegramMessages(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusInternalServerError, "telegram_messages_failed", err.Error())
 			return
 		}
-		item.Attachments = []attachmentItem{}
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
+		writeErr(w, http.StatusInternalServerError, "telegram_messages_failed", err.Error())
+		return
+	}
+	if err := h.hydrateAttachments(r.Context(), items); err != nil {
 		writeErr(w, http.StatusInternalServerError, "telegram_messages_failed", err.Error())
 		return
 	}
@@ -530,14 +570,14 @@ func (h *Handlers) telegramSendMessage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, "telegram_not_configured", "Telegram API ID/API Hash/encryption key не настроены")
 		return
 	}
-	var in sendMessageRequest
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		writeErr(w, http.StatusBadRequest, "bad_json", err.Error())
+	in, err := parseSendMessageRequest(w, r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_message", err.Error())
 		return
 	}
 	in.Text = strings.TrimSpace(in.Text)
-	if in.Text == "" {
-		writeErr(w, http.StatusBadRequest, "empty_message", "текст сообщения обязателен")
+	if in.Text == "" && len(in.Files) == 0 {
+		writeErr(w, http.StatusBadRequest, "empty_message", "текст или вложение обязательны")
 		return
 	}
 	if len([]rune(in.Text)) > 4096 {
@@ -572,18 +612,19 @@ func (h *Handlers) telegramSendMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	h.startTelegramUpdates(r.Context(), cfg, subj.UserID, account.ID, session)
 
-	var workerOut workerMessage
+	var workerOut workerSendResponse
 	if err := h.workerJSON(r.Context(), cfg, http.MethodPost, "/telegram/messages/send", map[string]any{
 		"api_id":           cfg.APIID,
 		"api_hash":         cfg.APIHash,
 		"session":          session,
 		"provider_chat_id": chat.ProviderChatID,
 		"text":             in.Text,
+		"files":            in.Files,
 	}, &workerOut); err != nil {
 		writeErr(w, http.StatusBadGateway, "telegram_worker_failed", err.Error())
 		return
 	}
-	items, err := h.saveSyncedMessages(r.Context(), chatID, []workerMessage{workerOut})
+	items, err := h.saveSyncedMessages(r.Context(), chatID, workerOut.Items)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "telegram_message_save_failed", err.Error())
 		return
@@ -592,7 +633,91 @@ func (h *Handlers) telegramSendMessage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, "telegram_send_failed", "Telegram не вернул отправленное сообщение")
 		return
 	}
-	writeJSON(w, http.StatusOK, items[0])
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (h *Handlers) telegramDownloadAttachment(w http.ResponseWriter, r *http.Request) {
+	cfg, err := h.telegramConfig(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "telegram_config_failed", err.Error())
+		return
+	}
+	if !telegramConfigured(cfg) {
+		writeErr(w, http.StatusServiceUnavailable, "telegram_not_configured", "Telegram API ID/API Hash/encryption key не настроены")
+		return
+	}
+	attachmentID, err := uuid.Parse(chi.URLParam(r, "attachmentID"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_attachment_id", err.Error())
+		return
+	}
+	subj := auth.MustSubject(r.Context())
+	account, err := h.loadTelegramAccount(r, subj.UserID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "telegram_attachment_failed", err.Error())
+		return
+	}
+	if account == nil || account.Status != "connected" {
+		writeErr(w, http.StatusConflict, "telegram_not_connected", "Telegram не подключён")
+		return
+	}
+
+	var providerChatID, providerMessageID, fileName, mimeType string
+	err = h.db.QueryRow(r.Context(), `
+		SELECT mc.provider_chat_id, mm.provider_message_id, ma.file_name, ma.mime_type
+		FROM messenger_attachment ma
+		JOIN messenger_message mm ON mm.id=ma.message_id
+		JOIN messenger_chat mc ON mc.id=mm.chat_id
+		WHERE ma.id=$1 AND mc.account_id=$2
+	`, attachmentID, account.ID).Scan(&providerChatID, &providerMessageID, &fileName, &mimeType)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			writeErr(w, http.StatusNotFound, "attachment_not_found", "вложение не найдено")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "telegram_attachment_failed", err.Error())
+		return
+	}
+	session, err := h.loadTelegramSession(r.Context(), cfg, account.ID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "telegram_session_load_failed", err.Error())
+		return
+	}
+	var workerOut workerMediaDownloadResponse
+	if err := h.workerJSON(r.Context(), cfg, http.MethodPost, "/telegram/media/download", map[string]any{
+		"api_id":              cfg.APIID,
+		"api_hash":            cfg.APIHash,
+		"session":             session,
+		"provider_chat_id":    providerChatID,
+		"provider_message_id": providerMessageID,
+	}, &workerOut); err != nil {
+		writeErr(w, http.StatusBadGateway, "telegram_worker_failed", err.Error())
+		return
+	}
+	data, err := base64.StdEncoding.DecodeString(workerOut.Data)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "telegram_media_decode_failed", err.Error())
+		return
+	}
+	if workerOut.FileName != "" {
+		fileName = workerOut.FileName
+	}
+	if workerOut.MimeType != "" {
+		mimeType = workerOut.MimeType
+	}
+	if fileName == "" {
+		fileName = "telegram-attachment"
+	}
+	if mimeType == "" {
+		mimeType = http.DetectContentType(data)
+	}
+	w.Header().Set("Content-Type", mimeType)
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	if disposition := r.URL.Query().Get("disposition"); disposition == "attachment" {
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": fileName}))
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
 }
 
 func (h *Handlers) telegramWorkerUpdate(w http.ResponseWriter, r *http.Request) {
@@ -777,6 +902,29 @@ func (h *Handlers) saveSyncedMessages(ctx context.Context, chatID uuid.UUID, mes
 			return nil, err
 		}
 		item.Attachments = []attachmentItem{}
+		if _, err := tx.Exec(ctx, `DELETE FROM messenger_attachment WHERE message_id=$1`, item.ID); err != nil {
+			return nil, err
+		}
+		for _, att := range msg.Attachments {
+			if att.ProviderFileID == "" && att.FileName == "" && att.MimeType == "" {
+				continue
+			}
+			kind := normalizeAttachmentKind(att.Kind)
+			var saved attachmentItem
+			err := tx.QueryRow(ctx, `
+				INSERT INTO messenger_attachment
+					(message_id, provider_file_id, kind, file_name, mime_type, size_bytes, width, height, duration_sec)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+				RETURNING id, kind, file_name, mime_type, size_bytes, width, height, duration_sec
+			`, item.ID, att.ProviderFileID, kind, att.FileName, att.MimeType, att.SizeBytes, att.Width, att.Height, att.DurationSec).Scan(
+				&saved.ID, &saved.Kind, &saved.FileName, &saved.MimeType, &saved.SizeBytes, &saved.Width, &saved.Height, &saved.DurationSec,
+			)
+			if err != nil {
+				return nil, err
+			}
+			saved.DownloadURL = "/api/v1/messenger/telegram/attachments/" + saved.ID.String() + "/download"
+			item.Attachments = append(item.Attachments, saved)
+		}
 		out = append(out, item)
 	}
 
@@ -788,6 +936,9 @@ func (h *Handlers) saveSyncedMessages(ctx context.Context, chatID uuid.UUID, mes
 			}
 		}
 		preview := last.Text
+		if preview == "" && len(last.Attachments) > 0 {
+			preview = attachmentPreview(last.Attachments[0])
+		}
 		if len([]rune(preview)) > 160 {
 			preview = string([]rune(preview)[:157]) + "..."
 		}
@@ -823,6 +974,134 @@ func (h *Handlers) startTelegramUpdates(ctx context.Context, cfg sysset.Telegram
 		"callback_url":    "http://api:8080/api/v1/messenger-internal/telegram/updates",
 		"callback_secret": secret,
 	}, &out)
+}
+
+func parseSendMessageRequest(w http.ResponseWriter, r *http.Request) (sendMessageRequest, error) {
+	contentType := r.Header.Get("Content-Type")
+	if strings.HasPrefix(contentType, "multipart/form-data") {
+		r.Body = http.MaxBytesReader(w, r.Body, maxTelegramUploadBytes+8*1024*1024)
+		if err := r.ParseMultipartForm(maxTelegramUploadBytes); err != nil {
+			return sendMessageRequest{}, err
+		}
+		defer func() {
+			if r.MultipartForm != nil {
+				_ = r.MultipartForm.RemoveAll()
+			}
+		}()
+		out := sendMessageRequest{Text: r.FormValue("text")}
+		if r.MultipartForm == nil {
+			return out, nil
+		}
+		headers := r.MultipartForm.File["files"]
+		if len(headers) == 0 {
+			headers = r.MultipartForm.File["file"]
+		}
+		for _, header := range headers {
+			if header.Size > maxTelegramUploadBytes {
+				return sendMessageRequest{}, fmt.Errorf("файл %s больше лимита 50 МБ", header.Filename)
+			}
+			file, err := header.Open()
+			if err != nil {
+				return sendMessageRequest{}, err
+			}
+			data, err := io.ReadAll(io.LimitReader(file, maxTelegramUploadBytes+1))
+			_ = file.Close()
+			if err != nil {
+				return sendMessageRequest{}, err
+			}
+			if len(data) > maxTelegramUploadBytes {
+				return sendMessageRequest{}, fmt.Errorf("файл %s больше лимита 50 МБ", header.Filename)
+			}
+			mimeType := header.Header.Get("Content-Type")
+			if mimeType == "" {
+				mimeType = http.DetectContentType(data)
+			}
+			out.Files = append(out.Files, workerUploadFile{
+				FileName: safeFileName(header.Filename),
+				MimeType: mimeType,
+				Data:     base64.StdEncoding.EncodeToString(data),
+			})
+		}
+		return out, nil
+	}
+
+	var out sendMessageRequest
+	if err := json.NewDecoder(r.Body).Decode(&out); err != nil {
+		return sendMessageRequest{}, err
+	}
+	return out, nil
+}
+
+func (h *Handlers) hydrateAttachments(ctx context.Context, messages []messageItem) error {
+	if len(messages) == 0 {
+		return nil
+	}
+	ids := make([]uuid.UUID, 0, len(messages))
+	index := make(map[uuid.UUID]int, len(messages))
+	for i := range messages {
+		messages[i].Attachments = []attachmentItem{}
+		ids = append(ids, messages[i].ID)
+		index[messages[i].ID] = i
+	}
+	rows, err := h.db.Query(ctx, `
+		SELECT id, message_id, kind, file_name, mime_type, size_bytes, width, height, duration_sec
+		FROM messenger_attachment
+		WHERE message_id = ANY($1)
+		ORDER BY created_at ASC
+	`, ids)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var messageID uuid.UUID
+		var item attachmentItem
+		if err := rows.Scan(&item.ID, &messageID, &item.Kind, &item.FileName, &item.MimeType, &item.SizeBytes, &item.Width, &item.Height, &item.DurationSec); err != nil {
+			return err
+		}
+		item.DownloadURL = "/api/v1/messenger/telegram/attachments/" + item.ID.String() + "/download"
+		if pos, ok := index[messageID]; ok {
+			messages[pos].Attachments = append(messages[pos].Attachments, item)
+		}
+	}
+	return rows.Err()
+}
+
+func normalizeAttachmentKind(kind string) string {
+	switch kind {
+	case "photo", "document", "audio", "voice", "video", "sticker":
+		return kind
+	default:
+		return "unknown"
+	}
+}
+
+func attachmentPreview(att attachmentItem) string {
+	switch att.Kind {
+	case "photo":
+		return "Фото"
+	case "video":
+		return "Видео"
+	case "audio":
+		return "Аудио"
+	case "voice":
+		return "Голосовое сообщение"
+	case "sticker":
+		return "Стикер"
+	default:
+		if att.FileName != "" {
+			return "Файл: " + att.FileName
+		}
+		return "Вложение"
+	}
+}
+
+func safeFileName(name string) string {
+	name = filepath.Base(strings.TrimSpace(name))
+	if name == "." || name == "/" || name == "" {
+		return "attachment"
+	}
+	return name
 }
 
 func randomSecret() (string, error) {
@@ -929,7 +1208,7 @@ func (h *Handlers) workerJSON(ctx context.Context, cfg sysset.TelegramConfig, me
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	client := &http.Client{Timeout: 20 * time.Second}
+	client := &http.Client{Timeout: 2 * time.Minute}
 	res, err := client.Do(req)
 	if err != nil {
 		return err

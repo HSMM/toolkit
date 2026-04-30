@@ -1,9 +1,10 @@
-import { AlertTriangle, Check, Loader2, MessageSquare, RefreshCw, Search, Send, ShieldCheck, Smartphone, Unplug, X } from "lucide-react";
+import { AlertTriangle, Check, Download, FileText, Image as ImageIcon, Loader2, MessageSquare, Paperclip, RefreshCw, Search, Send, ShieldCheck, Smartphone, Trash2, Unplug, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
-import { ApiError } from "@/api/client";
+import { ApiError, apiFetch } from "@/api/client";
 import {
   type TelegramChat,
+  type TelegramMessage,
   useDisconnectTelegram,
   useSendTelegramMessage,
   useStartTelegramQrLogin,
@@ -218,7 +219,7 @@ export function MessengerPage() {
             error={messages.error || syncMessages.error}
             messages={messages.data?.items ?? []}
             onRefresh={() => selectedChatId && syncMessages.mutate(selectedChatId)}
-            onSend={(text) => selectedChatId && sendMessage.mutate({ chatId: selectedChatId, text })}
+            onSend={(text, files) => selectedChatId && sendMessage.mutate({ chatId: selectedChatId, text, files })}
             sending={sendMessage.isPending}
             sendError={sendMessage.error}
             onDisconnect={() => disconnect.mutate()}
@@ -243,21 +244,25 @@ function ChatPanel({
   chat?: TelegramChat;
   loading: boolean;
   error: unknown;
-  messages: Array<{ id: string; direction: "in" | "out"; text: string; sent_at: string }>;
+  messages: TelegramMessage[];
   onRefresh: () => void;
-  onSend: (text: string) => void;
+  onSend: (text: string, files: File[]) => void;
   sending: boolean;
   sendError: unknown;
   onDisconnect: () => void;
 }) {
   const [draft, setDraft] = useState("");
-  const canSend = draft.trim().length > 0 && !sending;
+  const [files, setFiles] = useState<File[]>([]);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const canSend = (draft.trim().length > 0 || files.length > 0) && !sending;
 
   const submit = () => {
     const text = draft.trim();
-    if (!text || sending) return;
-    onSend(text);
+    if ((!text && files.length === 0) || sending) return;
+    onSend(text, files);
     setDraft("");
+    setFiles([]);
+    if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
   if (!chat) {
@@ -317,7 +322,15 @@ function ChatPanel({
           return (
             <div key={message.id} style={{ display: "flex", justifyContent: own ? "flex-end" : "flex-start" }}>
               <div style={{ maxWidth: "68%", padding: "8px 10px 6px", borderRadius: own ? "12px 12px 3px 12px" : "12px 12px 12px 3px", background: own ? "#effdde" : "#ffffff", color: "#17212b", boxShadow: "0 1px 1px rgba(15, 23, 42, 0.08)", fontSize: 13.5, lineHeight: 1.42, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
-                {message.text || "Сообщение без текста"}
+                {message.attachments.length > 0 && (
+                  <div style={{ display: "grid", gap: 7, marginBottom: message.text ? 7 : 0 }}>
+                    {message.attachments.map((attachment) => (
+                      <AttachmentView key={attachment.id} attachment={attachment} />
+                    ))}
+                  </div>
+                )}
+                {message.text && <div>{message.text}</div>}
+                {!message.text && message.attachments.length === 0 && "Сообщение без текста"}
                 <div style={{ marginTop: 4, fontSize: 10.5, color: "#7b8794", textAlign: "right" }}>
                   {new Date(message.sent_at).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
                 </div>
@@ -331,7 +344,45 @@ function ChatPanel({
           Не удалось отправить: {sendError instanceof Error ? sendError.message : String(sendError)}
         </div>
       )}
-      <div style={{ padding: "11px 14px", background: "#ffffff", borderTop: "1px solid #dbe3ea", display: "flex", gap: 8 }}>
+      <div style={{ padding: "10px 14px 11px", background: "#ffffff", borderTop: "1px solid #dbe3ea", display: "grid", gap: 8 }}>
+        {files.length > 0 && (
+          <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 2 }}>
+            {files.map((file, index) => (
+              <div key={`${file.name}-${file.size}-${index}`} style={{ display: "inline-flex", alignItems: "center", gap: 7, maxWidth: 260, padding: "7px 9px", borderRadius: 10, background: "#f1f5f8", border: "1px solid #dbe3ea", color: "#52616f", fontSize: 12 }}>
+                {file.type.startsWith("image/") ? <ImageIcon size={15} /> : <FileText size={15} />}
+                <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{file.name}</span>
+                <span style={{ color: "#8a98a8", flexShrink: 0 }}>{formatBytes(file.size)}</span>
+                <button
+                  onClick={() => setFiles((prev) => prev.filter((_, i) => i !== index))}
+                  aria-label="Убрать файл"
+                  style={{ width: 20, height: 20, border: "none", background: "transparent", color: "#7b8794", display: "grid", placeItems: "center", padding: 0, cursor: "pointer" }}
+                >
+                  <Trash2 size={13} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 8 }}>
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          onChange={(e) => {
+            const next = Array.from(e.target.files ?? []);
+            setFiles((prev) => [...prev, ...next].slice(0, 10));
+          }}
+          style={{ display: "none" }}
+        />
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          disabled={sending}
+          aria-label="Прикрепить файл"
+          title="Прикрепить файл"
+          style={{ width: 40, height: 40, borderRadius: 20, border: "1px solid #dbe3ea", background: "#ffffff", color: "#52616f", display: "grid", placeItems: "center", flexShrink: 0 }}
+        >
+          <Paperclip size={17} />
+        </button>
         <input
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -351,8 +402,78 @@ function ChatPanel({
         >
           {sending ? <Loader2 size={14} className="lk-spin" /> : <Send size={14} />}Отправить
         </button>
+        </div>
       </div>
     </main>
+  );
+}
+
+function AttachmentView({ attachment }: { attachment: TelegramMessage["attachments"][number] }) {
+  const [objectUrl, setObjectUrl] = useState<string | undefined>();
+  const [loading, setLoading] = useState(attachment.kind === "photo" || attachment.kind === "video" || attachment.kind === "audio" || attachment.kind === "voice");
+  const [error, setError] = useState<string | undefined>();
+
+  useEffect(() => {
+    let alive = true;
+    let url: string | undefined;
+    const shouldPreview = attachment.kind === "photo" || attachment.kind === "video" || attachment.kind === "audio" || attachment.kind === "voice";
+    if (!shouldPreview) return undefined;
+    setLoading(true);
+    apiFetch(attachment.download_url)
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const blob = await res.blob();
+        if (!alive) return;
+        url = URL.createObjectURL(blob);
+        setObjectUrl(url);
+        setError(undefined);
+      })
+      .catch((err) => {
+        if (alive) setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+    return () => {
+      alive = false;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [attachment.download_url, attachment.kind]);
+
+  const download = async () => {
+    const res = await apiFetch(`${attachment.download_url}?disposition=attachment`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = attachment.file_name || "telegram-attachment";
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  if (attachment.kind === "photo" && objectUrl) {
+    return (
+      <button onClick={download} style={{ border: "none", padding: 0, background: "transparent", cursor: "pointer", textAlign: "left" }}>
+        <img src={objectUrl} alt={attachment.file_name || "Фото"} style={{ display: "block", maxWidth: 320, maxHeight: 260, borderRadius: 10, objectFit: "cover" }} />
+      </button>
+    );
+  }
+  if ((attachment.kind === "video") && objectUrl) {
+    return <video src={objectUrl} controls style={{ display: "block", maxWidth: 340, maxHeight: 260, borderRadius: 10, background: "#0f172a" }} />;
+  }
+  if ((attachment.kind === "audio" || attachment.kind === "voice") && objectUrl) {
+    return <audio src={objectUrl} controls style={{ width: 280, maxWidth: "100%" }} />;
+  }
+  return (
+    <button onClick={download} style={{ display: "flex", alignItems: "center", gap: 9, minWidth: 210, maxWidth: 330, padding: 9, borderRadius: 10, border: "1px solid #dbe3ea", background: "#f8fbfd", color: "#17212b", textAlign: "left", cursor: "pointer", fontFamily: "inherit" }}>
+      {loading ? <Loader2 size={18} className="lk-spin" /> : attachment.kind === "photo" ? <ImageIcon size={18} /> : <FileText size={18} />}
+      <span style={{ flex: 1, minWidth: 0 }}>
+        <span style={{ display: "block", fontSize: 12.5, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{attachment.file_name || attachmentLabel(attachment.kind)}</span>
+        <span style={{ display: "block", marginTop: 2, fontSize: 11, color: error ? C.err : "#6b7a88" }}>{error || [attachmentLabel(attachment.kind), formatBytes(attachment.size_bytes)].filter(Boolean).join(" · ")}</span>
+      </span>
+      <Download size={16} />
+    </button>
   );
 }
 
@@ -409,6 +530,24 @@ function formatChatTime(value: string) {
     return date.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
   }
   return date.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" });
+}
+
+function attachmentLabel(kind: string) {
+  switch (kind) {
+    case "photo": return "Фото";
+    case "video": return "Видео";
+    case "audio": return "Аудио";
+    case "voice": return "Голосовое";
+    case "sticker": return "Стикер";
+    default: return "Файл";
+  }
+}
+
+function formatBytes(value?: number) {
+  if (!value || value <= 0) return "";
+  if (value < 1024) return `${value} Б`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} КБ`;
+  return `${(value / 1024 / 1024).toFixed(1)} МБ`;
 }
 
 function SetupRequired() {
