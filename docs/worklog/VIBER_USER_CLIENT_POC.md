@@ -59,3 +59,44 @@ PoC можно продолжать только если:
 - можно извлечь последние сообщения из тестового чата.
 
 Если хотя бы stable chat id недоступен, user-client реализацию останавливаем и возвращаемся к официальному Viber Bot/Business API.
+
+## Проверка На Сервере 10.10.0.17
+
+Дата: 2026-04-30.
+
+Что проверено:
+
+- код синхронизирован в `/opt/toolkit`;
+- `viber-worker` собран на сервере;
+- worker запущен через compose profile `viber-experimental`;
+- `GET /healthz` отвечает;
+- `POST /viber/login/start` создаёт persistent Playwright session и возвращает screenshot;
+- `POST /viber/session/status` показывает активную session.
+
+Результат:
+
+```json
+{
+  "connected": true,
+  "status": "running",
+  "account_id": "poc-viber",
+  "profile_key": "poc-viber",
+  "title": "Доступные тарифы на звонки в любые страны | Viber Out",
+  "url": "https://account.viber.com/ru/"
+}
+```
+
+Вывод:
+
+- browser worker технически работает;
+- Playwright persistent profile на сервере создаётся;
+- `https://account.viber.com/` не является Viber messenger web-client, это страница Viber Out;
+- для user-client интеграции следующий PoC должен идти через Viber Desktop Linux/AppImage под Xvfb/Wine/GUI automation, а не через обычный browser page.
+
+Следующий шаг:
+
+- добавить отдельный `viber-desktop-worker` или расширить текущий worker режимом `VIBER_CLIENT_MODE=desktop`;
+- скачать официальный Viber Desktop for Linux;
+- поднять его в контейнере с Xvfb;
+- проверить, появляется ли QR login и где хранится desktop profile;
+- проверить, переживает ли session restart контейнера.
