@@ -225,6 +225,25 @@ services:
     networks: [internal]
     restart: unless-stopped
 
+  viber-worker:
+    build: ./apps/viber-worker
+    environment:
+      VIBER_WORKER_PORT: "8091"
+      VIBER_PROFILE_DIR: /data/profiles
+      VIBER_ENTRY_URL: ${VIBER_ENTRY_URL:-https://account.viber.com/}
+      VIBER_QR_SELECTOR: ${VIBER_QR_SELECTOR:-}
+      VIBER_HEADLESS: ${VIBER_HEADLESS:-true}
+      VIBER_LOGIN_TTL_MS: ${VIBER_LOGIN_TTL_MS:-300000}
+      NODE_ENV: production
+    volumes:
+      - viber_profiles:/data/profiles
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    profiles: ["viber-experimental"]
+    networks: [internal]
+    restart: unless-stopped
+
   worker:
     build: ./apps/api
     command: ["worker"]
@@ -400,3 +419,4 @@ networks:
 
 volumes:
   web_dist:
+  viber_profiles:
