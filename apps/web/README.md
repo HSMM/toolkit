@@ -8,6 +8,11 @@ SPA Toolkit. **React 18 + TypeScript + Vite + react-router-dom + TanStack Query 
 - Vite 5, React 18, TypeScript strict, алиас `@/*` → `src/*`.
 - Dev-server `:5173` с прокси `/api`, `/oauth`, `/healthz`, `/version` на backend.
 - `Shell.tsx` — единый layout (sidebar/header), `App.tsx` — public path-router (`/g/<token>` для гостей обходит auth gate).
+- Полный интерфейс телефона открывается отдельным маршрутом `/softphone`
+  (`https://toolkit.softservice.by/softphone`). На основной странице
+  `https://toolkit.softservice.by` отображается только неоновая иконка статуса
+  телефонии: зелёная для online/registered, красная для выключенного или
+  незарегистрированного софтфона.
 
 **API client / state:**
 - `src/api/client.ts` — типизированный fetch с обработкой 401 (auto-logout) и `ApiError {status, code, message, details}`.
@@ -33,10 +38,12 @@ SPA Toolkit. **React 18 + TypeScript + Vite + react-router-dom + TanStack Query 
   POST `/request` → polling status каждые 2с → авто-вход когда host допустил.
 - **Транскрибация** (`TranscriptionPage.tsx`): загрузка аудио, список с прогрессом,
   viewer с диалогом по каналам, экспорт TXT, ручная правка.
-- **Софтфон** (`SoftphoneWidget` + `softphone/useSoftphone.ts`): JsSIP-клиент к
+- **Софтфон** (`/softphone` + `softphone/useSoftphone.ts`): JsSIP-клиент к
   FreePBX, state-machine (`not_configured / connecting / registered / incoming
-  / outgoing / active / ended`), dialer / mute / hold / hangup, popup на входящий
-  + OS-нотификация. Креды подтягиваются из `/system-settings/phone/me`.
+  / outgoing / active / ended`), dialer / mute / hold / transfer / hangup.
+  Креды подтягиваются из `/system-settings/phone/me`. В основном Shell не
+  встраивается dialer: там остаётся только статусная иконка телефона, которая
+  открывает `/softphone`.
 - **Настройки системы** (`Shell.tsx`, 4 таба): Пользователи (роли/блокировка
   кликом + кнопка Bitrix-синка), Доступ к модулям, Телефония (WebRTC шлюз с
   user-picker + AMI), SMTP. Все 4 — реальная персистенция через API.

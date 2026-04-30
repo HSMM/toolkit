@@ -184,6 +184,12 @@ services:
       BITRIX_CLIENT_ID: ${BITRIX_CLIENT_ID}
       BITRIX_CLIENT_SECRET: ${BITRIX_CLIENT_SECRET}
       BITRIX_APP_TOKEN: ${BITRIX_APP_TOKEN}
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID:-0}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:-}
+      TELEGRAM_SESSION_ENCRYPTION_KEY: ${TELEGRAM_SESSION_ENCRYPTION_KEY:-}
+      TELEGRAM_SYNC_ENABLED: ${TELEGRAM_SYNC_ENABLED:-true}
+      TELEGRAM_RETENTION_DAYS: ${TELEGRAM_RETENTION_DAYS:-180}
+      TELEGRAM_WORKER_URL: http://telegram-worker:8090
       MINIO_ENDPOINT: minio:9000
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
@@ -203,6 +209,20 @@ services:
       minio-init:
         condition: service_completed_successfully
     networks: [edge, internal]
+    restart: unless-stopped
+
+  telegram-worker:
+    build: ./apps/telegram-worker
+    environment:
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID:-0}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:-}
+      TELEGRAM_WORKER_PORT: "8090"
+      TELEGRAM_LOGIN_TTL_MS: "180000"
+      NODE_ENV: production
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks: [internal]
     restart: unless-stopped
 
   worker:

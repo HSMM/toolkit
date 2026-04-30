@@ -132,3 +132,46 @@ export function useMyPhoneCredentials() {
     retry: false,
   });
 }
+
+// ─── Telegram (MTProto) ──────────────────────────────────────────────────
+
+export type TelegramConfigPublic = {
+  api_id: number;
+  has_api_hash: boolean;
+  has_session_encryption_key: boolean;
+  worker_url: string;
+  sync_enabled: boolean;
+  retention_days: number;
+  configured: boolean;
+};
+
+export type TelegramConfigInput = {
+  api_id: number;
+  api_hash?: string;
+  session_encryption_key?: string;
+  worker_url: string;
+  sync_enabled: boolean;
+  retention_days: number;
+  generate_encryption_key?: boolean;
+};
+
+export function useTelegramConfig() {
+  return useQuery({
+    queryKey: ["telegram-config"],
+    queryFn: ({ signal }) =>
+      api<TelegramConfigPublic>("/api/v1/admin/system-settings/telegram", { signal }),
+    staleTime: 30_000,
+  });
+}
+
+export function useUpdateTelegramConfig() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: TelegramConfigInput) =>
+      api<TelegramConfigPublic>("/api/v1/admin/system-settings/telegram", { method: "PUT", body: v }),
+    onSuccess: (data) => {
+      qc.setQueryData(["telegram-config"], data);
+      void qc.invalidateQueries({ queryKey: ["messenger", "telegram", "status"] });
+    },
+  });
+}

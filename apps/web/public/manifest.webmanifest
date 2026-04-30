@@ -1,0 +1,36 @@
+{
+  "name": "Toolkit Phone",
+  "short_name": "Phone",
+  "description": "Рабочий софтфон Toolkit",
+  "lang": "ru",
+  "start_url": "/softphone",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#ffffff",
+  "theme_color": "#10b981",
+  "categories": ["business", "productivity", "communication"],
+  "icons": [
+    {
+      "src": "/pwa-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Софтфон",
+      "short_name": "Телефон",
+      "description": "Открыть рабочий софтфон",
+      "url": "/softphone",
+      "icons": [
+        {
+          "src": "/pwa-icon.svg",
+          "sizes": "any",
+          "type": "image/svg+xml"
+        }
+      ]
+    }
+  ]
+}

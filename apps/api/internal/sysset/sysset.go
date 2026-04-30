@@ -1,12 +1,14 @@
 // Package sysset — глобальные системные настройки (KV в Postgres).
 // Используется для:
-//   • module_access — какие модули видят non-admin пользователи. Админам
+//   - module_access — какие модули видят non-admin пользователи. Админам
 //     возвращаем правду, но фронт админам всегда показывает все модули
 //     независимо от ответа (роль проверяется на стороне UI).
 package sysset
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -41,20 +43,20 @@ type SMTPConfig struct {
 	Port       int    `json:"port"`
 	Encryption string `json:"encryption"` // ssl | starttls | none
 	User       string `json:"user"`
-	Password   string `json:"password"`    // только при сохранении; не возвращается в GET
+	Password   string `json:"password"` // только при сохранении; не возвращается в GET
 	FromName   string `json:"from_name"`
 	FromEmail  string `json:"from_email"`
 }
 
 // SMTPConfigPublic — то что отдаём клиенту (без пароля).
 type SMTPConfigPublic struct {
-	Host       string `json:"host"`
-	Port       int    `json:"port"`
-	Encryption string `json:"encryption"`
-	User       string `json:"user"`
-	HasPassword bool  `json:"has_password"` // флаг: пароль сохранён
-	FromName   string `json:"from_name"`
-	FromEmail  string `json:"from_email"`
+	Host        string `json:"host"`
+	Port        int    `json:"port"`
+	Encryption  string `json:"encryption"`
+	User        string `json:"user"`
+	HasPassword bool   `json:"has_password"` // флаг: пароль сохранён
+	FromName    string `json:"from_name"`
+	FromEmail   string `json:"from_email"`
 }
 
 func smtpDefaults() SMTPConfig {
@@ -82,6 +84,36 @@ type PhoneConfig struct {
 type PhoneConfigPublic struct {
 	WssURL     string                 `json:"wss_url"`
 	Extensions []PhoneExtensionPublic `json:"extensions"`
+}
+
+// TelegramConfig — глобальные настройки MTProto-интеграции Telegram.
+// Секреты принимаются при PUT, но никогда не возвращаются в GET.
+type TelegramConfig struct {
+	APIID                 int    `json:"api_id"`
+	APIHash               string `json:"api_hash"`
+	SessionEncryptionKey  string `json:"session_encryption_key"`
+	WorkerURL             string `json:"worker_url"`
+	SyncEnabled           bool   `json:"sync_enabled"`
+	RetentionDays         int    `json:"retention_days"`
+	GenerateEncryptionKey bool   `json:"generate_encryption_key,omitempty"`
+}
+
+type TelegramConfigPublic struct {
+	APIID                   int    `json:"api_id"`
+	HasAPIHash              bool   `json:"has_api_hash"`
+	HasSessionEncryptionKey bool   `json:"has_session_encryption_key"`
+	WorkerURL               string `json:"worker_url"`
+	SyncEnabled             bool   `json:"sync_enabled"`
+	RetentionDays           int    `json:"retention_days"`
+	Configured              bool   `json:"configured"`
+}
+
+func telegramDefaults() TelegramConfig {
+	return TelegramConfig{
+		WorkerURL:     "http://telegram-worker:8090",
+		SyncEnabled:   true,
+		RetentionDays: 180,
+	}
 }
 
 // EventPhoneExtensionUnassigned — сервер шлёт пользователю, у которого админ
@@ -123,6 +155,8 @@ func (h *Handlers) WriteRoutes() http.Handler {
 	r.Post("/smtp/test", h.testSMTP)
 	r.Get("/phone", h.getPhone)
 	r.Put("/phone", h.putPhone)
+	r.Get("/telegram", h.getTelegram)
+	r.Put("/telegram", h.putTelegram)
 	return r
 }
 
@@ -306,6 +340,59 @@ func (h *Handlers) putPhone(w http.ResponseWriter, r *http.Request) {
 	h.getPhone(w, r) // вернём отдекредентенный публичный вид
 }
 
+func (h *Handlers) getTelegram(w http.ResponseWriter, r *http.Request) {
+	c, err := h.loadTelegram(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "load_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, telegramPublic(c))
+}
+
+func (h *Handlers) putTelegram(w http.ResponseWriter, r *http.Request) {
+	subj := auth.MustSubject(r.Context())
+	var in TelegramConfig
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+
+	cur, _ := h.loadTelegram(r.Context())
+	if in.APIHash == "" {
+		in.APIHash = cur.APIHash
+	}
+	if in.SessionEncryptionKey == "" {
+		in.SessionEncryptionKey = cur.SessionEncryptionKey
+	}
+	if in.GenerateEncryptionKey || in.SessionEncryptionKey == "__generate__" {
+		key, err := generateTelegramEncryptionKey()
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "key_generation_failed", err.Error())
+			return
+		}
+		in.SessionEncryptionKey = key
+	}
+	if in.WorkerURL == "" {
+		in.WorkerURL = telegramDefaults().WorkerURL
+	}
+	if in.RetentionDays <= 0 {
+		in.RetentionDays = telegramDefaults().RetentionDays
+	}
+
+	body, _ := json.Marshal(in)
+	const q = `
+		INSERT INTO system_setting (key, value, updated_by, updated_at)
+		VALUES ('telegram_config', $1, $2, NOW())
+		ON CONFLICT (key) DO UPDATE
+		   SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = NOW()
+	`
+	if _, err := h.db.Exec(r.Context(), q, body, subj.UserID); err != nil {
+		writeErr(w, http.StatusInternalServerError, "save_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, telegramPublic(in))
+}
+
 // diffUnassigned — возвращает map user_id → previous extension для тех, кому
 // привязка была снята (а также для extension'ов, удалённых полностью или
 // переназначенных другому user'у).
@@ -378,6 +465,80 @@ func (h *Handlers) loadSMTP(ctx context.Context) (SMTPConfig, error) {
 	}
 	_ = json.Unmarshal(raw, &v)
 	return v, nil
+}
+
+func (h *Handlers) loadTelegram(ctx context.Context) (TelegramConfig, error) {
+	v := telegramDefaults()
+	var raw []byte
+	err := h.db.QueryRow(ctx, `SELECT value FROM system_setting WHERE key='telegram_config'`).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return v, nil
+	}
+	if err != nil {
+		return v, err
+	}
+	_ = json.Unmarshal(raw, &v)
+	if v.WorkerURL == "" {
+		v.WorkerURL = telegramDefaults().WorkerURL
+	}
+	if v.RetentionDays <= 0 {
+		v.RetentionDays = telegramDefaults().RetentionDays
+	}
+	return v, nil
+}
+
+func telegramPublic(c TelegramConfig) TelegramConfigPublic {
+	return TelegramConfigPublic{
+		APIID:                   c.APIID,
+		HasAPIHash:              c.APIHash != "",
+		HasSessionEncryptionKey: c.SessionEncryptionKey != "",
+		WorkerURL:               c.WorkerURL,
+		SyncEnabled:             c.SyncEnabled,
+		RetentionDays:           c.RetentionDays,
+		Configured:              c.APIID > 0 && c.APIHash != "" && c.SessionEncryptionKey != "" && c.WorkerURL != "",
+	}
+}
+
+func generateTelegramEncryptionKey() (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(buf), nil
+}
+
+// LoadTelegramRuntimeConfig returns Telegram settings for internal packages.
+// Environment values are passed as fallback so existing deployments keep
+// working until the admin saves DB-backed settings.
+func LoadTelegramRuntimeConfig(ctx context.Context, db *pgxpool.Pool, fallback TelegramConfig) (TelegramConfig, error) {
+	h := &Handlers{db: db}
+	c, err := h.loadTelegram(ctx)
+	if err != nil {
+		return c, err
+	}
+	if c.APIID == 0 {
+		c.APIID = fallback.APIID
+	}
+	if c.APIHash == "" {
+		c.APIHash = fallback.APIHash
+	}
+	if c.SessionEncryptionKey == "" {
+		c.SessionEncryptionKey = fallback.SessionEncryptionKey
+	}
+	if c.WorkerURL == "" {
+		c.WorkerURL = fallback.WorkerURL
+	}
+	if c.WorkerURL == "" {
+		c.WorkerURL = telegramDefaults().WorkerURL
+	}
+	if c.RetentionDays <= 0 {
+		if fallback.RetentionDays > 0 {
+			c.RetentionDays = fallback.RetentionDays
+		} else {
+			c.RetentionDays = telegramDefaults().RetentionDays
+		}
+	}
+	return c, nil
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
