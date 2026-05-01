@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, Download, FileText, Image as ImageIcon, Loader2, MessageSquare, Paperclip, RefreshCw, Search, Send, ShieldCheck, Smartphone, Trash2, Unplug, X } from "lucide-react";
+import { AlertTriangle, Check, Download, FileText, FlaskConical, Image as ImageIcon, Loader2, MessageSquare, Monitor, Paperclip, RefreshCw, Search, Send, ShieldCheck, Smartphone, Trash2, Unplug, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import { ApiError, apiFetch } from "@/api/client";
@@ -30,6 +30,7 @@ export function MessengerPage() {
   const [loginId, setLoginId] = useState<string | undefined>();
   const [selectedChatId, setSelectedChatId] = useState<string | undefined>();
   const [chatSearch, setChatSearch] = useState("");
+  const [provider, setProvider] = useState<"telegram" | "viber">("telegram");
   const autoSyncStarted = useRef(false);
   const qr = useTelegramQrLogin(loginId);
   const allChats = chats.data?.items ?? [];
@@ -101,22 +102,32 @@ export function MessengerPage() {
             <MessageSquare size={20} color="#229ed9" />
             <h1 style={{ margin: 0, fontSize: 20, fontWeight: 650, color: C.text }}>Мессенджеры</h1>
           </div>
-          <div style={{ fontSize: 13, color: C.text2 }}>Telegram как пользовательский клиент внутри Toolkit</div>
+          <div style={{ fontSize: 13, color: C.text2 }}>Telegram MTProto и экспериментальный Viber user-client внутри Toolkit</div>
         </div>
-        <button
-          onClick={() => {
-            void status.refetch();
-            if (connected) syncChats.mutate();
-            else void chats.refetch();
-          }}
-          disabled={syncChats.isPending}
-          style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "9px 12px", borderRadius: 8, border: "1px solid #dbe3ea", background: "#ffffff", color: "#52616f", fontWeight: 600 }}
-        >
-          <RefreshCw size={14} className={syncChats.isPending ? "lk-spin" : undefined} />{syncChats.isPending ? "Синхронизация…" : "Обновить"}
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ display: "inline-flex", padding: 3, borderRadius: 9, background: "#edf3f7", border: "1px solid #dbe3ea" }}>
+            <ProviderTab active={provider === "telegram"} onClick={() => setProvider("telegram")}>Telegram</ProviderTab>
+            <ProviderTab active={provider === "viber"} onClick={() => setProvider("viber")}>Viber PoC</ProviderTab>
+          </div>
+          {provider === "telegram" && (
+            <button
+              onClick={() => {
+                void status.refetch();
+                if (connected) syncChats.mutate();
+                else void chats.refetch();
+              }}
+              disabled={syncChats.isPending}
+              style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "9px 12px", borderRadius: 8, border: "1px solid #dbe3ea", background: "#ffffff", color: "#52616f", fontWeight: 600 }}
+            >
+              <RefreshCw size={14} className={syncChats.isPending ? "lk-spin" : undefined} />{syncChats.isPending ? "Синхронизация…" : "Обновить"}
+            </button>
+          )}
+        </div>
       </div>
 
-      {status.isLoading ? (
+      {provider === "viber" ? (
+        <ViberPocPanel />
+      ) : status.isLoading ? (
         <Centered><Loader2 size={26} style={{ animation: "lk-pulse 1s infinite" }} />Загружаем Telegram…</Centered>
       ) : status.isError ? (
         <Centered tone="err"><AlertTriangle size={26} />Не удалось загрузить статус Telegram</Centered>
@@ -226,6 +237,97 @@ export function MessengerPage() {
           />
         </div>
       )}
+    </div>
+  );
+}
+
+function ProviderTab({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        minWidth: 94,
+        padding: "7px 11px",
+        borderRadius: 7,
+        border: "none",
+        background: active ? "#ffffff" : "transparent",
+        color: active ? "#17212b" : "#6b7a88",
+        boxShadow: active ? "0 1px 2px rgba(15, 23, 42, 0.08)" : "none",
+        fontWeight: 700,
+        fontSize: 13,
+        fontFamily: "inherit",
+        cursor: "pointer",
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function ViberPocPanel() {
+  return (
+    <main style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 24 }}>
+      <div style={{ maxWidth: 980, margin: "0 auto", display: "grid", gap: 16 }}>
+        <section style={{ background: "#ffffff", border: "1px solid #dbe3ea", borderRadius: 10, padding: 18, display: "grid", gap: 14 }}>
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
+            <div>
+              <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 5 }}>
+                <FlaskConical size={20} color={C.warn} />
+                <h2 style={{ margin: 0, fontSize: 18, color: C.text }}>Viber · экспериментальный user-client</h2>
+              </div>
+              <div style={{ color: C.text2, fontSize: 13, lineHeight: 1.55 }}>
+                PoC worker поднят отдельно от Telegram. Пока это техническая проверка, а не готовый inbox.
+              </div>
+            </div>
+            <span style={{ padding: "6px 10px", borderRadius: 999, background: C.warnBg, border: `1px solid ${C.warnBrd}`, color: C.warnTx, fontSize: 12, fontWeight: 750 }}>
+              experimental
+            </span>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 12 }}>
+            <ViberStatusCard icon={<Check size={18} />} title="Worker запущен" text="Сервис viber-worker доступен в Docker Compose profile viber-experimental." tone="ok" />
+            <ViberStatusCard icon={<Monitor size={18} />} title="Browser PoC проверен" text="account.viber.com открывает Viber Out, а не полноценный web-мессенджер." tone="warn" />
+            <ViberStatusCard icon={<FlaskConical size={18} />} title="Следующий gate" text="Нужен PoC через Viber Desktop Linux/AppImage под Xvfb или Wine." tone="info" />
+          </div>
+
+          <div style={{ borderRadius: 9, background: "#f8fbfd", border: "1px solid #dbe3ea", padding: 14, display: "grid", gap: 10 }}>
+            <ViberMilestone done label="ТЗ Viber user-client" detail="docs/engineering/MESSENGER_VIBER_USER_CLIENT_TZ.md" />
+            <ViberMilestone done label="Изолированный worker" detail="apps/viber-worker, порт 8091, persistent profile volume" />
+            <ViberMilestone done label="Проверка на prod" detail="health/login/status endpoints отвечают" />
+            <ViberMilestone label="Чаты и сообщения" detail="ждут стабильный Viber Desktop target; текущий browser target не даёт messenger UI" />
+            <ViberMilestone label="Отправка и вложения" detail="будут подключены после подтверждения чтения чатов" />
+          </div>
+        </section>
+      </div>
+    </main>
+  );
+}
+
+function ViberStatusCard({ icon, title, text, tone }: { icon: ReactNode; title: string; text: string; tone: "ok" | "warn" | "info" }) {
+  const colors = tone === "ok"
+    ? { bg: C.okBg, brd: C.ok, tx: C.ok }
+    : tone === "warn"
+      ? { bg: C.warnBg, brd: C.warnBrd, tx: C.warnTx }
+      : { bg: "#eef6ff", brd: "#bfdbfe", tx: "#2563eb" };
+  return (
+    <div style={{ minHeight: 126, borderRadius: 9, border: `1px solid ${colors.brd}`, background: colors.bg, padding: 14, display: "grid", alignContent: "start", gap: 9 }}>
+      <div style={{ width: 34, height: 34, borderRadius: 17, background: "#ffffff", color: colors.tx, display: "grid", placeItems: "center" }}>{icon}</div>
+      <div style={{ color: C.text, fontSize: 14, fontWeight: 750 }}>{title}</div>
+      <div style={{ color: C.text2, fontSize: 12.5, lineHeight: 1.45 }}>{text}</div>
+    </div>
+  );
+}
+
+function ViberMilestone({ done, label, detail }: { done?: boolean; label: string; detail: string }) {
+  return (
+    <div style={{ display: "flex", alignItems: "flex-start", gap: 10, color: C.text }}>
+      <span style={{ width: 20, height: 20, borderRadius: 10, display: "grid", placeItems: "center", flexShrink: 0, marginTop: 1, background: done ? C.okBg : "#eef2f7", color: done ? C.ok : "#64748b" }}>
+        {done ? <Check size={13} /> : <Loader2 size={12} />}
+      </span>
+      <span style={{ minWidth: 0 }}>
+        <span style={{ display: "block", fontSize: 13, fontWeight: 750 }}>{label}</span>
+        <span style={{ display: "block", marginTop: 2, fontSize: 12, color: C.text2, overflowWrap: "anywhere" }}>{detail}</span>
+      </span>
     </div>
   );
 }
