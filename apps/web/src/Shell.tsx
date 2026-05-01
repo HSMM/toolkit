@@ -40,6 +40,7 @@ import {
 } from "@/api/meetings";
 import { MeetingRoom } from "@/MeetingRoom";
 import { useAdminUsers } from "@/api/admin";
+import { useColleagues } from "@/api/colleagues";
 import {
   useModuleAccess, useUpdateModuleAccess,
   useSmtpConfig, useUpdateSmtpConfig,
@@ -3227,7 +3228,7 @@ function ModuleAccessPage() {
     { key: "vcs",           label: "Видеоконференции", desc: "Создание и проведение встреч (LiveKit)", Icon: Video },
     { key: "transcription", label: "Транскрибация",    desc: "Расшифровка звонков и встреч (GigaAM)",  Icon: FileText },
     { key: "messengers",    label: "Мессенджеры",      desc: "WhatsApp / Telegram / внутренний чат",   Icon: MessageSquare },
-    { key: "contacts",      label: "Контакты",         desc: "Справочник коллег и контрагентов",       Icon: Users },
+    { key: "contacts",      label: "Коллеги",          desc: "Пользователи, которые входили в Toolkit", Icon: Users },
     { key: "helpdesk",      label: "Хелпдэск",         desc: "Тикеты для ИТ / АХО / HR",               Icon: HelpCircle },
   ];
 
@@ -3797,8 +3798,111 @@ function ProfileModal({ onClose, me }: { onClose: () => void; me: MockUser }) {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
-// STUB pages (Мессенджеры / Контакты / Хелпдэск — пока не реализованы)
+// Коллеги — только пользователи, которые уже входили в Toolkit.
 // ──────────────────────────────────────────────────────────────────────────
+
+function ColleaguesPage() {
+  const q = useColleagues();
+  const [search, setSearch] = useState("");
+  const items = q.data ?? [];
+  const needle = search.trim().toLowerCase();
+  const visible = needle
+    ? items.filter((u) =>
+      u.full_name.toLowerCase().includes(needle) ||
+      u.email.toLowerCase().includes(needle) ||
+      (u.department || "").toLowerCase().includes(needle) ||
+      (u.position || "").toLowerCase().includes(needle) ||
+      (u.extension || "").toLowerCase().includes(needle))
+    : items;
+
+  return (
+    <div style={{ minHeight: "100%", background: C.bg2 }}>
+      <PgHdr
+        title="Коллеги"
+        sub={q.isLoading ? "Загрузка…" : `${items.length} ${items.length === 1 ? "пользователь" : "пользователей"} с входом в Toolkit`}
+      />
+      <div style={{ padding: 24, display: "grid", gap: 16 }}>
+        <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
+          <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 10 }}>
+            <Search size={15} color={C.text3} />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Поиск по имени, email, отделу, должности или номеру…"
+              style={{ flex: 1, border: "none", outline: "none", fontSize: 14, color: C.text, background: "transparent", fontFamily: "inherit" }}
+            />
+          </div>
+
+          {q.isError ? (
+            <Empty Icon={Users} title="Не удалось загрузить коллег" sub={q.error instanceof Error ? q.error.message : String(q.error)} />
+          ) : q.isLoading ? (
+            <div style={{ padding: 42, textAlign: "center", color: C.text3, fontSize: 13 }}>Загрузка…</div>
+          ) : visible.length === 0 ? (
+            <Empty
+              Icon={Users}
+              title={search ? "Никого не найдено" : "Коллег пока нет"}
+              sub={search ? "Попробуйте изменить запрос" : "Здесь появятся пользователи после первого входа в Toolkit через Bitrix24."}
+            />
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12, padding: 16 }}>
+              {visible.map((u) => {
+                const name = u.full_name || u.email;
+                const initials = initialsOf(name);
+                return (
+                  <div key={u.id} style={{ border: `1px solid ${C.border}`, borderRadius: 8, background: "#ffffff", padding: 14, display: "grid", gap: 12, minWidth: 0 }}>
+                    <div style={{ display: "flex", gap: 11, alignItems: "center", minWidth: 0 }}>
+                      <Av i={initials} sz={42} src={u.avatar_url} />
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 14.5, fontWeight: 650, color: C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{name}</div>
+                        <div style={{ marginTop: 2, fontSize: 12, color: C.text3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{u.email}</div>
+                      </div>
+                    </div>
+                    <div style={{ display: "grid", gap: 7, fontSize: 12.5, color: C.text2 }}>
+                      <ColleagueLine label="Отдел" value={u.department || "—"} />
+                      <ColleagueLine label="Должность" value={u.position || "—"} />
+                      <ColleagueLine label="Телефон" value={u.phone || "—"} mono />
+                      <ColleagueLine label="Внутренний" value={u.extension ? `#${u.extension}` : "—"} mono />
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, paddingTop: 2 }}>
+                      <Bdg v="ok">Входил в Toolkit</Bdg>
+                      <span style={{ color: C.text3, fontSize: 11 }}>{fmtIsoRel(u.last_login_at)}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ColleagueLine({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "86px minmax(0, 1fr)", gap: 8 }}>
+      <span style={{ color: C.text3 }}>{label}</span>
+      <span style={{ color: C.text2, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: mono ? "'DM Mono', monospace" : "inherit" }}>{value}</span>
+    </div>
+  );
+}
+
+function initialsOf(value: string) {
+  const parts = value.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0]!.slice(0, 2).toUpperCase();
+  return `${parts[0]![0] || ""}${parts[1]![0] || ""}`.toUpperCase();
+}
+
+function fmtIsoRel(iso?: string) {
+  if (!iso) return "—";
+  const date = new Date(iso);
+  const diff = Date.now() - date.getTime();
+  if (diff < 60_000) return "только что";
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} мин. назад`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} ч. назад`;
+  return date.toLocaleDateString("ru-RU");
+}
 
 function StubPage({ page }: { page: "messengers" | "contacts" | "helpdesk" }) {
   const M = {
@@ -3829,7 +3933,7 @@ const NAV: NavItemDef[] = [
   { id: "vcs",           label: "Конференции",   Icon: Video },
   { id: "transcription", label: "Транскрибация", Icon: FileText },
   { id: "messengers",    label: "Мессенджеры",   Icon: MessageSquare },
-  { id: "contacts",      label: "Контакты",      Icon: Users,         stub: true },
+  { id: "contacts",      label: "Коллеги",       Icon: Users },
   { id: "helpdesk",      label: "Хелпдэск",      Icon: HelpCircle,    stub: true },
 ];
 // Админ-меню: только пользователям с role=admin. Мониторинг АТС переехал
@@ -3947,9 +4051,10 @@ function ShellInner({ me }: { me: Me }) {
         {allowedPage === "vcs"             && <VcsPage me={me} />}
         {allowedPage === "transcription"   && <TranscriptionPage meetingFilter={transcriptMeetingFilter} />}
         {allowedPage === "messengers"      && <MessengerPage />}
+        {allowedPage === "contacts"        && <ColleaguesPage />}
         {isAdmin && allowedPage === "monitoring" && <AnalyticsPage />}
         {isAdmin && allowedPage === "settings"   && <SystemSettingsPage />}
-        {(["contacts", "helpdesk"] as const).includes(allowedPage as any) && <StubPage page={allowedPage as "contacts" | "helpdesk"} />}
+        {allowedPage === "helpdesk" && <StubPage page="helpdesk" />}
       </main>
 
       <SoftphoneWidget />
