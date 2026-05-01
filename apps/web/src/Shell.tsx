@@ -40,7 +40,7 @@ import {
 } from "@/api/meetings";
 import { MeetingRoom } from "@/MeetingRoom";
 import { useAdminUsers } from "@/api/admin";
-import { useColleagues } from "@/api/colleagues";
+import { useColleagues, type Colleague } from "@/api/colleagues";
 import {
   useModuleAccess, useUpdateModuleAccess,
   useSmtpConfig, useUpdateSmtpConfig,
@@ -3804,6 +3804,7 @@ function ProfileModal({ onClose, me }: { onClose: () => void; me: MockUser }) {
 function ColleaguesPage() {
   const q = useColleagues();
   const [search, setSearch] = useState("");
+  const [selected, setSelected] = useState<Colleague | null>(null);
   const items = q.data ?? [];
   const needle = search.trim().toLowerCase();
   const visible = needle
@@ -3849,7 +3850,14 @@ function ColleaguesPage() {
                 const name = u.full_name || u.email;
                 const initials = initialsOf(name);
                 return (
-                  <div key={u.id} style={{ border: `1px solid ${C.border}`, borderRadius: 8, background: "#ffffff", padding: 14, display: "grid", gap: 12, minWidth: 0 }}>
+                  <button
+                    key={u.id}
+                    type="button"
+                    onClick={() => setSelected(u)}
+                    style={{ border: `1px solid ${C.border}`, borderRadius: 8, background: "#ffffff", padding: 14, display: "grid", gap: 12, minWidth: 0, textAlign: "left", cursor: "pointer", fontFamily: "inherit", boxShadow: "none" }}
+                    onMouseEnter={(e) => { e.currentTarget.style.borderColor = C.acc; e.currentTarget.style.boxShadow = "0 8px 22px rgba(15, 23, 42, 0.08)"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.boxShadow = "none"; }}
+                  >
                     <div style={{ display: "flex", gap: 11, alignItems: "center", minWidth: 0 }}>
                       <Av i={initials} sz={42} src={u.avatar_url} />
                       <div style={{ minWidth: 0 }}>
@@ -3867,11 +3875,74 @@ function ColleaguesPage() {
                       <Bdg v="ok">Входил в Toolkit</Bdg>
                       <span style={{ color: C.text3, fontSize: 11 }}>{fmtIsoRel(u.last_login_at)}</span>
                     </div>
-                  </div>
+                  </button>
                 );
               })}
             </div>
           )}
+        </div>
+      </div>
+      {selected && <ColleagueProfileModal colleague={selected} onClose={() => setSelected(null)} />}
+    </div>
+  );
+}
+
+function ColleagueProfileModal({ colleague, onClose }: { colleague: Colleague; onClose: () => void }) {
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", h);
+    return () => document.removeEventListener("keydown", h);
+  }, [onClose]);
+
+  const name = colleague.full_name || colleague.email;
+  const initials = initialsOf(name);
+  const Row = ({ label, value, mono }: { label: string; value: ReactNode; mono?: boolean }) => (
+    <div style={{ display: "grid", gridTemplateColumns: "150px minmax(0, 1fr)", gap: 12, padding: "11px 0", borderBottom: `1px solid ${C.border}` }}>
+      <span style={{ color: C.text2, fontSize: 12.5 }}>{label}</span>
+      <span style={{ color: C.text, fontSize: 13.5, fontWeight: 500, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: mono ? "'DM Mono', monospace" : "inherit" }}>{value || "—"}</span>
+    </div>
+  );
+
+  return (
+    <div onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 220, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "40px 20px", overflowY: "auto" }}>
+      <div style={{ background: C.bg2, borderRadius: 12, width: "100%", maxWidth: 620, boxShadow: "0 20px 50px rgba(0,0,0,0.2)", display: "flex", flexDirection: "column", maxHeight: "calc(100vh - 80px)", overflow: "hidden", border: `1px solid ${C.border}` }}>
+        <div style={{ padding: "16px 22px", borderBottom: `1px solid ${C.border}`, background: C.card, display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
+          <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: C.text }}>Профиль коллеги</h2>
+          <button onClick={onClose} style={{ width: 32, height: 32, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", background: "transparent", color: C.text2, cursor: "pointer", border: "none" }}>
+            <X size={18} />
+          </button>
+        </div>
+
+        <div style={{ overflowY: "auto", padding: "20px 22px" }}>
+          <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 18, marginBottom: 14, display: "flex", alignItems: "center", gap: 16 }}>
+            <Av i={initials} sz={64} src={colleague.avatar_url} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <h3 style={{ margin: "0 0 6px", fontSize: 18, fontWeight: 650, color: C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{name}</h3>
+              {colleague.position && <div style={{ fontSize: 13, color: C.text2, marginBottom: 7, fontWeight: 500 }}>{colleague.position}</div>}
+              <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap", alignItems: "center" }}>
+                {colleague.department && <Bdg>{colleague.department}</Bdg>}
+                <Bdg v="ok">Входил в Toolkit</Bdg>
+              </div>
+              <div style={{ fontSize: 13, color: C.text2, display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+                <Mail size={13} />
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{colleague.email}</span>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, marginBottom: 14, overflow: "hidden" }}>
+            <div style={{ padding: "12px 18px", borderBottom: `1px solid ${C.border}`, fontSize: 13.5, fontWeight: 600, color: C.text }}>Данные профиля</div>
+            <div style={{ padding: "2px 18px 12px" }}>
+              <Row label="Email" value={colleague.email} />
+              <Row label="Bitrix24 ID" value={colleague.bitrix_id || "—"} mono />
+              <Row label="Отдел" value={colleague.department || "—"} />
+              <Row label="Должность" value={colleague.position || "—"} />
+              <Row label="Телефон" value={colleague.phone || "—"} mono />
+              <Row label="Внутренний номер" value={colleague.extension ? `#${colleague.extension}` : "—"} mono />
+              <Row label="Последний вход" value={fmtIsoRel(colleague.last_login_at)} />
+            </div>
+          </div>
         </div>
       </div>
     </div>
