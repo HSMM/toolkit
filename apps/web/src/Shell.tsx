@@ -135,7 +135,7 @@ function meAsMockUser(me: Me): MockUser {
 
 type Notif = {
   id: number; ts: number; read: boolean;
-  type: "meeting" | "call" | "miss" | "transcription" | "request" | "system";
+  type: "meeting" | "call" | "miss" | "transcription" | "request" | "messenger" | "system";
   title: string; desc?: string;
 };
 
@@ -314,6 +314,7 @@ const NOTIF_META: Record<Notif["type"], { Icon: LucideIcon; col: string; bg: str
   miss:          { Icon: PhoneMissed,  col: C.err,   bg: C.errBg },
   transcription: { Icon: FileText,     col: C.purp,  bg: C.purpBg },
   request:       { Icon: Hash,         col: C.warn,  bg: C.warnBg },
+  messenger:     { Icon: MessageSquare, col: C.ok,   bg: C.okBg },
   system:        { Icon: Bell,         col: C.text2, bg: C.bg3 },
 };
 
@@ -3952,11 +3953,54 @@ function ShellInner({ me }: { me: Me }) {
       </main>
 
       <SoftphoneWidget />
+      <MessengerNotificationsListener />
       {isAdmin && <AdminPhoneRequestsListener />}
 
       {profileOpen && <ProfileModal me={meAsMock} onClose={() => setProfileOpen(false)} />}
     </div>
   );
+}
+
+type MessengerWsPayload = {
+  provider?: "telegram" | "viber" | string;
+  chat_title?: string;
+  provider_chat_id?: string;
+  message?: {
+    direction?: "in" | "out" | string;
+    sender_name?: string;
+    text?: string;
+    attachments?: Array<{ kind?: string; file_name?: string }>;
+  };
+};
+
+function MessengerNotificationsListener() {
+  const { push } = useApp();
+  const shownRef = useRef<Set<string>>(new Set());
+
+  useWsEvent<MessengerWsPayload>("messenger.message.created", (e) => {
+    const p = e.payload;
+    const message = p?.message;
+    if (!p || !message || message.direction === "out") return;
+
+    const provider = p.provider === "viber" ? "Viber" : "Telegram";
+    const sender = message.sender_name || p.chat_title || provider;
+    const body = message.text?.trim()
+      || (message.attachments?.length ? "Вложение" : "Новое сообщение");
+    const key = `${p.provider || "telegram"}:${p.provider_chat_id || ""}:${sender}:${body}`;
+    if (shownRef.current.has(key)) return;
+    shownRef.current.add(key);
+    if (shownRef.current.size > 80) {
+      shownRef.current = new Set(Array.from(shownRef.current).slice(-40));
+    }
+
+    push({
+      type: "messenger",
+      title: `${provider}: ${sender}`,
+      desc: body,
+    });
+  });
+
+  return null;
 }
 
 // AdminPhoneRequestsListener — невидимый компонент, монтируется только для

@@ -906,12 +906,13 @@ func (h *Handlers) telegramWorkerUpdate(w http.ResponseWriter, r *http.Request) 
 
 	var userID uuid.UUID
 	var chatID uuid.UUID
+	var chatTitle string
 	err := h.db.QueryRow(r.Context(), `
-		SELECT ma.user_id, mc.id
+		SELECT ma.user_id, mc.id, mc.title
 		FROM messenger_account ma
 		JOIN messenger_chat mc ON mc.account_id=ma.id
 		WHERE ma.id=$1 AND mc.provider_chat_id=$2 AND ma.provider=$3
-	`, in.AccountID, in.ProviderChatID, providerTelegram).Scan(&userID, &chatID)
+	`, in.AccountID, in.ProviderChatID, providerTelegram).Scan(&userID, &chatID, &chatTitle)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			w.WriteHeader(http.StatusNoContent)
@@ -928,7 +929,9 @@ func (h *Handlers) telegramWorkerUpdate(w http.ResponseWriter, r *http.Request) 
 	}
 	if len(items) > 0 && h.hub != nil {
 		payload, _ := json.Marshal(map[string]any{
+			"provider":         providerTelegram,
 			"chat_id":          chatID,
+			"chat_title":       chatTitle,
 			"account_id":       in.AccountID,
 			"provider_chat_id": in.ProviderChatID,
 			"message":          items[0],

@@ -109,24 +109,9 @@ export function MessengerPage() {
           </div>
           <div style={{ fontSize: 13, color: C.text2 }}>Telegram MTProto и экспериментальный Viber user-client внутри Toolkit</div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ display: "inline-flex", padding: 3, borderRadius: 9, background: "#edf3f7", border: "1px solid #dbe3ea" }}>
-            <ProviderTab active={provider === "telegram"} onClick={() => setProvider("telegram")}>Telegram</ProviderTab>
-            <ProviderTab active={provider === "viber"} onClick={() => setProvider("viber")}>Viber PoC</ProviderTab>
-          </div>
-          {provider === "telegram" && (
-            <button
-              onClick={() => {
-                void status.refetch();
-                if (connected) syncChats.mutate();
-                else void chats.refetch();
-              }}
-              disabled={syncChats.isPending}
-              style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "9px 12px", borderRadius: 8, border: "1px solid #dbe3ea", background: "#ffffff", color: "#52616f", fontWeight: 600 }}
-            >
-              <RefreshCw size={14} className={syncChats.isPending ? "lk-spin" : undefined} />{syncChats.isPending ? "Синхронизация…" : "Обновить"}
-            </button>
-          )}
+        <div style={{ display: "inline-flex", padding: 3, borderRadius: 9, background: "#edf3f7", border: "1px solid #dbe3ea" }}>
+          <ProviderTab active={provider === "telegram"} onClick={() => setProvider("telegram")}>Telegram</ProviderTab>
+          <ProviderTab active={provider === "viber"} onClick={() => setProvider("viber")}>Viber PoC</ProviderTab>
         </div>
       </div>
 
@@ -177,7 +162,7 @@ export function MessengerPage() {
             <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
               {allChats.length === 0 ? (
                 <div style={{ padding: 18, color: C.text2, fontSize: 13, lineHeight: 1.55 }}>
-                  Чаты пока не синхронизированы. Нажмите «Обновить», чтобы подтянуть личные чаты и группы из Telegram.
+                  Чаты пока не синхронизированы. Telegram worker подтянет личные чаты и группы автоматически.
                   {syncChats.isError && (
                     <div style={{ marginTop: 10, color: C.err }}>
                       Не удалось синхронизировать: {syncChats.error instanceof Error ? syncChats.error.message : String(syncChats.error)}
@@ -234,7 +219,6 @@ export function MessengerPage() {
             loading={messages.isLoading || syncMessages.isPending}
             error={messages.error || syncMessages.error}
             messages={messages.data?.items ?? []}
-            onRefresh={() => selectedChatId && syncMessages.mutate(selectedChatId)}
             onSend={(text, files) => selectedChatId && sendMessage.mutate({ chatId: selectedChatId, text, files })}
             sending={sendMessage.isPending}
             sendError={sendMessage.error}
@@ -417,7 +401,6 @@ function ChatPanel({
   loading,
   error,
   messages,
-  onRefresh,
   onSend,
   sending,
   sendError,
@@ -427,7 +410,6 @@ function ChatPanel({
   loading: boolean;
   error: unknown;
   messages: TelegramMessage[];
-  onRefresh: () => void;
   onSend: (text: string, files: File[]) => void;
   sending: boolean;
   sendError: unknown;
@@ -478,13 +460,6 @@ function ChatPanel({
             <div style={{ marginTop: 2, fontSize: 12, color: "#6b7a88" }}>{chat.type === "group" ? "Группа" : "Личный чат"}</div>
           </div>
         </div>
-        <button
-          onClick={onRefresh}
-          disabled={loading}
-          style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "8px 11px", borderRadius: 8, border: "1px solid #dbe3ea", background: "#ffffff", color: "#52616f", fontWeight: 600 }}
-        >
-          <RefreshCw size={14} className={loading ? "lk-spin" : undefined} />Обновить
-        </button>
       </div>
       <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "18px min(7vw, 82px)", display: "flex", flexDirection: "column", gap: 7 }}>
         {error ? (
