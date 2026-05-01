@@ -17,10 +17,10 @@ type Config struct {
 	MigrationsPath string
 
 	// Auth
-	JWTSecret              string
-	BaseURL                string   // public origin, e.g. https://toolkit.example.com
-	BootstrapAdmins        []string // emails from TOOLKIT_BOOTSTRAP_ADMINS
-	AllowedCORSOrigins     []string // for browser SPA origins
+	JWTSecret          string
+	BaseURL            string   // public origin, e.g. https://toolkit.example.com
+	BootstrapAdmins    []string // emails from TOOLKIT_BOOTSTRAP_ADMINS
+	AllowedCORSOrigins []string // for browser SPA origins
 
 	// Bitrix24 OAuth (local app)
 	BitrixPortalURL    string
@@ -39,6 +39,7 @@ type Config struct {
 	TelegramSyncEnabled          bool
 	TelegramRetentionDays        int
 	TelegramWorkerURL            string
+	ViberWorkerURL               string
 
 	GigaAMAPIURL          string
 	GigaAMAPIToken        string
@@ -79,53 +80,74 @@ type Config struct {
 
 func Load() (*Config, error) {
 	cfg := &Config{
-		Env:                getenv("TOOLKIT_ENV", "dev"),
-		MigrationsPath:     getenv("MIGRATIONS_PATH", "file:///app/migrations"),
-		BaseURL:            getenv("TOOLKIT_BASE_URL", "http://localhost:8080"),
-		BootstrapAdmins:    splitCSV(getenv("TOOLKIT_BOOTSTRAP_ADMINS", "")),
-		AllowedCORSOrigins: splitCSV(getenv("TOOLKIT_CORS_ORIGINS", "*")),
-		BitrixPortalURL:    getenv("BITRIX_PORTAL_URL", ""),
-		BitrixClientID:     getenv("BITRIX_CLIENT_ID", ""),
-		BitrixClientSecret: getenv("BITRIX_CLIENT_SECRET", ""),
-		BitrixAppToken:     getenv("BITRIX_APP_TOKEN", ""),
-		FreePBXWSSURL:      getenv("FREEPBX_WSS_URL", ""),
-		FreePBXExtension:   getenv("FREEPBX_EXTENSION", ""),
-		FreePBXExtPwd:      getenv("FREEPBX_EXTENSION_PASSWORD", ""),
+		Env:                          getenv("TOOLKIT_ENV", "dev"),
+		MigrationsPath:               getenv("MIGRATIONS_PATH", "file:///app/migrations"),
+		BaseURL:                      getenv("TOOLKIT_BASE_URL", "http://localhost:8080"),
+		BootstrapAdmins:              splitCSV(getenv("TOOLKIT_BOOTSTRAP_ADMINS", "")),
+		AllowedCORSOrigins:           splitCSV(getenv("TOOLKIT_CORS_ORIGINS", "*")),
+		BitrixPortalURL:              getenv("BITRIX_PORTAL_URL", ""),
+		BitrixClientID:               getenv("BITRIX_CLIENT_ID", ""),
+		BitrixClientSecret:           getenv("BITRIX_CLIENT_SECRET", ""),
+		BitrixAppToken:               getenv("BITRIX_APP_TOKEN", ""),
+		FreePBXWSSURL:                getenv("FREEPBX_WSS_URL", ""),
+		FreePBXExtension:             getenv("FREEPBX_EXTENSION", ""),
+		FreePBXExtPwd:                getenv("FREEPBX_EXTENSION_PASSWORD", ""),
 		TelegramAPIHash:              getenv("TELEGRAM_API_HASH", ""),
 		TelegramSessionEncryptionKey: getenv("TELEGRAM_SESSION_ENCRYPTION_KEY", ""),
 		TelegramSyncEnabled:          getenv("TELEGRAM_SYNC_ENABLED", "true") == "true",
 		TelegramWorkerURL:            getenv("TELEGRAM_WORKER_URL", "http://telegram-worker:8090"),
-		GigaAMAPIURL:       getenv("GIGAAM_API_URL", ""),
-		GigaAMAPIToken:     getenv("GIGAAM_API_TOKEN", ""),
-		LiveKitAPIKey:    getenv("LIVEKIT_API_KEY", ""),
-		LiveKitAPISecret: getenv("LIVEKIT_API_SECRET", ""),
-		LiveKitURL:       getenv("LIVEKIT_URL", "http://livekit:7880"),
-		LiveKitPublicWS:  getenv("LIVEKIT_PUBLIC_WS_URL", ""),
-		MinioEndpoint:         getenv("MINIO_ENDPOINT", "minio:9000"),
-		MinioAccessKey:        getenv("MINIO_ROOT_USER", ""),
-		MinioSecretKey:        getenv("MINIO_ROOT_PASSWORD", ""),
-		MinioRegion:           getenv("MINIO_REGION", "us-east-1"),
-		MinioBucketRecordings: getenv("MINIO_BUCKET_RECORDINGS", "recordings"),
-		MinioBucketReports:    getenv("MINIO_BUCKET_REPORTS", "reports"),
-		MinioBucketBackups:    getenv("MINIO_BUCKET_BACKUPS", "backups"),
-		MinioUseSSL:           getenv("MINIO_USE_SSL", "") == "true",
-		SMTPHost:           getenv("SMTP_HOST", ""),
-		SMTPUser:           getenv("SMTP_USER", ""),
-		SMTPPassword:       getenv("SMTP_PASSWORD", ""),
-		SMTPFrom:           getenv("SMTP_FROM", ""),
+		ViberWorkerURL:               getenv("VIBER_WORKER_URL", "http://viber-worker:8091"),
+		GigaAMAPIURL:                 getenv("GIGAAM_API_URL", ""),
+		GigaAMAPIToken:               getenv("GIGAAM_API_TOKEN", ""),
+		LiveKitAPIKey:                getenv("LIVEKIT_API_KEY", ""),
+		LiveKitAPISecret:             getenv("LIVEKIT_API_SECRET", ""),
+		LiveKitURL:                   getenv("LIVEKIT_URL", "http://livekit:7880"),
+		LiveKitPublicWS:              getenv("LIVEKIT_PUBLIC_WS_URL", ""),
+		MinioEndpoint:                getenv("MINIO_ENDPOINT", "minio:9000"),
+		MinioAccessKey:               getenv("MINIO_ROOT_USER", ""),
+		MinioSecretKey:               getenv("MINIO_ROOT_PASSWORD", ""),
+		MinioRegion:                  getenv("MINIO_REGION", "us-east-1"),
+		MinioBucketRecordings:        getenv("MINIO_BUCKET_RECORDINGS", "recordings"),
+		MinioBucketReports:           getenv("MINIO_BUCKET_REPORTS", "reports"),
+		MinioBucketBackups:           getenv("MINIO_BUCKET_BACKUPS", "backups"),
+		MinioUseSSL:                  getenv("MINIO_USE_SSL", "") == "true",
+		SMTPHost:                     getenv("SMTP_HOST", ""),
+		SMTPUser:                     getenv("SMTP_USER", ""),
+		SMTPPassword:                 getenv("SMTP_PASSWORD", ""),
+		SMTPFrom:                     getenv("SMTP_FROM", ""),
 	}
 
 	for _, fn := range []func() error{
 		func() error { var err error; cfg.HTTPPort, err = intEnv("HTTP_PORT", 8080); return err },
 		func() error { var err error; cfg.SMTPPort, err = intEnv("SMTP_PORT", 587); return err },
 		func() error { var err error; cfg.WorkerConcurrency, err = intEnv("WORKER_CONCURRENCY", 4); return err },
-		func() error { var err error; cfg.GigaAMPollInterval, err = intEnv("GIGAAM_POLL_INTERVAL_SECONDS", 5); return err },
+		func() error {
+			var err error
+			cfg.GigaAMPollInterval, err = intEnv("GIGAAM_POLL_INTERVAL_SECONDS", 5)
+			return err
+		},
 		func() error { var err error; cfg.GigaAMMaxRetries, err = intEnv("GIGAAM_MAX_RETRIES", 3); return err },
-		func() error { var err error; cfg.GigaAMConcurrentLimit, err = intEnv("GIGAAM_CONCURRENT_LIMIT", 5); return err },
+		func() error {
+			var err error
+			cfg.GigaAMConcurrentLimit, err = intEnv("GIGAAM_CONCURRENT_LIMIT", 5)
+			return err
+		},
 		func() error { var err error; cfg.TelegramAPIID, err = intEnv("TELEGRAM_API_ID", 0); return err },
-		func() error { var err error; cfg.TelegramRetentionDays, err = intEnv("TELEGRAM_RETENTION_DAYS", 180); return err },
-		func() error { var err error; cfg.RateLimitGlobalPerMin, err = intEnv("RATELIMIT_GLOBAL_PER_MIN", 600); return err },
-		func() error { var err error; cfg.RateLimitUserPerMin, err = intEnv("RATELIMIT_USER_PER_MIN", 600); return err },
+		func() error {
+			var err error
+			cfg.TelegramRetentionDays, err = intEnv("TELEGRAM_RETENTION_DAYS", 180)
+			return err
+		},
+		func() error {
+			var err error
+			cfg.RateLimitGlobalPerMin, err = intEnv("RATELIMIT_GLOBAL_PER_MIN", 600)
+			return err
+		},
+		func() error {
+			var err error
+			cfg.RateLimitUserPerMin, err = intEnv("RATELIMIT_USER_PER_MIN", 600)
+			return err
+		},
 	} {
 		if err := fn(); err != nil {
 			return nil, err

@@ -61,6 +61,7 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 		TelegramSyncEnabled:          cfg.TelegramSyncEnabled,
 		TelegramRetentionDays:        cfg.TelegramRetentionDays,
 		TelegramWorkerURL:            cfg.TelegramWorkerURL,
+		ViberWorkerURL:               cfg.ViberWorkerURL,
 	}, hub)
 
 	// LiveKit + meetings.

@@ -39,6 +39,7 @@ type Config struct {
 	TelegramSyncEnabled          bool
 	TelegramRetentionDays        int
 	TelegramWorkerURL            string
+	ViberWorkerURL               string
 }
 
 type Handlers struct {
@@ -71,6 +72,15 @@ func (h *Handlers) Routes() http.Handler {
 	r.Get("/telegram/chats/{chatID}/messages", h.telegramMessages)
 	r.Post("/telegram/chats/{chatID}/messages", h.telegramSendMessage)
 	r.Get("/telegram/attachments/{attachmentID}/download", h.telegramDownloadAttachment)
+	r.Get("/viber/status", h.viberStatus)
+	r.Post("/viber/auth/start", h.viberLoginStart)
+	r.Get("/viber/auth/{loginID}", h.viberLoginPoll)
+	r.Delete("/viber/session", h.viberDisconnect)
+	r.Post("/viber/sync", h.viberSync)
+	r.Get("/viber/chats", h.viberChats)
+	r.Post("/viber/chats/{chatID}/sync", h.viberChatSync)
+	r.Get("/viber/chats/{chatID}/messages", h.viberMessages)
+	r.Post("/viber/chats/{chatID}/messages", h.viberSendMessage)
 	return r
 }
 
@@ -124,6 +134,37 @@ type chatItem struct {
 type telegramSyncResponse struct {
 	Items    []chatItem `json:"items"`
 	SyncedAt time.Time  `json:"synced_at"`
+}
+
+type viberStatusResponse struct {
+	Configured bool                `json:"configured"`
+	Connected  bool                `json:"connected"`
+	Mode       string              `json:"mode"`
+	Session    *viberSessionStatus `json:"session,omitempty"`
+	Error      string              `json:"error,omitempty"`
+}
+
+type viberSessionStatus struct {
+	Connected  bool       `json:"connected"`
+	Status     string     `json:"status"`
+	AccountID  string     `json:"account_id,omitempty"`
+	ProfileKey string     `json:"profile_key,omitempty"`
+	Title      string     `json:"title,omitempty"`
+	URL        string     `json:"url,omitempty"`
+	Mode       string     `json:"mode,omitempty"`
+	StartedAt  *time.Time `json:"started_at,omitempty"`
+}
+
+type viberLogin struct {
+	LoginID    string `json:"login_id"`
+	Status     string `json:"status"`
+	AccountID  string `json:"account_id"`
+	ProfileKey string `json:"profile_key"`
+	EntryURL   string `json:"entry_url"`
+	QRImage    string `json:"qr_image,omitempty"`
+	Screenshot string `json:"screenshot,omitempty"`
+	ExpiresAt  string `json:"expires_at"`
+	Error      string `json:"error,omitempty"`
 }
 
 type workerSyncChat struct {
@@ -339,6 +380,137 @@ func (h *Handlers) telegramDisconnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handlers) viberStatus(w http.ResponseWriter, r *http.Request) {
+	subj := auth.MustSubject(r.Context())
+	if h.cfg.ViberWorkerURL == "" {
+		writeJSON(w, http.StatusOK, viberStatusResponse{Configured: false, Mode: "disabled"})
+		return
+	}
+	var out viberSessionStatus
+	err := h.workerJSONAt(r.Context(), h.cfg.ViberWorkerURL, http.MethodPost, "/viber/session/status", map[string]any{
+		"account_id": subj.UserID.String(),
+	}, &out)
+	if err != nil {
+		writeJSON(w, http.StatusOK, viberStatusResponse{Configured: true, Connected: false, Mode: "worker", Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, viberStatusResponse{
+		Configured: true,
+		Connected:  out.Connected,
+		Mode:       out.Mode,
+		Session:    &out,
+	})
+}
+
+func (h *Handlers) viberLoginStart(w http.ResponseWriter, r *http.Request) {
+	subj := auth.MustSubject(r.Context())
+	if h.cfg.ViberWorkerURL == "" {
+		writeErr(w, http.StatusServiceUnavailable, "viber_not_configured", "Viber worker не настроен")
+		return
+	}
+	var out viberLogin
+	if err := h.workerJSONAt(r.Context(), h.cfg.ViberWorkerURL, http.MethodPost, "/viber/login/start", map[string]any{
+		"account_id":  subj.UserID.String(),
+		"profile_key": subj.UserID.String(),
+	}, &out); err != nil {
+		writeErr(w, http.StatusBadGateway, "viber_worker_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *Handlers) viberLoginPoll(w http.ResponseWriter, r *http.Request) {
+	if h.cfg.ViberWorkerURL == "" {
+		writeErr(w, http.StatusServiceUnavailable, "viber_not_configured", "Viber worker не настроен")
+		return
+	}
+	loginID := chi.URLParam(r, "loginID")
+	if loginID == "" {
+		writeErr(w, http.StatusBadRequest, "bad_login_id", "login_id обязателен")
+		return
+	}
+	var out viberLogin
+	if err := h.workerJSONAt(r.Context(), h.cfg.ViberWorkerURL, http.MethodGet, "/viber/login/"+loginID, nil, &out); err != nil {
+		writeErr(w, http.StatusBadGateway, "viber_worker_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *Handlers) viberDisconnect(w http.ResponseWriter, r *http.Request) {
+	subj := auth.MustSubject(r.Context())
+	if h.cfg.ViberWorkerURL == "" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	var out map[string]any
+	if err := h.workerJSONAt(r.Context(), h.cfg.ViberWorkerURL, http.MethodPost, "/viber/session/stop", map[string]any{
+		"account_id": subj.UserID.String(),
+	}, &out); err != nil {
+		writeErr(w, http.StatusBadGateway, "viber_worker_failed", err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handlers) viberSync(w http.ResponseWriter, r *http.Request) {
+	subj := auth.MustSubject(r.Context())
+	var out telegramSyncResponse
+	if err := h.workerJSONAt(r.Context(), h.cfg.ViberWorkerURL, http.MethodPost, "/viber/chats/sync", map[string]any{
+		"account_id": subj.UserID.String(),
+	}, &out); err != nil {
+		writeErr(w, http.StatusNotImplemented, "viber_desktop_gate_required", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *Handlers) viberChats(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"items": []chatItem{}, "next_cursor": ""})
+}
+
+func (h *Handlers) viberChatSync(w http.ResponseWriter, r *http.Request) {
+	subj := auth.MustSubject(r.Context())
+	chatID := chi.URLParam(r, "chatID")
+	var out struct {
+		Items      []messageItem `json:"items"`
+		NextCursor string        `json:"next_cursor"`
+	}
+	if err := h.workerJSONAt(r.Context(), h.cfg.ViberWorkerURL, http.MethodPost, "/viber/messages/sync", map[string]any{
+		"account_id": subj.UserID.String(),
+		"chat_id":    chatID,
+	}, &out); err != nil {
+		writeErr(w, http.StatusNotImplemented, "viber_desktop_gate_required", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *Handlers) viberMessages(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"items": []messageItem{}, "next_cursor": ""})
+}
+
+func (h *Handlers) viberSendMessage(w http.ResponseWriter, r *http.Request) {
+	subj := auth.MustSubject(r.Context())
+	chatID := chi.URLParam(r, "chatID")
+	var in struct {
+		Text string `json:"text"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&in)
+	var out struct {
+		Items []messageItem `json:"items"`
+	}
+	if err := h.workerJSONAt(r.Context(), h.cfg.ViberWorkerURL, http.MethodPost, "/viber/messages/send", map[string]any{
+		"account_id": subj.UserID.String(),
+		"chat_id":    chatID,
+		"text":       in.Text,
+	}, &out); err != nil {
+		writeErr(w, http.StatusNotImplemented, "viber_desktop_gate_required", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (h *Handlers) telegramSync(w http.ResponseWriter, r *http.Request) {
@@ -1191,7 +1363,11 @@ func (h *Handlers) saveConfirmedTelegramSession(ctx context.Context, cfg sysset.
 }
 
 func (h *Handlers) workerJSON(ctx context.Context, cfg sysset.TelegramConfig, method, path string, body any, out any) error {
-	url := strings.TrimRight(cfg.WorkerURL, "/") + path
+	return h.workerJSONAt(ctx, cfg.WorkerURL, method, path, body, out)
+}
+
+func (h *Handlers) workerJSONAt(ctx context.Context, baseURL, method, path string, body any, out any) error {
+	url := strings.TrimRight(baseURL, "/") + path
 	var reader io.Reader
 	if body != nil {
 		buf, err := json.Marshal(body)
@@ -1226,6 +1402,9 @@ func (h *Handlers) workerJSON(ctx context.Context, cfg sysset.TelegramConfig, me
 			return fmt.Errorf("%s: %s", payload.Error.Code, payload.Error.Message)
 		}
 		return fmt.Errorf("worker returned HTTP %d", res.StatusCode)
+	}
+	if out == nil {
+		return nil
 	}
 	return json.NewDecoder(res.Body).Decode(out)
 }

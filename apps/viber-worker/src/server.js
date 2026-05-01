@@ -2,6 +2,7 @@ const express = require("express");
 const crypto = require("crypto");
 const fs = require("fs/promises");
 const path = require("path");
+const { spawn } = require("child_process");
 const { chromium } = require("playwright");
 
 const port = Number(process.env.VIBER_WORKER_PORT || "8091");
@@ -10,6 +11,8 @@ const entryUrl = process.env.VIBER_ENTRY_URL || "https://account.viber.com/";
 const loginTtlMs = Number(process.env.VIBER_LOGIN_TTL_MS || "300000");
 const qrSelector = process.env.VIBER_QR_SELECTOR || "";
 const headless = String(process.env.VIBER_HEADLESS || "true") !== "false";
+const clientMode = process.env.VIBER_CLIENT_MODE || "browser";
+const desktopCommand = process.env.VIBER_DESKTOP_COMMAND || "";
 const app = express();
 
 app.use(express.json({ limit: "2mb" }));
@@ -21,7 +24,9 @@ app.get("/healthz", (_req, res) => {
   res.json({
     status: "ok",
     experimental: true,
+    mode: clientMode,
     entry_url: entryUrl,
+    desktop_configured: Boolean(desktopCommand),
     active_logins: logins.size,
     active_sessions: sessions.size,
   });
@@ -48,9 +53,14 @@ app.post("/viber/login/start", async (req, res) => {
 
   try {
     const session = await ensureSession(accountId, profileKey, login.entryUrl);
-    login.screenshot = await screenshotDataURL(session.page);
-    login.qrImage = qrSelector ? await screenshotDataURL(session.page, qrSelector).catch(() => "") : "";
-    login.status = "manual_action_required";
+    if (session.mode === "browser") {
+      login.screenshot = await screenshotDataURL(session.page);
+      login.qrImage = qrSelector ? await screenshotDataURL(session.page, qrSelector).catch(() => "") : "";
+      login.status = "manual_action_required";
+    } else {
+      login.status = "desktop_manual_action_required";
+      login.error = "Viber Desktop process started. QR/screen streaming requires the next noVNC/X11 bridge step.";
+    }
     res.json(publicLogin(login));
   } catch (err) {
     login.status = "error";
@@ -87,14 +97,15 @@ app.post("/viber/session/status", async (req, res) => {
     res.json({ connected: false, status: "stopped" });
     return;
   }
-  const title = await session.page.title().catch(() => "");
+  const title = session.page ? await session.page.title().catch(() => "") : "";
   res.json({
     connected: true,
     status: "running",
     account_id: accountId,
     profile_key: session.profileKey,
-    title,
-    url: session.page.url(),
+    mode: session.mode,
+    title: session.page ? title : "Viber Desktop",
+    url: session.page ? session.page.url() : "",
     started_at: session.startedAt.toISOString(),
   });
 });
@@ -118,12 +129,28 @@ app.post("/viber/updates/start", notImplemented("viber_updates_not_implemented",
 async function ensureSession(accountId, profileKey, url) {
   const existing = sessions.get(accountId);
   if (existing) {
+    if (existing.mode === "desktop") {
+      return existing;
+    }
     if (existing.page.isClosed()) {
       await stopSession(accountId);
     } else {
       await existing.page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 }).catch(() => undefined);
       return existing;
     }
+  }
+
+  if (clientMode === "desktop") {
+    if (!desktopCommand) {
+      const err = new Error("VIBER_CLIENT_MODE=desktop requires VIBER_DESKTOP_COMMAND. Install Viber Desktop runtime and point this command to the launcher.");
+      err.statusCode = 501;
+      throw err;
+    }
+    const child = spawn(desktopCommand, { shell: true, stdio: "ignore", detached: true });
+    child.unref();
+    const session = { accountId, profileKey, mode: "desktop", process: child, startedAt: new Date() };
+    sessions.set(accountId, session);
+    return session;
   }
 
   await fs.mkdir(profileRoot, { recursive: true });
@@ -138,7 +165,7 @@ async function ensureSession(accountId, profileKey, url) {
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
   await page.waitForTimeout(1500);
 
-  const session = { accountId, profileKey, context, page, startedAt: new Date() };
+  const session = { accountId, profileKey, mode: "browser", context, page, startedAt: new Date() };
   sessions.set(accountId, session);
   return session;
 }
@@ -147,7 +174,14 @@ async function stopSession(accountId) {
   const session = sessions.get(accountId);
   if (!session) return;
   sessions.delete(accountId);
-  await session.context.close().catch(() => undefined);
+  if (session.context) await session.context.close().catch(() => undefined);
+  if (session.process) {
+    try {
+      process.kill(-session.process.pid, "SIGTERM");
+    } catch {
+      // already stopped
+    }
+  }
 }
 
 async function screenshotDataURL(page, selector) {
@@ -194,5 +228,5 @@ process.on("SIGTERM", async () => {
 });
 
 app.listen(port, "0.0.0.0", () => {
-  console.log(JSON.stringify({ level: "info", msg: "viber-worker listening", port, entry_url: entryUrl, headless }));
+  console.log(JSON.stringify({ level: "info", msg: "viber-worker listening", port, entry_url: entryUrl, headless, mode: clientMode }));
 });

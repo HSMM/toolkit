@@ -6,14 +6,19 @@ import {
   type TelegramChat,
   type TelegramMessage,
   useDisconnectTelegram,
+  useDisconnectViber,
   useSendTelegramMessage,
   useStartTelegramQrLogin,
+  useStartViberLogin,
   useSyncTelegramChats,
   useSyncTelegramMessages,
+  useSyncViberChats,
   useTelegramChats,
   useTelegramMessages,
   useTelegramQrLogin,
   useTelegramStatus,
+  useViberLogin,
+  useViberStatus,
 } from "@/api/messenger";
 import { C } from "@/styles/tokens";
 import { useWsEvent } from "@/ws/useWs";
@@ -265,37 +270,112 @@ function ProviderTab({ active, onClick, children }: { active: boolean; onClick: 
 }
 
 function ViberPocPanel() {
+  const status = useViberStatus();
+  const startLogin = useStartViberLogin();
+  const disconnect = useDisconnectViber();
+  const syncChats = useSyncViberChats();
+  const [loginId, setLoginId] = useState<string | undefined>();
+  const login = useViberLogin(loginId);
+  const loginData = login.data ?? startLogin.data;
+  const workerError = startLogin.error instanceof Error ? startLogin.error.message : status.data?.error;
+
+  useEffect(() => {
+    if (startLogin.data?.login_id) setLoginId(startLogin.data.login_id);
+  }, [startLogin.data?.login_id]);
+
+  useEffect(() => {
+    if (login.data?.status === "confirmed" || login.data?.status === "manual_action_required" || login.data?.status === "desktop_manual_action_required") {
+      void status.refetch();
+    }
+  }, [login.data?.status, status]);
+
   return (
     <main style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 24 }}>
-      <div style={{ maxWidth: 980, margin: "0 auto", display: "grid", gap: 16 }}>
+      <div style={{ maxWidth: 1040, margin: "0 auto", display: "grid", gridTemplateColumns: "minmax(0, 1.05fr) minmax(320px, 0.95fr)", gap: 16 }}>
         <section style={{ background: "#ffffff", border: "1px solid #dbe3ea", borderRadius: 10, padding: 18, display: "grid", gap: 14 }}>
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
             <div>
               <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 5 }}>
                 <FlaskConical size={20} color={C.warn} />
-                <h2 style={{ margin: 0, fontSize: 18, color: C.text }}>Viber · экспериментальный user-client</h2>
+                <h2 style={{ margin: 0, fontSize: 18, color: C.text }}>Viber · Desktop PoC</h2>
               </div>
               <div style={{ color: C.text2, fontSize: 13, lineHeight: 1.55 }}>
-                PoC worker поднят отдельно от Telegram. Пока это техническая проверка, а не готовый inbox.
+                Пользовательский Viber-клиент запускается через отдельный worker. Telegram при этом не затрагивается.
               </div>
             </div>
             <span style={{ padding: "6px 10px", borderRadius: 999, background: C.warnBg, border: `1px solid ${C.warnBrd}`, color: C.warnTx, fontSize: 12, fontWeight: 750 }}>
-              experimental
+              {status.data?.connected ? "сессия запущена" : "experimental"}
             </span>
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 12 }}>
-            <ViberStatusCard icon={<Check size={18} />} title="Worker запущен" text="Сервис viber-worker доступен в Docker Compose profile viber-experimental." tone="ok" />
-            <ViberStatusCard icon={<Monitor size={18} />} title="Browser PoC проверен" text="account.viber.com открывает Viber Out, а не полноценный web-мессенджер." tone="warn" />
-            <ViberStatusCard icon={<FlaskConical size={18} />} title="Следующий gate" text="Нужен PoC через Viber Desktop Linux/AppImage под Xvfb или Wine." tone="info" />
+            <ViberStatusCard icon={<Check size={18} />} title="Worker" text={status.isLoading ? "Проверяем доступность..." : status.data?.configured ? "Доступен через API Toolkit." : "Не настроен."} tone={status.data?.configured ? "ok" : "warn"} />
+            <ViberStatusCard icon={<Monitor size={18} />} title="Режим" text={status.data?.session?.mode || status.data?.mode || "desktop/browser gate"} tone="info" />
+            <ViberStatusCard icon={<FlaskConical size={18} />} title="Чаты" text="Sync/send endpoints готовы, но чтение DOM ждёт стабильный Desktop target." tone="warn" />
           </div>
 
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
+            <button
+              onClick={() => startLogin.mutate()}
+              disabled={startLogin.isPending}
+              style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "10px 14px", borderRadius: 8, border: "none", background: C.acc, color: "white", fontWeight: 750 }}
+            >
+              {startLogin.isPending ? <Loader2 size={15} className="lk-spin" /> : <Smartphone size={15} />}
+              Подключить Viber
+            </button>
+            <button
+              onClick={() => syncChats.mutate()}
+              disabled={syncChats.isPending || !status.data?.connected}
+              style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "10px 14px", borderRadius: 8, border: "1px solid #dbe3ea", background: "#ffffff", color: status.data?.connected ? "#52616f" : "#94a3b8", fontWeight: 700 }}
+            >
+              <RefreshCw size={15} className={syncChats.isPending ? "lk-spin" : undefined} />
+              Синхронизировать чаты
+            </button>
+            <button
+              onClick={() => disconnect.mutate()}
+              disabled={disconnect.isPending || !status.data?.connected}
+              style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "10px 14px", borderRadius: 8, border: `1px solid ${C.errBrd}`, background: "#ffffff", color: status.data?.connected ? C.err : "#94a3b8", fontWeight: 700 }}
+            >
+              <Unplug size={15} />
+              Отключить Viber
+            </button>
+          </div>
+
+          {(workerError || loginData?.error || syncChats.error) && (
+            <div style={{ borderRadius: 8, border: `1px solid ${C.warnBrd}`, background: C.warnBg, color: C.warnTx, padding: "10px 12px", fontSize: 12.5, lineHeight: 1.5 }}>
+              {syncChats.error instanceof Error ? syncChats.error.message : loginData?.error || workerError}
+            </div>
+          )}
+
           <div style={{ borderRadius: 9, background: "#f8fbfd", border: "1px solid #dbe3ea", padding: 14, display: "grid", gap: 10 }}>
-            <ViberMilestone done label="ТЗ Viber user-client" detail="docs/engineering/MESSENGER_VIBER_USER_CLIENT_TZ.md" />
-            <ViberMilestone done label="Изолированный worker" detail="apps/viber-worker, порт 8091, persistent profile volume" />
-            <ViberMilestone done label="Проверка на prod" detail="health/login/status endpoints отвечают" />
-            <ViberMilestone label="Чаты и сообщения" detail="ждут стабильный Viber Desktop target; текущий browser target не даёт messenger UI" />
-            <ViberMilestone label="Отправка и вложения" detail="будут подключены после подтверждения чтения чатов" />
+            <ViberMilestone done label="Кнопка подключения" detail="Frontend вызывает /api/v1/messenger/viber/auth/start от имени текущего пользователя." />
+            <ViberMilestone done label="Прокси через API" detail="Browser не ходит в worker напрямую; Toolkit API прокидывает account_id = user_id." />
+            <ViberMilestone done={Boolean(status.data?.connected)} label="Сессия worker" detail={status.data?.session?.title || status.data?.session?.url || "После подключения здесь появится статус runtime."} />
+            <ViberMilestone label="Список чатов" detail="Endpoint уже есть; фактическое наполнение зависит от Desktop selectors/noVNC bridge." />
+            <ViberMilestone label="Сообщения и отправка" detail="Контракты готовы, реализация включается после чтения списка чатов." />
+          </div>
+        </section>
+
+        <section style={{ minHeight: 520, background: "#ffffff", border: "1px solid #dbe3ea", borderRadius: 10, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+          <div style={{ padding: "13px 15px", borderBottom: "1px solid #dbe3ea", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+            <div>
+              <div style={{ color: C.text, fontWeight: 800, fontSize: 14 }}>Окно входа Viber</div>
+              <div style={{ color: C.text2, fontSize: 12, marginTop: 2 }}>{loginData?.status || (status.data?.connected ? "running" : "не запущено")}</div>
+            </div>
+            {login.isFetching && <Loader2 size={16} className="lk-spin" color={C.text2} />}
+          </div>
+          <div style={{ flex: 1, minHeight: 0, display: "grid", placeItems: "center", background: "#eef2f7", padding: 14 }}>
+            {loginData?.qr_image ? (
+              <img src={loginData.qr_image} alt="QR-код Viber" style={{ maxWidth: "100%", width: 260, borderRadius: 10, background: "#ffffff", border: "1px solid #dbe3ea" }} />
+            ) : loginData?.screenshot ? (
+              <img src={loginData.screenshot} alt="Окно входа Viber" style={{ maxWidth: "100%", maxHeight: 470, borderRadius: 10, background: "#ffffff", border: "1px solid #dbe3ea", objectFit: "contain" }} />
+            ) : (
+              <div style={{ textAlign: "center", maxWidth: 300, color: C.text2, fontSize: 13, lineHeight: 1.55 }}>
+                <Smartphone size={34} color={C.text3} style={{ marginBottom: 12 }} />
+                <div style={{ color: C.text, fontWeight: 750, marginBottom: 6 }}>Нажмите «Подключить Viber»</div>
+                <div>Здесь появится QR или screenshot runtime-сессии.</div>
+              </div>
+            )}
           </div>
         </section>
       </div>
