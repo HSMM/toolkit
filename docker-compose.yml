@@ -190,6 +190,7 @@ services:
       TELEGRAM_SYNC_ENABLED: ${TELEGRAM_SYNC_ENABLED:-true}
       TELEGRAM_RETENTION_DAYS: ${TELEGRAM_RETENTION_DAYS:-180}
       TELEGRAM_WORKER_URL: http://telegram-worker:8090
+      VIBER_WORKER_URL: ${VIBER_WORKER_URL:-http://viber-worker:8091}
       MINIO_ENDPOINT: minio:9000
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
@@ -222,6 +223,28 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+    networks: [internal]
+    restart: unless-stopped
+
+  viber-worker:
+    build: ./apps/viber-worker
+    environment:
+      VIBER_WORKER_PORT: "8091"
+      VIBER_PROFILE_DIR: /data/profiles
+      VIBER_ENTRY_URL: ${VIBER_ENTRY_URL:-https://account.viber.com/}
+      VIBER_CLIENT_MODE: ${VIBER_CLIENT_MODE:-browser}
+      VIBER_DESKTOP_COMMAND: ${VIBER_DESKTOP_COMMAND:-}
+      VIBER_QR_SELECTOR: ${VIBER_QR_SELECTOR:-}
+      VIBER_HEADLESS: ${VIBER_HEADLESS:-true}
+      VIBER_LOGIN_TTL_MS: ${VIBER_LOGIN_TTL_MS:-300000}
+      VIBER_STAGE: ${VIBER_STAGE:-production}
+      NODE_ENV: production
+    volumes:
+      - viber_profiles:/data/profiles
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    profiles: ["viber-production", "viber-experimental"]
     networks: [internal]
     restart: unless-stopped
 
@@ -400,3 +423,4 @@ networks:
 
 volumes:
   web_dist:
+  viber_profiles:

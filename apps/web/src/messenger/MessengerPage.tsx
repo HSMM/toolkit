@@ -1,18 +1,24 @@
-import { AlertTriangle, Check, Loader2, MessageSquare, RefreshCw, Search, Send, ShieldCheck, Smartphone, Unplug, X } from "lucide-react";
+import { AlertTriangle, Check, Download, FileText, Image as ImageIcon, Loader2, MessageSquare, Monitor, Paperclip, RefreshCw, Search, Send, ShieldCheck, Smartphone, Trash2, Unplug, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
-import { ApiError } from "@/api/client";
+import { ApiError, apiFetch } from "@/api/client";
 import {
   type TelegramChat,
+  type TelegramMessage,
   useDisconnectTelegram,
+  useDisconnectViber,
   useSendTelegramMessage,
   useStartTelegramQrLogin,
+  useStartViberLogin,
   useSyncTelegramChats,
   useSyncTelegramMessages,
+  useSyncViberChats,
   useTelegramChats,
   useTelegramMessages,
   useTelegramQrLogin,
   useTelegramStatus,
+  useViberLogin,
+  useViberStatus,
 } from "@/api/messenger";
 import { C } from "@/styles/tokens";
 import { useWsEvent } from "@/ws/useWs";
@@ -29,6 +35,7 @@ export function MessengerPage() {
   const [loginId, setLoginId] = useState<string | undefined>();
   const [selectedChatId, setSelectedChatId] = useState<string | undefined>();
   const [chatSearch, setChatSearch] = useState("");
+  const [provider, setProvider] = useState<"telegram" | "viber">("telegram");
   const autoSyncStarted = useRef(false);
   const qr = useTelegramQrLogin(loginId);
   const allChats = chats.data?.items ?? [];
@@ -100,22 +107,16 @@ export function MessengerPage() {
             <MessageSquare size={20} color="#229ed9" />
             <h1 style={{ margin: 0, fontSize: 20, fontWeight: 650, color: C.text }}>Мессенджеры</h1>
           </div>
-          <div style={{ fontSize: 13, color: C.text2 }}>Telegram как пользовательский клиент внутри Toolkit</div>
         </div>
-        <button
-          onClick={() => {
-            void status.refetch();
-            if (connected) syncChats.mutate();
-            else void chats.refetch();
-          }}
-          disabled={syncChats.isPending}
-          style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "9px 12px", borderRadius: 8, border: "1px solid #dbe3ea", background: "#ffffff", color: "#52616f", fontWeight: 600 }}
-        >
-          <RefreshCw size={14} className={syncChats.isPending ? "lk-spin" : undefined} />{syncChats.isPending ? "Синхронизация…" : "Обновить"}
-        </button>
+        <div style={{ display: "inline-flex", padding: 3, borderRadius: 9, background: "#edf3f7", border: "1px solid #dbe3ea" }}>
+          <ProviderTab active={provider === "telegram"} onClick={() => setProvider("telegram")}>Telegram</ProviderTab>
+          <ProviderTab active={provider === "viber"} onClick={() => setProvider("viber")}>Viber</ProviderTab>
+        </div>
       </div>
 
-      {status.isLoading ? (
+      {provider === "viber" ? (
+        <ViberPocPanel />
+      ) : status.isLoading ? (
         <Centered><Loader2 size={26} style={{ animation: "lk-pulse 1s infinite" }} />Загружаем Telegram…</Centered>
       ) : status.isError ? (
         <Centered tone="err"><AlertTriangle size={26} />Не удалось загрузить статус Telegram</Centered>
@@ -160,7 +161,7 @@ export function MessengerPage() {
             <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
               {allChats.length === 0 ? (
                 <div style={{ padding: 18, color: C.text2, fontSize: 13, lineHeight: 1.55 }}>
-                  Чаты пока не синхронизированы. Нажмите «Обновить», чтобы подтянуть личные чаты и группы из Telegram.
+                  Чаты пока не синхронизированы. Telegram worker подтянет личные чаты и группы автоматически.
                   {syncChats.isError && (
                     <div style={{ marginTop: 10, color: C.err }}>
                       Не удалось синхронизировать: {syncChats.error instanceof Error ? syncChats.error.message : String(syncChats.error)}
@@ -217,8 +218,7 @@ export function MessengerPage() {
             loading={messages.isLoading || syncMessages.isPending}
             error={messages.error || syncMessages.error}
             messages={messages.data?.items ?? []}
-            onRefresh={() => selectedChatId && syncMessages.mutate(selectedChatId)}
-            onSend={(text) => selectedChatId && sendMessage.mutate({ chatId: selectedChatId, text })}
+            onSend={(text, files) => selectedChatId && sendMessage.mutate({ chatId: selectedChatId, text, files })}
             sending={sendMessage.isPending}
             sendError={sendMessage.error}
             onDisconnect={() => disconnect.mutate()}
@@ -229,12 +229,178 @@ export function MessengerPage() {
   );
 }
 
+function ProviderTab({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        minWidth: 94,
+        padding: "7px 11px",
+        borderRadius: 7,
+        border: "none",
+        background: active ? "#ffffff" : "transparent",
+        color: active ? "#17212b" : "#6b7a88",
+        boxShadow: active ? "0 1px 2px rgba(15, 23, 42, 0.08)" : "none",
+        fontWeight: 700,
+        fontSize: 13,
+        fontFamily: "inherit",
+        cursor: "pointer",
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function ViberPocPanel() {
+  const status = useViberStatus();
+  const startLogin = useStartViberLogin();
+  const disconnect = useDisconnectViber();
+  const syncChats = useSyncViberChats();
+  const [loginId, setLoginId] = useState<string | undefined>();
+  const login = useViberLogin(loginId);
+  const loginData = login.data ?? startLogin.data;
+  const workerError = startLogin.error instanceof Error ? startLogin.error.message : status.data?.error;
+
+  useEffect(() => {
+    if (startLogin.data?.login_id) setLoginId(startLogin.data.login_id);
+  }, [startLogin.data?.login_id]);
+
+  useEffect(() => {
+    if (login.data?.status === "confirmed" || login.data?.status === "manual_action_required" || login.data?.status === "desktop_manual_action_required") {
+      void status.refetch();
+    }
+  }, [login.data?.status, status]);
+
+  return (
+    <main style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 24 }}>
+      <div style={{ maxWidth: 1040, margin: "0 auto", display: "grid", gridTemplateColumns: "minmax(0, 1.05fr) minmax(320px, 0.95fr)", gap: 16 }}>
+        <section style={{ background: "#ffffff", border: "1px solid #dbe3ea", borderRadius: 10, padding: 18, display: "grid", gap: 14 }}>
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
+            <div>
+              <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 5 }}>
+                <Smartphone size={20} color={C.acc} />
+                <h2 style={{ margin: 0, fontSize: 18, color: C.text }}>Viber</h2>
+              </div>
+              <div style={{ color: C.text2, fontSize: 13, lineHeight: 1.55 }}>
+                Пользовательский Viber-клиент работает через отдельный worker. Telegram при этом не затрагивается.
+              </div>
+            </div>
+            <span style={{ padding: "6px 10px", borderRadius: 999, background: status.data?.connected ? C.okBg : C.warnBg, border: `1px solid ${status.data?.connected ? C.ok : C.warnBrd}`, color: status.data?.connected ? C.ok : C.warnTx, fontSize: 12, fontWeight: 750 }}>
+              {status.data?.connected ? "сессия запущена" : "ожидает подключения"}
+            </span>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 12 }}>
+            <ViberStatusCard icon={<Check size={18} />} title="Worker" text={status.isLoading ? "Проверяем доступность..." : status.data?.configured ? "Доступен через API Toolkit." : "Не настроен."} tone={status.data?.configured ? "ok" : "warn"} />
+            <ViberStatusCard icon={<Monitor size={18} />} title="Режим" text={status.data?.session?.mode || status.data?.mode || "desktop/browser gate"} tone="info" />
+            <ViberStatusCard icon={<MessageSquare size={18} />} title="Чаты" text={status.data?.account?.status === "connected" ? "Кэш чатов хранится в Toolkit; чтение из Desktop-клиента выполняет worker." : "Подключите Viber, чтобы заполнить кэш чатов."} tone={status.data?.account?.status === "connected" ? "info" : "warn"} />
+          </div>
+
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
+            <button
+              onClick={() => startLogin.mutate()}
+              disabled={startLogin.isPending}
+              style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "10px 14px", borderRadius: 8, border: "none", background: C.acc, color: "white", fontWeight: 750 }}
+            >
+              {startLogin.isPending ? <Loader2 size={15} className="lk-spin" /> : <Smartphone size={15} />}
+              Подключить Viber
+            </button>
+            <button
+              onClick={() => syncChats.mutate()}
+              disabled={syncChats.isPending || !status.data?.connected}
+              style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "10px 14px", borderRadius: 8, border: "1px solid #dbe3ea", background: "#ffffff", color: status.data?.connected ? "#52616f" : "#94a3b8", fontWeight: 700 }}
+            >
+              <RefreshCw size={15} className={syncChats.isPending ? "lk-spin" : undefined} />
+              Синхронизировать чаты
+            </button>
+            <button
+              onClick={() => disconnect.mutate()}
+              disabled={disconnect.isPending || !status.data?.connected}
+              style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "10px 14px", borderRadius: 8, border: `1px solid ${C.errBrd}`, background: "#ffffff", color: status.data?.connected ? C.err : "#94a3b8", fontWeight: 700 }}
+            >
+              <Unplug size={15} />
+              Отключить Viber
+            </button>
+          </div>
+
+          {(workerError || loginData?.error || syncChats.error) && (
+            <div style={{ borderRadius: 8, border: `1px solid ${C.warnBrd}`, background: C.warnBg, color: C.warnTx, padding: "10px 12px", fontSize: 12.5, lineHeight: 1.5 }}>
+              {syncChats.error instanceof Error ? syncChats.error.message : loginData?.error || workerError}
+            </div>
+          )}
+
+          <div style={{ borderRadius: 9, background: "#f8fbfd", border: "1px solid #dbe3ea", padding: 14, display: "grid", gap: 10 }}>
+            <ViberMilestone done label="Кнопка подключения" detail="Frontend вызывает /api/v1/messenger/viber/auth/start от имени текущего пользователя." />
+            <ViberMilestone done label="Прокси через API" detail="Browser не ходит в worker напрямую; Toolkit API прокидывает account_id = user_id." />
+            <ViberMilestone done={Boolean(status.data?.connected)} label="Сессия worker" detail={status.data?.session?.title || status.data?.session?.url || "После подключения здесь появится статус runtime."} />
+            <ViberMilestone done={Boolean(status.data?.account)} label="Учётная запись" detail={status.data?.account?.status ? `Статус в Toolkit: ${status.data.account.status}` : "После подключения состояние сохраняется в messenger_account."} />
+            <ViberMilestone label="Список чатов" detail="Toolkit API и БД готовы; фактическое наполнение зависит от production Desktop-адаптера worker." />
+            <ViberMilestone label="Сообщения и отправка" detail="Сообщения сохраняются в общий messenger cache после ответа Viber worker." />
+          </div>
+        </section>
+
+        <section style={{ minHeight: 520, background: "#ffffff", border: "1px solid #dbe3ea", borderRadius: 10, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+          <div style={{ padding: "13px 15px", borderBottom: "1px solid #dbe3ea", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+            <div>
+              <div style={{ color: C.text, fontWeight: 800, fontSize: 14 }}>Окно входа Viber</div>
+              <div style={{ color: C.text2, fontSize: 12, marginTop: 2 }}>{loginData?.status || (status.data?.connected ? "running" : "не запущено")}</div>
+            </div>
+            {login.isFetching && <Loader2 size={16} className="lk-spin" color={C.text2} />}
+          </div>
+          <div style={{ flex: 1, minHeight: 0, display: "grid", placeItems: "center", background: "#eef2f7", padding: 14 }}>
+            {loginData?.qr_image ? (
+              <img src={loginData.qr_image} alt="QR-код Viber" style={{ maxWidth: "100%", width: 260, borderRadius: 10, background: "#ffffff", border: "1px solid #dbe3ea" }} />
+            ) : loginData?.screenshot ? (
+              <img src={loginData.screenshot} alt="Окно входа Viber" style={{ maxWidth: "100%", maxHeight: 470, borderRadius: 10, background: "#ffffff", border: "1px solid #dbe3ea", objectFit: "contain" }} />
+            ) : (
+              <div style={{ textAlign: "center", maxWidth: 300, color: C.text2, fontSize: 13, lineHeight: 1.55 }}>
+                <Smartphone size={34} color={C.text3} style={{ marginBottom: 12 }} />
+                <div style={{ color: C.text, fontWeight: 750, marginBottom: 6 }}>Нажмите «Подключить Viber»</div>
+                <div>Здесь появится QR или screenshot runtime-сессии.</div>
+              </div>
+            )}
+          </div>
+        </section>
+      </div>
+    </main>
+  );
+}
+
+function ViberStatusCard({ icon, title, text, tone }: { icon: ReactNode; title: string; text: string; tone: "ok" | "warn" | "info" }) {
+  const colors = tone === "ok"
+    ? { bg: C.okBg, brd: C.ok, tx: C.ok }
+    : tone === "warn"
+      ? { bg: C.warnBg, brd: C.warnBrd, tx: C.warnTx }
+      : { bg: "#eef6ff", brd: "#bfdbfe", tx: "#2563eb" };
+  return (
+    <div style={{ minHeight: 126, borderRadius: 9, border: `1px solid ${colors.brd}`, background: colors.bg, padding: 14, display: "grid", alignContent: "start", gap: 9 }}>
+      <div style={{ width: 34, height: 34, borderRadius: 17, background: "#ffffff", color: colors.tx, display: "grid", placeItems: "center" }}>{icon}</div>
+      <div style={{ color: C.text, fontSize: 14, fontWeight: 750 }}>{title}</div>
+      <div style={{ color: C.text2, fontSize: 12.5, lineHeight: 1.45 }}>{text}</div>
+    </div>
+  );
+}
+
+function ViberMilestone({ done, label, detail }: { done?: boolean; label: string; detail: string }) {
+  return (
+    <div style={{ display: "flex", alignItems: "flex-start", gap: 10, color: C.text }}>
+      <span style={{ width: 20, height: 20, borderRadius: 10, display: "grid", placeItems: "center", flexShrink: 0, marginTop: 1, background: done ? C.okBg : "#eef2f7", color: done ? C.ok : "#64748b" }}>
+        {done ? <Check size={13} /> : <Loader2 size={12} />}
+      </span>
+      <span style={{ minWidth: 0 }}>
+        <span style={{ display: "block", fontSize: 13, fontWeight: 750 }}>{label}</span>
+        <span style={{ display: "block", marginTop: 2, fontSize: 12, color: C.text2, overflowWrap: "anywhere" }}>{detail}</span>
+      </span>
+    </div>
+  );
+}
+
 function ChatPanel({
   chat,
   loading,
   error,
   messages,
-  onRefresh,
   onSend,
   sending,
   sendError,
@@ -243,21 +409,24 @@ function ChatPanel({
   chat?: TelegramChat;
   loading: boolean;
   error: unknown;
-  messages: Array<{ id: string; direction: "in" | "out"; text: string; sent_at: string }>;
-  onRefresh: () => void;
-  onSend: (text: string) => void;
+  messages: TelegramMessage[];
+  onSend: (text: string, files: File[]) => void;
   sending: boolean;
   sendError: unknown;
   onDisconnect: () => void;
 }) {
   const [draft, setDraft] = useState("");
-  const canSend = draft.trim().length > 0 && !sending;
+  const [files, setFiles] = useState<File[]>([]);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const canSend = (draft.trim().length > 0 || files.length > 0) && !sending;
 
   const submit = () => {
     const text = draft.trim();
-    if (!text || sending) return;
-    onSend(text);
+    if ((!text && files.length === 0) || sending) return;
+    onSend(text, files);
     setDraft("");
+    setFiles([]);
+    if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
   if (!chat) {
@@ -291,13 +460,6 @@ function ChatPanel({
             <div style={{ marginTop: 2, fontSize: 12, color: "#6b7a88" }}>{chat.type === "group" ? "Группа" : "Личный чат"}</div>
           </div>
         </div>
-        <button
-          onClick={onRefresh}
-          disabled={loading}
-          style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "8px 11px", borderRadius: 8, border: "1px solid #dbe3ea", background: "#ffffff", color: "#52616f", fontWeight: 600 }}
-        >
-          <RefreshCw size={14} className={loading ? "lk-spin" : undefined} />Обновить
-        </button>
       </div>
       <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "18px min(7vw, 82px)", display: "flex", flexDirection: "column", gap: 7 }}>
         {error ? (
@@ -317,7 +479,15 @@ function ChatPanel({
           return (
             <div key={message.id} style={{ display: "flex", justifyContent: own ? "flex-end" : "flex-start" }}>
               <div style={{ maxWidth: "68%", padding: "8px 10px 6px", borderRadius: own ? "12px 12px 3px 12px" : "12px 12px 12px 3px", background: own ? "#effdde" : "#ffffff", color: "#17212b", boxShadow: "0 1px 1px rgba(15, 23, 42, 0.08)", fontSize: 13.5, lineHeight: 1.42, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
-                {message.text || "Сообщение без текста"}
+                {message.attachments.length > 0 && (
+                  <div style={{ display: "grid", gap: 7, marginBottom: message.text ? 7 : 0 }}>
+                    {message.attachments.map((attachment) => (
+                      <AttachmentView key={attachment.id} attachment={attachment} />
+                    ))}
+                  </div>
+                )}
+                {message.text && <div>{message.text}</div>}
+                {!message.text && message.attachments.length === 0 && "Сообщение без текста"}
                 <div style={{ marginTop: 4, fontSize: 10.5, color: "#7b8794", textAlign: "right" }}>
                   {new Date(message.sent_at).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
                 </div>
@@ -331,7 +501,45 @@ function ChatPanel({
           Не удалось отправить: {sendError instanceof Error ? sendError.message : String(sendError)}
         </div>
       )}
-      <div style={{ padding: "11px 14px", background: "#ffffff", borderTop: "1px solid #dbe3ea", display: "flex", gap: 8 }}>
+      <div style={{ padding: "10px 14px 11px", background: "#ffffff", borderTop: "1px solid #dbe3ea", display: "grid", gap: 8 }}>
+        {files.length > 0 && (
+          <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 2 }}>
+            {files.map((file, index) => (
+              <div key={`${file.name}-${file.size}-${index}`} style={{ display: "inline-flex", alignItems: "center", gap: 7, maxWidth: 260, padding: "7px 9px", borderRadius: 10, background: "#f1f5f8", border: "1px solid #dbe3ea", color: "#52616f", fontSize: 12 }}>
+                {file.type.startsWith("image/") ? <ImageIcon size={15} /> : <FileText size={15} />}
+                <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{file.name}</span>
+                <span style={{ color: "#8a98a8", flexShrink: 0 }}>{formatBytes(file.size)}</span>
+                <button
+                  onClick={() => setFiles((prev) => prev.filter((_, i) => i !== index))}
+                  aria-label="Убрать файл"
+                  style={{ width: 20, height: 20, border: "none", background: "transparent", color: "#7b8794", display: "grid", placeItems: "center", padding: 0, cursor: "pointer" }}
+                >
+                  <Trash2 size={13} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 8 }}>
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          onChange={(e) => {
+            const next = Array.from(e.target.files ?? []);
+            setFiles((prev) => [...prev, ...next].slice(0, 10));
+          }}
+          style={{ display: "none" }}
+        />
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          disabled={sending}
+          aria-label="Прикрепить файл"
+          title="Прикрепить файл"
+          style={{ width: 40, height: 40, borderRadius: 20, border: "1px solid #dbe3ea", background: "#ffffff", color: "#52616f", display: "grid", placeItems: "center", flexShrink: 0 }}
+        >
+          <Paperclip size={17} />
+        </button>
         <input
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -351,8 +559,78 @@ function ChatPanel({
         >
           {sending ? <Loader2 size={14} className="lk-spin" /> : <Send size={14} />}Отправить
         </button>
+        </div>
       </div>
     </main>
+  );
+}
+
+function AttachmentView({ attachment }: { attachment: TelegramMessage["attachments"][number] }) {
+  const [objectUrl, setObjectUrl] = useState<string | undefined>();
+  const [loading, setLoading] = useState(attachment.kind === "photo" || attachment.kind === "video" || attachment.kind === "audio" || attachment.kind === "voice");
+  const [error, setError] = useState<string | undefined>();
+
+  useEffect(() => {
+    let alive = true;
+    let url: string | undefined;
+    const shouldPreview = attachment.kind === "photo" || attachment.kind === "video" || attachment.kind === "audio" || attachment.kind === "voice";
+    if (!shouldPreview) return undefined;
+    setLoading(true);
+    apiFetch(attachment.download_url)
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const blob = await res.blob();
+        if (!alive) return;
+        url = URL.createObjectURL(blob);
+        setObjectUrl(url);
+        setError(undefined);
+      })
+      .catch((err) => {
+        if (alive) setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+    return () => {
+      alive = false;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [attachment.download_url, attachment.kind]);
+
+  const download = async () => {
+    const res = await apiFetch(`${attachment.download_url}?disposition=attachment`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = attachment.file_name || "telegram-attachment";
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  if (attachment.kind === "photo" && objectUrl) {
+    return (
+      <button onClick={download} style={{ border: "none", padding: 0, background: "transparent", cursor: "pointer", textAlign: "left" }}>
+        <img src={objectUrl} alt={attachment.file_name || "Фото"} style={{ display: "block", maxWidth: 320, maxHeight: 260, borderRadius: 10, objectFit: "cover" }} />
+      </button>
+    );
+  }
+  if ((attachment.kind === "video") && objectUrl) {
+    return <video src={objectUrl} controls style={{ display: "block", maxWidth: 340, maxHeight: 260, borderRadius: 10, background: "#0f172a" }} />;
+  }
+  if ((attachment.kind === "audio" || attachment.kind === "voice") && objectUrl) {
+    return <audio src={objectUrl} controls style={{ width: 280, maxWidth: "100%" }} />;
+  }
+  return (
+    <button onClick={download} style={{ display: "flex", alignItems: "center", gap: 9, minWidth: 210, maxWidth: 330, padding: 9, borderRadius: 10, border: "1px solid #dbe3ea", background: "#f8fbfd", color: "#17212b", textAlign: "left", cursor: "pointer", fontFamily: "inherit" }}>
+      {loading ? <Loader2 size={18} className="lk-spin" /> : attachment.kind === "photo" ? <ImageIcon size={18} /> : <FileText size={18} />}
+      <span style={{ flex: 1, minWidth: 0 }}>
+        <span style={{ display: "block", fontSize: 12.5, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{attachment.file_name || attachmentLabel(attachment.kind)}</span>
+        <span style={{ display: "block", marginTop: 2, fontSize: 11, color: error ? C.err : "#6b7a88" }}>{error || [attachmentLabel(attachment.kind), formatBytes(attachment.size_bytes)].filter(Boolean).join(" · ")}</span>
+      </span>
+      <Download size={16} />
+    </button>
   );
 }
 
@@ -409,6 +687,24 @@ function formatChatTime(value: string) {
     return date.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
   }
   return date.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" });
+}
+
+function attachmentLabel(kind: string) {
+  switch (kind) {
+    case "photo": return "Фото";
+    case "video": return "Видео";
+    case "audio": return "Аудио";
+    case "voice": return "Голосовое";
+    case "sticker": return "Стикер";
+    default: return "Файл";
+  }
+}
+
+function formatBytes(value?: number) {
+  if (!value || value <= 0) return "";
+  if (value < 1024) return `${value} Б`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} КБ`;
+  return `${(value / 1024 / 1024).toFixed(1)} МБ`;
 }
 
 function SetupRequired() {

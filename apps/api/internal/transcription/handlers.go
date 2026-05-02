@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -21,14 +22,14 @@ func NewHandlers(svc *Service) *Handlers { return &Handlers{svc: svc} }
 // Routes — chi-роутер, монтируется под /api/v1/transcripts.
 func (h *Handlers) Routes() http.Handler {
 	r := chi.NewRouter()
-	r.Get("/",        h.list)
+	r.Get("/", h.list)
 	r.Post("/upload", h.upload)
-	r.Get("/{id}",    h.get)
+	r.Get("/{id}", h.get)
 	r.Post("/{id}/retry", h.retry)
 	r.Delete("/{id}", h.delete)
-	r.Get("/{id}/audio",      h.audio)
+	r.Get("/{id}/audio", h.audio)
 	r.Get("/{id}/export.txt", h.exportTxt)
-	r.Get("/{id}/analytics",  h.analytics)
+	r.Get("/{id}/analytics", h.analytics)
 	return r
 }
 
@@ -63,7 +64,21 @@ func (h *Handlers) upload(w http.ResponseWriter, r *http.Request) {
 		Body:        file,
 	})
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "upload_failed", err.Error())
+		h.svc.Logger().Warn("transcript upload failed",
+			"err", err,
+			"filename", header.Filename,
+			"content_type", header.Header.Get("Content-Type"),
+			"size", header.Size,
+			"user_id", subj.UserID,
+		)
+		status := http.StatusInternalServerError
+		msg := err.Error()
+		if strings.Contains(msg, "unsupported file extension") ||
+			strings.Contains(msg, "file too large") ||
+			strings.Contains(msg, "empty uploader id") {
+			status = http.StatusBadRequest
+		}
+		writeErr(w, status, "upload_failed", msg)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{

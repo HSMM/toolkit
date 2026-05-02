@@ -36,6 +36,11 @@ func Run(ctx context.Context, db *pgxpool.Pool, client *bitrix.Client) (Result, 
 	if err != nil {
 		return res, err
 	}
+	departments, err := client.ListDepartments(ctx, accessToken)
+	if err != nil {
+		res.Errors = append(res.Errors, fmt.Sprintf("departments: %v", err))
+		departments = nil
+	}
 
 	seenBitrix := map[string]bool{}
 	start := 0
@@ -50,7 +55,7 @@ func Run(ctx context.Context, db *pgxpool.Pool, client *bitrix.Client) (Result, 
 				continue
 			}
 			seenBitrix[u.ID] = true
-			outcome, err := upsertOne(ctx, db, u)
+			outcome, err := upsertOne(ctx, db, u, departments)
 			if err != nil {
 				res.Errors = append(res.Errors, fmt.Sprintf("bitrix_id=%s: %v", u.ID, err))
 				continue
@@ -140,7 +145,7 @@ func refreshAdminToken(ctx context.Context, db *pgxpool.Pool, client *bitrix.Cli
 }
 
 // upsertOne возвращает: "added" | "updated" | "reactivated" | "skipped".
-func upsertOne(ctx context.Context, db *pgxpool.Pool, u *bitrix.User) (string, error) {
+func upsertOne(ctx context.Context, db *pgxpool.Pool, u *bitrix.User, departments map[string]string) (string, error) {
 	fullName := u.FullName()
 	if fullName == "" {
 		return "skipped", nil
@@ -183,7 +188,7 @@ func upsertOne(ctx context.Context, db *pgxpool.Pool, u *bitrix.User) (string, e
 	var inserted bool
 	var prevStatus string
 	err := db.QueryRow(ctx, q,
-		u.ID, email, fullName, u.Phone(), u.Department(),
+		u.ID, email, fullName, u.Phone(), u.DepartmentName(departments),
 		strings.TrimSpace(u.WorkPosition), strings.TrimSpace(u.PersonalPhoto),
 	).Scan(&inserted, &prevStatus)
 	if err != nil {

@@ -61,6 +61,7 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 		TelegramSyncEnabled:          cfg.TelegramSyncEnabled,
 		TelegramRetentionDays:        cfg.TelegramRetentionDays,
 		TelegramWorkerURL:            cfg.TelegramWorkerURL,
+		ViberWorkerURL:               cfg.ViberWorkerURL,
 	}, hub)
 
 	// LiveKit + meetings.
@@ -181,6 +182,7 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 			r.Use(middleware.RateLimitByUser(cfg.RateLimitUserPerMin, time.Minute))
 
 			r.Get("/me", handleMe(pool))
+			r.Get("/colleagues", handleColleagues(pool))
 
 			// WebSocket events.
 			r.Mount("/ws", ws.NewHandler(hub, cfg.AllowedCORSOrigins))
@@ -221,6 +223,7 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 				r.Mount("/admin/users", adminUsers.Routes())
 				r.Mount("/admin/system-settings", sysHandlers.WriteRoutes())
 				r.Mount("/admin/phone/extension-requests", phoneReqHandlers.AdminRoutes())
+				r.Mount("/admin/messenger", messengerHandlers.AdminRoutes())
 			})
 		})
 	})
@@ -239,6 +242,7 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 			ClientSecret: cfg.BitrixClientSecret,
 		})
 		r.Mount("/users", legacyAdminUsers.Routes())
+		r.Mount("/messenger", messengerHandlers.AdminRoutes())
 	})
 
 	srv := &http.Server{
@@ -334,6 +338,62 @@ func handleMe(pool *pgxpool.Pool) http.HandlerFunc {
 			"avatar_url": avatarURL,
 			"extension":  extension,
 		})
+	}
+}
+
+func handleColleagues(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		rows, err := pool.Query(r.Context(), `
+			SELECT id::text, bitrix_id, email, full_name,
+			       COALESCE(phone, ''), COALESCE(department, ''),
+			       COALESCE(position, ''), COALESCE(avatar_url, ''),
+			       COALESCE(extension, ''), last_login_at
+			FROM "user"
+			WHERE last_login_at IS NOT NULL AND status = 'active'
+			ORDER BY full_name, email
+		`)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error": map[string]string{"code": "colleagues_failed", "message": err.Error()},
+			})
+			return
+		}
+		defer rows.Close()
+
+		items := make([]map[string]any, 0, 64)
+		for rows.Next() {
+			var (
+				id, bitrixID, email, fullName string
+				phone, department, position   string
+				avatarURL, extension          string
+				lastLoginAt                   time.Time
+			)
+			if err := rows.Scan(&id, &bitrixID, &email, &fullName, &phone, &department, &position, &avatarURL, &extension, &lastLoginAt); err != nil {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusInternalServerError)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"error": map[string]string{"code": "colleagues_scan_failed", "message": err.Error()},
+				})
+				return
+			}
+			items = append(items, map[string]any{
+				"id":            id,
+				"bitrix_id":     bitrixID,
+				"email":         email,
+				"full_name":     fullName,
+				"phone":         phone,
+				"department":    department,
+				"position":      position,
+				"avatar_url":    avatarURL,
+				"extension":     extension,
+				"last_login_at": lastLoginAt,
+			})
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"items": items})
 	}
 }
 

@@ -36,13 +36,14 @@ type User struct {
 	SecondName     string          `json:"SECOND_NAME"`
 	PersonalMobile string          `json:"PERSONAL_MOBILE"`
 	WorkPhone      string          `json:"WORK_PHONE"`
+	WorkDepartment string          `json:"WORK_DEPARTMENT"`
 	WorkPosition   string          `json:"WORK_POSITION"`
 	PersonalPhoto  string          `json:"PERSONAL_PHOTO"`
 	UFDepartment   json.RawMessage `json:"UF_DEPARTMENT"`
 	// Возвращаются user.get'ом, в user.current их нет — поэтому RawMessage,
 	// чтобы переварить и bool ("ACTIVE": true) и Bitrix-овский string "Y"/"N".
-	ActiveRaw   json.RawMessage `json:"ACTIVE,omitempty"`
-	UserType    string          `json:"USER_TYPE,omitempty"`
+	ActiveRaw json.RawMessage `json:"ACTIVE,omitempty"`
+	UserType  string          `json:"USER_TYPE,omitempty"`
 }
 
 // IsActive — толерантный парсинг ACTIVE: true/false или "Y"/"N".
@@ -181,6 +182,46 @@ func (c *Client) ListEmployees(ctx context.Context, accessToken string, start in
 	return envelope.Result, next, nil
 }
 
+type Department struct {
+	ID   string `json:"ID"`
+	Name string `json:"NAME"`
+}
+
+func (c *Client) ListDepartments(ctx context.Context, accessToken string) (map[string]string, error) {
+	if strings.TrimSpace(accessToken) == "" {
+		return nil, fmt.Errorf("bitrix: access token is empty")
+	}
+	endpoint, err := c.restEndpoint("/rest/department.get.json")
+	if err != nil {
+		return nil, err
+	}
+	q := endpoint.Query()
+	q.Set("auth", accessToken)
+	endpoint.RawQuery = q.Encode()
+
+	var envelope struct {
+		Result []Department `json:"result"`
+		Error  string       `json:"error"`
+		Desc   string       `json:"error_description"`
+	}
+	if err := c.getJSON(ctx, endpoint.String(), &envelope); err != nil {
+		return nil, err
+	}
+	if envelope.Error != "" {
+		return nil, fmt.Errorf("bitrix department.get: %s: %s", envelope.Error, envelope.Desc)
+	}
+
+	out := make(map[string]string, len(envelope.Result))
+	for _, d := range envelope.Result {
+		id := strings.TrimSpace(d.ID)
+		name := strings.TrimSpace(d.Name)
+		if id != "" && name != "" {
+			out[id] = name
+		}
+	}
+	return out, nil
+}
+
 func (u *User) FullName() string {
 	parts := []string{u.LastName, u.Name, u.SecondName}
 	var out []string
@@ -203,19 +244,63 @@ func (u *User) Phone() string {
 }
 
 func (u *User) Department() string {
-	var ids []int
-	if err := json.Unmarshal(u.UFDepartment, &ids); err == nil && len(ids) > 0 {
-		return fmt.Sprint(ids[0])
+	return u.DepartmentName(nil)
+}
+
+func (u *User) DepartmentName(namesByID map[string]string) string {
+	if work := strings.TrimSpace(u.WorkDepartment); work != "" {
+		return work
 	}
+
+	ids := u.DepartmentIDs()
+	if len(ids) > 0 {
+		names := make([]string, 0, len(ids))
+		for _, id := range ids {
+			if name := strings.TrimSpace(namesByID[id]); name != "" {
+				names = append(names, name)
+			}
+		}
+		if len(names) > 0 {
+			return strings.Join(names, ", ")
+		}
+		return ""
+	}
+
 	var stringsList []string
 	if err := json.Unmarshal(u.UFDepartment, &stringsList); err == nil && len(stringsList) > 0 {
-		return stringsList[0]
+		return strings.TrimSpace(stringsList[0])
 	}
 	var s string
 	if err := json.Unmarshal(u.UFDepartment, &s); err == nil {
-		return s
+		return strings.TrimSpace(s)
 	}
 	return ""
+}
+
+func (u *User) DepartmentIDs() []string {
+	var ids []int
+	if err := json.Unmarshal(u.UFDepartment, &ids); err == nil && len(ids) > 0 {
+		out := make([]string, 0, len(ids))
+		for _, id := range ids {
+			out = append(out, fmt.Sprint(id))
+		}
+		return out
+	}
+	var stringsList []string
+	if err := json.Unmarshal(u.UFDepartment, &stringsList); err == nil && len(stringsList) > 0 {
+		out := make([]string, 0, len(stringsList))
+		for _, id := range stringsList {
+			if id = strings.TrimSpace(id); id != "" {
+				out = append(out, id)
+			}
+		}
+		return out
+	}
+	var s string
+	if err := json.Unmarshal(u.UFDepartment, &s); err == nil && strings.TrimSpace(s) != "" {
+		return []string{strings.TrimSpace(s)}
+	}
+	return nil
 }
 
 func (c *Client) getJSON(ctx context.Context, rawURL string, out any) error {

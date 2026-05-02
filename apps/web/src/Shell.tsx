@@ -26,6 +26,7 @@ import {
   Copy, Upload, FileAudio, Trash2, Send, ChevronRight, Inbox,
   Bell, Activity, BarChart3, Headphones, ArrowRightLeft, Minus,
   Sparkles, MessageCircle, Smile, Frown, Meh, AlertTriangle, AlertCircle,
+  Building2,
   type LucideIcon,
 } from "lucide-react";
 
@@ -39,7 +40,16 @@ import {
   type Meeting as ApiMeeting, type RecordingFile,
 } from "@/api/meetings";
 import { MeetingRoom } from "@/MeetingRoom";
-import { useAdminUsers } from "@/api/admin";
+import {
+  useAdminUsers,
+  useAdminMessengerAccounts,
+  useAdminMessengerAccess,
+  useGrantMessengerAccess,
+  useRevokeMessengerAccess,
+  type AdminMessengerAccount,
+  type MessengerProvider,
+} from "@/api/admin";
+import { useColleagues, type Colleague } from "@/api/colleagues";
 import {
   useModuleAccess, useUpdateModuleAccess,
   useSmtpConfig, useUpdateSmtpConfig,
@@ -135,7 +145,7 @@ function meAsMockUser(me: Me): MockUser {
 
 type Notif = {
   id: number; ts: number; read: boolean;
-  type: "meeting" | "call" | "miss" | "transcription" | "request" | "system";
+  type: "meeting" | "call" | "miss" | "transcription" | "request" | "messenger" | "system";
   title: string; desc?: string;
 };
 
@@ -314,6 +324,7 @@ const NOTIF_META: Record<Notif["type"], { Icon: LucideIcon; col: string; bg: str
   miss:          { Icon: PhoneMissed,  col: C.err,   bg: C.errBg },
   transcription: { Icon: FileText,     col: C.purp,  bg: C.purpBg },
   request:       { Icon: Hash,         col: C.warn,  bg: C.warnBg },
+  messenger:     { Icon: MessageSquare, col: C.ok,   bg: C.okBg },
   system:        { Icon: Bell,         col: C.text2, bg: C.bg3 },
 };
 
@@ -1470,7 +1481,7 @@ function InviteParticipantsField({
 // TRANSCRIPTION — viewer с плеером, диалог-бабблами, аналитикой и AI
 // ──────────────────────────────────────────────────────────────────────────
 
-const ALLOWED_AUDIO = [".wav", ".ogg", ".mp3", ".m4a", ".mp4", ".wma", ".flac", ".aac"];
+const ALLOWED_AUDIO = [".wav", ".ogg", ".mp3", ".m4a", ".mp4", ".webm", ".wma", ".flac", ".aac"];
 const MAX_UPLOAD_MB = 500;
 
 // Палитра для каналов / спикеров (8 цветов, повтор по hash).
@@ -1579,9 +1590,9 @@ function TranscriptionPage({ meetingFilter }: { meetingFilter?: string } = {}) {
               <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 3 }}>
                 {upload.isPending ? "Загружаем…" : drag ? "Отпустите файл" : "Загрузить аудио"}
               </div>
-              <div style={{ fontSize: 10.5, color: C.text3, lineHeight: 1.55 }}>WAV, OGG, MP3, M4A, MP4, WMA, FLAC, AAC<br />до {MAX_UPLOAD_MB} МБ · моно / стерео</div>
+              <div style={{ fontSize: 10.5, color: C.text3, lineHeight: 1.55 }}>WAV, OGG, MP3, M4A, MP4, WEBM, WMA, FLAC, AAC<br />до {MAX_UPLOAD_MB} МБ · моно / стерео</div>
             </div>
-            <input ref={fileRef} type="file" accept={ALLOWED_AUDIO.join(",") + ",audio/*,video/mp4"} style={{ display: "none" }}
+            <input ref={fileRef} type="file" accept={ALLOWED_AUDIO.join(",") + ",audio/*,video/mp4,video/webm"} style={{ display: "none" }}
               onChange={(e) => { handleFile(e.target.files?.[0]); e.target.value = ""; }} />
           </div>
           {list.isLoading ? (
@@ -2186,7 +2197,7 @@ function AnalyticsPage() {
   return (
     <div style={{ minHeight: "100%", background: C.bg2 }}>
       <style>{`@keyframes anPulse{0%,100%{box-shadow:0 0 0 0 rgba(245,158,11,.45)}70%{box-shadow:0 0 0 7px rgba(245,158,11,0)}}`}</style>
-      <PgHdr title="Мониторинг АТС" sub="FreePBX через AMI · оперативные метрики, регистрации, активные каналы" />
+      <PgHdr title="Мониторинг АТС" />
 
       <div style={{ padding: "0 24px", background: C.card, borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 4 }}>
         {([{ id: "monitoring" as const, label: "Мониторинг", Icon: Activity },
@@ -3182,7 +3193,7 @@ function SystemSettingsPage(_: { users?: MockUser[] }) {
 
   return (
     <div style={{ minHeight: "100%", background: C.bg2, display: "flex", flexDirection: "column" }}>
-      <PgHdr title="Настройки системы" sub="Пользователи · Доступ к модулям · Телефония · Мессенджеры · SMTP · AI" />
+      <PgHdr title="Настройки системы" />
       <div style={{ padding: "0 24px", background: C.card, borderBottom: `1px solid ${C.border}`, display: "flex", gap: 4, flexShrink: 0 }}>
         {tabs.map((x) => (
           <button key={x.id} onClick={() => setTab(x.id)}
@@ -3226,7 +3237,8 @@ function ModuleAccessPage() {
     { key: "vcs",           label: "Видеоконференции", desc: "Создание и проведение встреч (LiveKit)", Icon: Video },
     { key: "transcription", label: "Транскрибация",    desc: "Расшифровка звонков и встреч (GigaAM)",  Icon: FileText },
     { key: "messengers",    label: "Мессенджеры",      desc: "WhatsApp / Telegram / внутренний чат",   Icon: MessageSquare },
-    { key: "contacts",      label: "Контакты",         desc: "Справочник коллег и контрагентов",       Icon: Users },
+    { key: "crm",           label: "CRM",              desc: "Компании и контакты, дальше лиды и сделки", Icon: Building2 },
+    { key: "contacts",      label: "Коллеги",          desc: "Пользователи, которые входили в Toolkit", Icon: Users },
     { key: "helpdesk",      label: "Хелпдэск",         desc: "Тикеты для ИТ / АХО / HR",               Icon: HelpCircle },
   ];
 
@@ -3349,7 +3361,7 @@ function MessengerSettingsPage({ hideHeader }: { hideHeader?: boolean } = {}) {
   return (
     <div style={{ minHeight: "100%", background: C.bg2 }}>
       {!hideHeader && (
-        <PgHdr title="Настройки мессенджеров" sub="Telegram MTProto · учетные записи пользователей · cache retention" action={saveBtn} />
+        <PgHdr title="Настройки мессенджеров" action={saveBtn} />
       )}
       <div style={{ padding: 24, maxWidth: 720 }}>
         {hideHeader && <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 14 }}>{saveBtn}</div>}
@@ -3408,9 +3420,149 @@ function MessengerSettingsPage({ hideHeader }: { hideHeader?: boolean } = {}) {
             Локальный cache сообщений и вложений хранится ограниченное время. Удаление cache не удаляет сообщения в Telegram.
           </div>
         </SettingsSection>
+
+        <MessengerAccountAccessSettings />
+
+        <SettingsSection title="Viber" sub="Изолированный worker, отдельно от Telegram">
+          <div style={{ marginBottom: 14, padding: "10px 12px", background: C.warnBg, border: `1px solid ${C.warnBrd}`, borderRadius: 8, color: C.warnTx, fontSize: 12, lineHeight: 1.5 }}>
+            Toolkit API и БД готовы для provider Viber: состояние аккаунта, cache чатов и сообщений. Browser mode остаётся диагностическим; реальные чаты требуют production Desktop runtime.
+          </div>
+          <Field label="Worker URL">
+            <input value="http://viber-worker:8091" readOnly style={{ ...inp(), fontFamily: "'DM Mono', monospace", background: C.bg3, color: C.text2 }} />
+          </Field>
+          <Field label="Compose profile">
+            <input value="viber-production" readOnly style={{ ...inp(), fontFamily: "'DM Mono', monospace", background: C.bg3, color: C.text2 }} />
+          </Field>
+          <Field label="Текущий entrypoint">
+            <input value="https://account.viber.com/" readOnly style={{ ...inp(), fontFamily: "'DM Mono', monospace", background: C.bg3, color: C.text2 }} />
+          </Field>
+          <Field label="Production runtime">
+            <input value="Viber Desktop Linux/AppImage + Xvfb/Wine automation" readOnly style={{ ...inp(), fontFamily: "'DM Mono', monospace", background: C.bg3, color: C.text2 }} />
+          </Field>
+          <div style={{ fontSize: 12, color: C.text3, lineHeight: 1.5 }}>
+            Документация: <span style={{ fontFamily: "'DM Mono', monospace" }}>docs/engineering/MESSENGER_VIBER_PRODUCTION_RUNBOOK.md</span>.
+          </div>
+        </SettingsSection>
       </div>
     </div>
   );
+}
+
+function MessengerAccountAccessSettings() {
+  const [provider, setProvider] = useState<MessengerProvider>("telegram");
+  const accounts = useAdminMessengerAccounts(provider);
+  const users = useAdminUsers();
+  const [selectedAccountId, setSelectedAccountId] = useState<string>("");
+  const access = useAdminMessengerAccess(selectedAccountId);
+  const grant = useGrantMessengerAccess();
+  const revoke = useRevokeMessengerAccess();
+  const [userId, setUserId] = useState("");
+
+  useEffect(() => {
+    const items = accounts.data ?? [];
+    if (!items.length) {
+      setSelectedAccountId("");
+      return;
+    }
+    if (!items.some((a) => a.id === selectedAccountId)) {
+      setSelectedAccountId(items[0]!.id);
+    }
+  }, [accounts.data, selectedAccountId]);
+
+  const selected = (accounts.data ?? []).find((a) => a.id === selectedAccountId);
+  const grantedIds = new Set((access.data ?? []).map((u) => u.id));
+  const availableUsers = (users.data ?? []).filter((u) => u.status === "active" && !grantedIds.has(u.id));
+
+  return (
+    <SettingsSection title="Аккаунты и доступ" sub="Администратор выдаёт пользователям доступ к Telegram/Viber аккаунтам">
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+        {(["telegram", "viber"] as MessengerProvider[]).map((p) => (
+          <button key={p} onClick={() => { setProvider(p); setSelectedAccountId(""); }}
+            style={{ padding: "7px 12px", borderRadius: 8, border: `1px solid ${provider === p ? C.acc : C.border}`, background: provider === p ? C.accBg : C.card, color: provider === p ? C.acc : C.text2, fontSize: 13, fontWeight: 650, cursor: "pointer", fontFamily: "inherit" }}>
+            {p === "telegram" ? "Telegram" : "Viber"}
+          </button>
+        ))}
+      </div>
+
+      {accounts.isLoading ? (
+        <div style={{ color: C.text3, fontSize: 13 }}>Загрузка аккаунтов…</div>
+      ) : accounts.isError ? (
+        <div style={{ color: C.err, fontSize: 13 }}>Не удалось загрузить аккаунты: {String(accounts.error)}</div>
+      ) : (accounts.data ?? []).length === 0 ? (
+        <div style={{ color: C.text2, fontSize: 13, lineHeight: 1.5 }}>
+          Аккаунтов {provider === "telegram" ? "Telegram" : "Viber"} пока нет. Сначала подключите аккаунт в разделе «Мессенджеры», затем здесь можно будет выдать доступ другим пользователям.
+        </div>
+      ) : (
+        <div style={{ display: "grid", gap: 14 }}>
+          <Field label="Аккаунт">
+            <select value={selectedAccountId} onChange={(e) => setSelectedAccountId(e.target.value)}
+              style={{ ...inp(), fontFamily: "inherit" }}>
+              {(accounts.data ?? []).map((account) => (
+                <option key={account.id} value={account.id}>
+                  {messengerAccountTitle(account)} · {account.status} · доступов: {account.access_count}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          {selected && (
+            <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, background: C.bg2, padding: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
+                <div>
+                  <div style={{ fontSize: 13.5, fontWeight: 700, color: C.text }}>{messengerAccountTitle(selected)}</div>
+                  <div style={{ fontSize: 12, color: C.text3, marginTop: 2 }}>
+                    Владелец: {selected.owner_name || selected.owner_email} · {selected.provider}
+                  </div>
+                </div>
+                <Bdg v={selected.status === "connected" ? "ok" : selected.status === "error" ? "err" : "def"}>{selected.status}</Bdg>
+              </div>
+
+              <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12 }}>
+                <select value={userId} onChange={(e) => setUserId(e.target.value)}
+                  style={{ ...inp(), flex: 1, fontFamily: "inherit" }}>
+                  <option value="">Выберите пользователя…</option>
+                  {availableUsers.map((u) => (
+                    <option key={u.id} value={u.id}>{u.full_name || u.email} · {u.email}</option>
+                  ))}
+                </select>
+                <button disabled={!userId || grant.isPending} onClick={() => {
+                  if (!selectedAccountId || !userId) return;
+                  grant.mutate({ accountId: selectedAccountId, userId }, { onSuccess: () => setUserId("") });
+                }} style={{ padding: "10px 13px", borderRadius: 8, border: "none", background: userId ? C.acc : C.bg3, color: userId ? "white" : C.text3, fontSize: 13, fontWeight: 650, cursor: userId ? "pointer" : "default", fontFamily: "inherit", whiteSpace: "nowrap" }}>
+                  Выдать доступ
+                </button>
+              </div>
+
+              <div style={{ borderTop: `1px solid ${C.border}` }}>
+                {(access.data ?? []).length === 0 ? (
+                  <div style={{ paddingTop: 12, color: C.text3, fontSize: 13 }}>Доступ пока никому не выдан.</div>
+                ) : (access.data ?? []).map((u) => (
+                  <div key={u.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
+                    <Av i={initialsOf(u.full_name || u.email)} sz={30} />
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontSize: 13, fontWeight: 650, color: C.text, overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>{u.full_name || u.email}</div>
+                      <div style={{ fontSize: 11.5, color: C.text3, marginTop: 2, overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>{u.email}{u.department ? ` · ${u.department}` : ""}</div>
+                    </div>
+                    <Bdg v={u.role === "owner" ? "adm" : "def"}>{u.role === "owner" ? "Владелец" : "Доступ"}</Bdg>
+                    <button disabled={u.role === "owner" || revoke.isPending} onClick={() => {
+                      if (!confirm(`Отозвать доступ у ${u.full_name || u.email}?`)) return;
+                      revoke.mutate({ accountId: selectedAccountId, userId: u.id });
+                    }} style={{ padding: "7px 10px", borderRadius: 7, border: `1px solid ${C.errBrd}`, background: C.card, color: u.role === "owner" ? C.text3 : C.err, fontSize: 12, fontWeight: 650, cursor: u.role === "owner" ? "default" : "pointer", fontFamily: "inherit" }}>
+                      Отозвать
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </SettingsSection>
+  );
+}
+
+function messengerAccountTitle(account: AdminMessengerAccount) {
+  return account.account_label || account.display_name || account.username || account.phone_masked || `${account.provider} ${account.id.slice(0, 8)}`;
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -3775,8 +3927,236 @@ function ProfileModal({ onClose, me }: { onClose: () => void; me: MockUser }) {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
-// STUB pages (Мессенджеры / Контакты / Хелпдэск — пока не реализованы)
+// Коллеги — только пользователи, которые уже входили в Toolkit.
 // ──────────────────────────────────────────────────────────────────────────
+
+function ColleaguesPage() {
+  const q = useColleagues();
+  const [search, setSearch] = useState("");
+  const [selected, setSelected] = useState<Colleague | null>(null);
+  const items = q.data ?? [];
+  const needle = search.trim().toLowerCase();
+  const visible = needle
+    ? items.filter((u) =>
+      u.full_name.toLowerCase().includes(needle) ||
+      u.email.toLowerCase().includes(needle) ||
+      (u.department || "").toLowerCase().includes(needle) ||
+      (u.position || "").toLowerCase().includes(needle) ||
+      (u.extension || "").toLowerCase().includes(needle))
+    : items;
+
+  return (
+    <div style={{ minHeight: "100%", background: C.bg2 }}>
+      <PgHdr
+        title="Коллеги"
+        sub={q.isLoading ? "Загрузка…" : `${items.length} ${items.length === 1 ? "пользователь" : "пользователей"} с входом в Toolkit`}
+      />
+      <div style={{ padding: 24, display: "grid", gap: 16 }}>
+        <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
+          <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 10 }}>
+            <Search size={15} color={C.text3} />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Поиск по имени, email, отделу, должности или номеру…"
+              style={{ flex: 1, border: "none", outline: "none", fontSize: 14, color: C.text, background: "transparent", fontFamily: "inherit" }}
+            />
+          </div>
+
+          {q.isError ? (
+            <Empty Icon={Users} title="Не удалось загрузить коллег" sub={q.error instanceof Error ? q.error.message : String(q.error)} />
+          ) : q.isLoading ? (
+            <div style={{ padding: 42, textAlign: "center", color: C.text3, fontSize: 13 }}>Загрузка…</div>
+          ) : visible.length === 0 ? (
+            <Empty
+              Icon={Users}
+              title={search ? "Никого не найдено" : "Коллег пока нет"}
+              sub={search ? "Попробуйте изменить запрос" : "Здесь появятся пользователи после первого входа в Toolkit через Bitrix24."}
+            />
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12, padding: 16 }}>
+              {visible.map((u) => {
+                const name = u.full_name || u.email;
+                const initials = initialsOf(name);
+                return (
+                  <button
+                    key={u.id}
+                    type="button"
+                    onClick={() => setSelected(u)}
+                    style={{ border: `1px solid ${C.border}`, borderRadius: 8, background: "#ffffff", padding: 14, display: "grid", gap: 12, minWidth: 0, textAlign: "left", cursor: "pointer", fontFamily: "inherit", boxShadow: "none" }}
+                    onMouseEnter={(e) => { e.currentTarget.style.borderColor = C.acc; e.currentTarget.style.boxShadow = "0 8px 22px rgba(15, 23, 42, 0.08)"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.boxShadow = "none"; }}
+                  >
+                    <div style={{ display: "flex", gap: 11, alignItems: "center", minWidth: 0 }}>
+                      <Av i={initials} sz={42} src={u.avatar_url} />
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 14.5, fontWeight: 650, color: C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{name}</div>
+                        <div style={{ marginTop: 2, fontSize: 12, color: C.text3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{u.email}</div>
+                      </div>
+                    </div>
+                    <div style={{ display: "grid", gap: 7, fontSize: 12.5, color: C.text2 }}>
+                      <ColleagueLine label="Отдел" value={u.department || "—"} />
+                      <ColleagueLine label="Должность" value={u.position || "—"} />
+                      <ColleagueLine label="Телефон" value={u.phone || "—"} mono />
+                      <ColleagueLine label="Внутренний" value={u.extension ? `#${u.extension}` : "—"} mono />
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, paddingTop: 2 }}>
+                      <Bdg v="ok">Входил в Toolkit</Bdg>
+                      <span style={{ color: C.text3, fontSize: 11 }}>{fmtIsoRel(u.last_login_at)}</span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+      {selected && <ColleagueProfileModal colleague={selected} onClose={() => setSelected(null)} />}
+    </div>
+  );
+}
+
+function ColleagueProfileModal({ colleague, onClose }: { colleague: Colleague; onClose: () => void }) {
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", h);
+    return () => document.removeEventListener("keydown", h);
+  }, [onClose]);
+
+  const name = colleague.full_name || colleague.email;
+  const initials = initialsOf(name);
+  const Row = ({ label, value, mono }: { label: string; value: ReactNode; mono?: boolean }) => (
+    <div style={{ display: "grid", gridTemplateColumns: "150px minmax(0, 1fr)", gap: 12, padding: "11px 0", borderBottom: `1px solid ${C.border}` }}>
+      <span style={{ color: C.text2, fontSize: 12.5 }}>{label}</span>
+      <span style={{ color: C.text, fontSize: 13.5, fontWeight: 500, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: mono ? "'DM Mono', monospace" : "inherit" }}>{value || "—"}</span>
+    </div>
+  );
+
+  return (
+    <div onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 220, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "40px 20px", overflowY: "auto" }}>
+      <div style={{ background: C.bg2, borderRadius: 12, width: "100%", maxWidth: 620, boxShadow: "0 20px 50px rgba(0,0,0,0.2)", display: "flex", flexDirection: "column", maxHeight: "calc(100vh - 80px)", overflow: "hidden", border: `1px solid ${C.border}` }}>
+        <div style={{ padding: "16px 22px", borderBottom: `1px solid ${C.border}`, background: C.card, display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
+          <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: C.text }}>Профиль коллеги</h2>
+          <button onClick={onClose} style={{ width: 32, height: 32, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", background: "transparent", color: C.text2, cursor: "pointer", border: "none" }}>
+            <X size={18} />
+          </button>
+        </div>
+
+        <div style={{ overflowY: "auto", padding: "20px 22px" }}>
+          <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 18, marginBottom: 14, display: "flex", alignItems: "center", gap: 16 }}>
+            <Av i={initials} sz={64} src={colleague.avatar_url} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <h3 style={{ margin: "0 0 6px", fontSize: 18, fontWeight: 650, color: C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{name}</h3>
+              {colleague.position && <div style={{ fontSize: 13, color: C.text2, marginBottom: 7, fontWeight: 500 }}>{colleague.position}</div>}
+              <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap", alignItems: "center" }}>
+                {colleague.department && <Bdg>{colleague.department}</Bdg>}
+                <Bdg v="ok">Входил в Toolkit</Bdg>
+              </div>
+              <div style={{ fontSize: 13, color: C.text2, display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+                <Mail size={13} />
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{colleague.email}</span>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, marginBottom: 14, overflow: "hidden" }}>
+            <div style={{ padding: "12px 18px", borderBottom: `1px solid ${C.border}`, fontSize: 13.5, fontWeight: 600, color: C.text }}>Данные профиля</div>
+            <div style={{ padding: "2px 18px 12px" }}>
+              <Row label="Email" value={colleague.email} />
+              <Row label="Bitrix24 ID" value={colleague.bitrix_id || "—"} mono />
+              <Row label="Отдел" value={colleague.department || "—"} />
+              <Row label="Должность" value={colleague.position || "—"} />
+              <Row label="Телефон" value={colleague.phone || "—"} mono />
+              <Row label="Внутренний номер" value={colleague.extension ? `#${colleague.extension}` : "—"} mono />
+              <Row label="Последний вход" value={fmtIsoRel(colleague.last_login_at)} />
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ColleagueLine({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "86px minmax(0, 1fr)", gap: 8 }}>
+      <span style={{ color: C.text3 }}>{label}</span>
+      <span style={{ color: C.text2, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: mono ? "'DM Mono', monospace" : "inherit" }}>{value}</span>
+    </div>
+  );
+}
+
+function initialsOf(value: string) {
+  const parts = value.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0]!.slice(0, 2).toUpperCase();
+  return `${parts[0]![0] || ""}${parts[1]![0] || ""}`.toUpperCase();
+}
+
+function fmtIsoRel(iso?: string) {
+  if (!iso) return "—";
+  const date = new Date(iso);
+  const diff = Date.now() - date.getTime();
+  if (diff < 60_000) return "только что";
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} мин. назад`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} ч. назад`;
+  return date.toLocaleDateString("ru-RU");
+}
+
+function CrmPage() {
+  const [tab, setTab] = useState<"companies" | "contacts">("companies");
+  const tabs = [
+    { id: "companies" as const, label: "Компании", Icon: Building2 },
+    { id: "contacts" as const, label: "Контакты", Icon: Users },
+  ];
+  return (
+    <div style={{ minHeight: "100%", background: C.bg2, display: "flex", flexDirection: "column" }}>
+      <PgHdr title="CRM" action={
+        <button style={{ height: 36, padding: "0 13px", borderRadius: 8, background: C.acc, color: "white", fontSize: 13, fontWeight: 650, display: "inline-flex", alignItems: "center", gap: 7 }}>
+          <Plus size={15} /> {tab === "companies" ? "Создать компанию" : "Создать контакт"}
+        </button>
+      } />
+      <div style={{ padding: 24, maxWidth: 980, width: "100%" }}>
+        <div style={{ display: "inline-flex", padding: 3, border: `1px solid ${C.border}`, borderRadius: 10, background: C.card, marginBottom: 18 }}>
+          {tabs.map(({ id, label, Icon }) => (
+            <button key={id} onClick={() => setTab(id)}
+              style={{ height: 34, padding: "0 13px", borderRadius: 8, background: tab === id ? C.accBg : "transparent", color: tab === id ? C.acc : C.text2, fontSize: 13, fontWeight: 650, display: "inline-flex", alignItems: "center", gap: 7 }}>
+              <Icon size={15} /> {label}
+            </button>
+          ))}
+        </div>
+
+        <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, background: C.card, overflow: "hidden" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr 1fr 130px", gap: 12, padding: "11px 14px", background: C.bg2, borderBottom: `1px solid ${C.border}`, color: C.text3, fontSize: 11.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+            {tab === "companies" ? (
+              <>
+                <div>Компания</div><div>Телефон</div><div>Email</div><div>Статус</div>
+              </>
+            ) : (
+              <>
+                <div>Контакт</div><div>Компания</div><div>Телефон</div><div>Статус</div>
+              </>
+            )}
+          </div>
+          <div style={{ minHeight: 280, display: "flex", alignItems: "center", justifyContent: "center", padding: 28, textAlign: "center" }}>
+            <div>
+              <div style={{ width: 58, height: 58, borderRadius: 16, background: C.accBg, color: C.acc, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 14px" }}>
+                {tab === "companies" ? <Building2 size={26} /> : <Users size={26} />}
+              </div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 5 }}>
+                {tab === "companies" ? "Компаний пока нет" : "Контактов пока нет"}
+              </div>
+              <div style={{ fontSize: 13, color: C.text2, lineHeight: 1.55, maxWidth: 420 }}>
+                Сначала в CRM появятся компании и контакты. Лиды и сделки добавим следующим этапом, когда зафиксируем поля и связи.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function StubPage({ page }: { page: "messengers" | "contacts" | "helpdesk" }) {
   const M = {
@@ -3807,12 +4187,11 @@ const NAV: NavItemDef[] = [
   { id: "vcs",           label: "Конференции",   Icon: Video },
   { id: "transcription", label: "Транскрибация", Icon: FileText },
   { id: "messengers",    label: "Мессенджеры",   Icon: MessageSquare },
-  { id: "contacts",      label: "Контакты",      Icon: Users,         stub: true },
+  { id: "crm",           label: "CRM",           Icon: Building2 },
+  { id: "contacts",      label: "Коллеги",       Icon: Users },
   { id: "helpdesk",      label: "Хелпдэск",      Icon: HelpCircle,    stub: true },
 ];
-// Админ-меню: только пользователям с role=admin. Мониторинг АТС переехал
-// сюда из основного меню — он показывает оперативные метрики FreePBX и
-// нужен только дежурному админу.
+// Админ-меню: только пользователям с role=admin.
 const ADM: NavItemDef[] = [
   { id: "monitoring", label: "Мониторинг АТС",    Icon: BarChart3 },
   { id: "settings",   label: "Настройки системы", Icon: Settings },
@@ -3925,17 +4304,62 @@ function ShellInner({ me }: { me: Me }) {
         {allowedPage === "vcs"             && <VcsPage me={me} />}
         {allowedPage === "transcription"   && <TranscriptionPage meetingFilter={transcriptMeetingFilter} />}
         {allowedPage === "messengers"      && <MessengerPage />}
+        {allowedPage === "crm"             && <CrmPage />}
+        {allowedPage === "contacts"        && <ColleaguesPage />}
         {isAdmin && allowedPage === "monitoring" && <AnalyticsPage />}
         {isAdmin && allowedPage === "settings"   && <SystemSettingsPage />}
-        {(["contacts", "helpdesk"] as const).includes(allowedPage as any) && <StubPage page={allowedPage as "contacts" | "helpdesk"} />}
+        {allowedPage === "helpdesk" && <StubPage page="helpdesk" />}
       </main>
 
       <SoftphoneWidget />
+      <MessengerNotificationsListener />
       {isAdmin && <AdminPhoneRequestsListener />}
 
       {profileOpen && <ProfileModal me={meAsMock} onClose={() => setProfileOpen(false)} />}
     </div>
   );
+}
+
+type MessengerWsPayload = {
+  provider?: "telegram" | "viber" | string;
+  chat_title?: string;
+  provider_chat_id?: string;
+  message?: {
+    direction?: "in" | "out" | string;
+    sender_name?: string;
+    text?: string;
+    attachments?: Array<{ kind?: string; file_name?: string }>;
+  };
+};
+
+function MessengerNotificationsListener() {
+  const { push } = useApp();
+  const shownRef = useRef<Set<string>>(new Set());
+
+  useWsEvent<MessengerWsPayload>("messenger.message.created", (e) => {
+    const p = e.payload;
+    const message = p?.message;
+    if (!p || !message || message.direction === "out") return;
+
+    const provider = p.provider === "viber" ? "Viber" : "Telegram";
+    const sender = message.sender_name || p.chat_title || provider;
+    const body = message.text?.trim()
+      || (message.attachments?.length ? "Вложение" : "Новое сообщение");
+    const key = `${p.provider || "telegram"}:${p.provider_chat_id || ""}:${sender}:${body}`;
+    if (shownRef.current.has(key)) return;
+    shownRef.current.add(key);
+    if (shownRef.current.size > 80) {
+      shownRef.current = new Set(Array.from(shownRef.current).slice(-40));
+    }
+
+    push({
+      type: "messenger",
+      title: `${provider}: ${sender}`,
+      desc: body,
+    });
+  });
+
+  return null;
 }
 
 // AdminPhoneRequestsListener — невидимый компонент, монтируется только для

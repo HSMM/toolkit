@@ -56,16 +56,53 @@ export type TelegramMessage = {
   sent_at: string;
   attachments: Array<{
     id: string;
-    kind: string;
+    kind: "photo" | "document" | "audio" | "voice" | "video" | "sticker" | "unknown";
     file_name: string;
     mime_type: string;
     size_bytes?: number;
+    width?: number;
+    height?: number;
+    duration_sec?: number;
+    download_url: string;
   }>;
 };
 
 const STATUS_KEY = ["messenger", "telegram", "status"] as const;
 const CHATS_KEY = ["messenger", "telegram", "chats"] as const;
 const messagesKey = (chatId?: string) => ["messenger", "telegram", "messages", chatId] as const;
+const VIBER_STATUS_KEY = ["messenger", "viber", "status"] as const;
+const VIBER_CHATS_KEY = ["messenger", "viber", "chats"] as const;
+const viberLoginKey = (loginId?: string) => ["messenger", "viber", "login", loginId] as const;
+
+export type ViberStatus = {
+  configured: boolean;
+  connected: boolean;
+  mode: string;
+  error?: string;
+  account?: TelegramStatus["account"];
+  session?: {
+    connected: boolean;
+    status: string;
+    account_id?: string;
+    profile_key?: string;
+    title?: string;
+    url?: string;
+    mode?: string;
+    started_at?: string;
+  };
+};
+
+export type ViberLogin = {
+  login_id: string;
+  status: "pending" | "manual_action_required" | "desktop_manual_action_required" | "confirmed" | "expired" | "error";
+  account_id: string;
+  profile_key: string;
+  entry_url: string;
+  qr_image?: string;
+  screenshot?: string;
+  expires_at: string;
+  error?: string;
+};
 
 export function useTelegramStatus() {
   return useQuery({
@@ -121,11 +158,16 @@ export function useSyncTelegramMessages() {
 export function useSendTelegramMessage() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: { chatId: string; text: string }) =>
-      api<TelegramMessage>(`/api/v1/messenger/telegram/chats/${input.chatId}/messages`, {
+    mutationFn: (input: { chatId: string; text: string; files?: File[] }) => {
+      const files = input.files ?? [];
+      const body = new FormData();
+      body.append("text", input.text);
+      files.forEach((file) => body.append("files", file, file.name));
+      return api<{ items: TelegramMessage[] }>(`/api/v1/messenger/telegram/chats/${input.chatId}/messages`, {
         method: "POST",
-        body: { text: input.text },
-      }),
+        body: files.length > 0 ? body : { text: input.text },
+      });
+    },
     onSuccess: (_data, input) => {
       void qc.invalidateQueries({ queryKey: messagesKey(input.chatId) });
       void qc.invalidateQueries({ queryKey: CHATS_KEY });
@@ -158,6 +200,58 @@ export function useDisconnectTelegram() {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: STATUS_KEY });
       void qc.invalidateQueries({ queryKey: CHATS_KEY });
+    },
+  });
+}
+
+export function useViberStatus() {
+  return useQuery({
+    queryKey: VIBER_STATUS_KEY,
+    queryFn: ({ signal }) => api<ViberStatus>("/api/v1/messenger/viber/status", { signal }),
+    staleTime: 10_000,
+  });
+}
+
+export function useStartViberLogin() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api<ViberLogin>("/api/v1/messenger/viber/auth/start", { method: "POST" }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: VIBER_STATUS_KEY });
+    },
+  });
+}
+
+export function useViberLogin(loginId?: string) {
+  return useQuery({
+    queryKey: viberLoginKey(loginId),
+    queryFn: ({ signal }) => api<ViberLogin>(`/api/v1/messenger/viber/auth/${loginId}`, { signal }),
+    enabled: Boolean(loginId),
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status === "confirmed" || status === "expired" || status === "error" ? false : 2500;
+    },
+  });
+}
+
+export function useDisconnectViber() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api<void>("/api/v1/messenger/viber/session", { method: "DELETE" }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: VIBER_STATUS_KEY });
+      void qc.invalidateQueries({ queryKey: VIBER_CHATS_KEY });
+    },
+  });
+}
+
+export function useSyncViberChats() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api<{ items: TelegramChat[]; synced_at: string }>("/api/v1/messenger/viber/sync", { method: "POST" }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: VIBER_STATUS_KEY });
+      void qc.invalidateQueries({ queryKey: VIBER_CHATS_KEY });
     },
   });
 }

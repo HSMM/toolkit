@@ -27,12 +27,13 @@ type ModuleAccess struct {
 	VCS           bool `json:"vcs"`
 	Transcription bool `json:"transcription"`
 	Messengers    bool `json:"messengers"`
+	CRM           bool `json:"crm"`
 	Contacts      bool `json:"contacts"`
 	Helpdesk      bool `json:"helpdesk"`
 }
 
 func defaults() ModuleAccess {
-	return ModuleAccess{VCS: true, Transcription: true, Messengers: true, Contacts: true, Helpdesk: true}
+	return ModuleAccess{VCS: true, Transcription: true, Messengers: true, CRM: true, Contacts: true, Helpdesk: true}
 }
 
 // SMTPConfig — параметры подключения к корпоративному SMTP. Используется
@@ -260,7 +261,9 @@ func (h *Handlers) testSMTP(w http.ResponseWriter, _ *http.Request) {
 }
 
 // MyPhoneCredentials — то, что нужно браузерному JsSIP-клиенту для регистрации.
-// Возвращается ТОЛЬКО владельцу extension'а (subject.UserID == assigned_to).
+// Возвращается владельцу extension'а (subject.UserID == assigned_to).
+// Если номер не назначен, отдаём пустой объект с 200, чтобы браузер не шумел
+// нормальным состоянием в консоль как failed request.
 type MyPhoneCredentials struct {
 	WssURL    string `json:"wss_url"`
 	Extension string `json:"extension"`
@@ -283,7 +286,7 @@ func (h *Handlers) getMyPhoneCredentials(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
-	writeErr(w, http.StatusNotFound, "not_assigned", "за пользователем не закреплён extension")
+	writeJSON(w, http.StatusOK, MyPhoneCredentials{})
 }
 
 func (h *Handlers) getPhone(w http.ResponseWriter, r *http.Request) {

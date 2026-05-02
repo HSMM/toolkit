@@ -11,7 +11,7 @@ const port = Number(process.env.TELEGRAM_WORKER_PORT || "8090");
 const loginTtlMs = Number(process.env.TELEGRAM_LOGIN_TTL_MS || "180000");
 
 const app = express();
-app.use(express.json({ limit: "64kb" }));
+app.use(express.json({ limit: "80mb" }));
 
 const logins = new Map();
 const updateClients = new Map();
@@ -147,9 +147,10 @@ app.post("/telegram/messages/send", async (req, res) => {
   const session = String(req.body?.session || "");
   const providerChatId = String(req.body?.provider_chat_id || "");
   const text = String(req.body?.text || "").trim();
+  const files = Array.isArray(req.body?.files) ? req.body.files : [];
 
-  if (!requestApiId || !requestApiHash || !session || !providerChatId || !text) {
-    res.status(400).json({ error: { code: "bad_request", message: "api_id, api_hash, session, provider_chat_id and text are required" } });
+  if (!requestApiId || !requestApiHash || !session || !providerChatId || (!text && files.length === 0)) {
+    res.status(400).json({ error: { code: "bad_request", message: "api_id, api_hash, session, provider_chat_id and text or files are required" } });
     return;
   }
 
@@ -162,10 +163,76 @@ app.post("/telegram/messages/send", async (req, res) => {
       res.status(404).json({ error: { code: "telegram_chat_not_found", message: "Chat not found in Telegram dialogs" } });
       return;
     }
-    const sent = await client.sendMessage(dialog.entity, { message: text });
-    res.json(messageToItem(sent));
+    const sentItems = [];
+    if (files.length > 0) {
+      for (let i = 0; i < files.length; i += 1) {
+        const file = files[i] || {};
+        const data = Buffer.from(String(file.data || ""), "base64");
+        if (!data.length) continue;
+        const sent = await client.sendFile(dialog.entity, {
+          file: data,
+          fileName: String(file.file_name || "attachment"),
+          caption: i === 0 ? text : "",
+          attributes: [],
+        });
+        const item = Array.isArray(sent) ? sent.map(messageToItem).filter(Boolean) : [messageToItem(sent)].filter(Boolean);
+        sentItems.push(...item);
+      }
+    } else {
+      const sent = await client.sendMessage(dialog.entity, { message: text });
+      const item = messageToItem(sent);
+      if (item) sentItems.push(item);
+    }
+    res.json({ items: sentItems });
   } catch (err) {
     res.status(502).json({ error: { code: "telegram_send_failed", message: err instanceof Error ? err.message : String(err) } });
+  } finally {
+    safeDisconnect(client);
+  }
+});
+
+app.post("/telegram/media/download", async (req, res) => {
+  const requestApiId = Number(req.body?.api_id || apiId || "0");
+  const requestApiHash = String(req.body?.api_hash || apiHash || "");
+  const session = String(req.body?.session || "");
+  const providerChatId = String(req.body?.provider_chat_id || "");
+  const providerMessageId = Number(req.body?.provider_message_id || 0);
+
+  if (!requestApiId || !requestApiHash || !session || !providerChatId || !providerMessageId) {
+    res.status(400).json({ error: { code: "bad_request", message: "api_id, api_hash, session, provider_chat_id and provider_message_id are required" } });
+    return;
+  }
+
+  const client = new TelegramClient(new StringSession(session), requestApiId, requestApiHash, { connectionRetries: 5 });
+  try {
+    await client.connect();
+    const dialogs = await client.getDialogs({ limit: 500 });
+    const dialog = dialogs.find((item) => stringifyId(item.id || item.entity?.id) === providerChatId);
+    if (!dialog) {
+      res.status(404).json({ error: { code: "telegram_chat_not_found", message: "Chat not found in Telegram dialogs" } });
+      return;
+    }
+    const messages = await client.getMessages(dialog.entity, { ids: [providerMessageId] });
+    const message = Array.isArray(messages) ? messages[0] : messages;
+    if (!message) {
+      res.status(404).json({ error: { code: "telegram_message_not_found", message: "Message not found" } });
+      return;
+    }
+    const data = await client.downloadMedia(message, {});
+    if (!data) {
+      res.status(404).json({ error: { code: "telegram_media_not_found", message: "Message has no downloadable media" } });
+      return;
+    }
+    const attachments = extractAttachments(message);
+    const first = attachments[0] || {};
+    const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+    res.json({
+      file_name: first.file_name || `telegram-${providerMessageId}`,
+      mime_type: first.mime_type || "application/octet-stream",
+      data: buffer.toString("base64"),
+    });
+  } catch (err) {
+    res.status(502).json({ error: { code: "telegram_media_download_failed", message: err instanceof Error ? err.message : String(err) } });
   } finally {
     safeDisconnect(client);
   }
@@ -306,12 +373,68 @@ function messageToItem(message) {
     text: previewText(text, 4000),
     status: "sent",
     sent_at: sentAt,
+    attachments: extractAttachments(message),
     raw: {
       id: stringifyId(message.id),
       out: Boolean(message.out),
       media: message.media?.className || "",
     },
   };
+}
+
+function extractAttachments(message) {
+  const media = message?.media;
+  if (!media) return [];
+  const document = message.document || media.document;
+  const photo = message.photo || media.photo;
+  if (photo) {
+    const sizes = Array.isArray(photo.sizes) ? photo.sizes : [];
+    const best = sizes.find((item) => item?.w && item?.h) || {};
+    return [{
+      provider_file_id: stringifyId(photo.id || message.id),
+      kind: "photo",
+      file_name: `photo-${stringifyId(message.id)}.jpg`,
+      mime_type: "image/jpeg",
+      size_bytes: numberOrNull(best.size),
+      width: numberOrNull(best.w),
+      height: numberOrNull(best.h),
+    }];
+  }
+  if (!document) return [];
+  const attrs = Array.isArray(document.attributes) ? document.attributes : [];
+  const filenameAttr = attrs.find((attr) => attr?.fileName);
+  const audioAttr = attrs.find((attr) => String(attr?.className || "").includes("Audio"));
+  const videoAttr = attrs.find((attr) => String(attr?.className || "").includes("Video"));
+  const stickerAttr = attrs.find((attr) => String(attr?.className || "").includes("Sticker"));
+  const mimeType = document.mimeType || "";
+  let kind = "document";
+  if (stickerAttr) kind = "sticker";
+  else if (audioAttr?.voice) kind = "voice";
+  else if (mimeType.startsWith("audio/") || audioAttr) kind = "audio";
+  else if (mimeType.startsWith("video/") || videoAttr) kind = "video";
+  const fileName = filenameAttr?.fileName || defaultFileName(kind, mimeType, message.id);
+  return [{
+    provider_file_id: stringifyId(document.id || message.id),
+    kind,
+    file_name: fileName,
+    mime_type: mimeType || "application/octet-stream",
+    size_bytes: numberOrNull(document.size),
+    width: numberOrNull(videoAttr?.w),
+    height: numberOrNull(videoAttr?.h),
+    duration_sec: numberOrNull(audioAttr?.duration || videoAttr?.duration),
+  }];
+}
+
+function defaultFileName(kind, mimeType, messageId) {
+  const ext = mimeType.includes("/") ? mimeType.split("/").pop().replace(/[^a-z0-9]+/gi, "") : "";
+  const cleanExt = ext ? `.${ext}` : "";
+  return `${kind || "file"}-${stringifyId(messageId)}${cleanExt}`;
+}
+
+function numberOrNull(value) {
+  if (value == null) return undefined;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : undefined;
 }
 
 function mediaPreview(message) {
@@ -342,7 +465,7 @@ function dialogToChat(dialog) {
 
   const title = dialog.title || entity.title || [entity.firstName, entity.lastName].filter(Boolean).join(" ") || entity.username || "Без названия";
   const message = dialog.message || {};
-  const messageText = message.message || message.text || "";
+  const messageText = message.message || message.text || mediaPreview(message) || "";
   const date = message.date ? new Date(Number(message.date) * 1000).toISOString() : undefined;
 
   return {

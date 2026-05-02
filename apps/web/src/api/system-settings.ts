@@ -5,12 +5,13 @@ export type ModuleAccess = {
   vcs: boolean;
   transcription: boolean;
   messengers: boolean;
+  crm: boolean;
   contacts: boolean;
   helpdesk: boolean;
 };
 
 const ALL_ON: ModuleAccess = {
-  vcs: true, transcription: true, messengers: true, contacts: true, helpdesk: true,
+  vcs: true, transcription: true, messengers: true, crm: true, contacts: true, helpdesk: true,
 };
 
 export function useModuleAccess() {

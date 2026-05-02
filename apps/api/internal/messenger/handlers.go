@@ -12,7 +12,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,6 +30,8 @@ import (
 )
 
 const providerTelegram = "telegram"
+const providerViber = "viber"
+const maxTelegramUploadBytes = 50 << 20
 
 type Config struct {
 	TelegramAPIID                int
@@ -36,6 +40,7 @@ type Config struct {
 	TelegramSyncEnabled          bool
 	TelegramRetentionDays        int
 	TelegramWorkerURL            string
+	ViberWorkerURL               string
 }
 
 type Handlers struct {
@@ -59,6 +64,7 @@ func NewHandlers(db *pgxpool.Pool, cfg Config, hub ...*ws.Hub) *Handlers {
 func (h *Handlers) Routes() http.Handler {
 	r := chi.NewRouter()
 	r.Get("/telegram/status", h.telegramStatus)
+	r.Get("/telegram/accounts", h.telegramAccounts)
 	r.Post("/telegram/auth/qr/start", h.telegramQRStart)
 	r.Get("/telegram/auth/qr/{loginID}", h.telegramQRPoll)
 	r.Delete("/telegram/session", h.telegramDisconnect)
@@ -67,6 +73,26 @@ func (h *Handlers) Routes() http.Handler {
 	r.Post("/telegram/chats/{chatID}/sync", h.telegramChatSync)
 	r.Get("/telegram/chats/{chatID}/messages", h.telegramMessages)
 	r.Post("/telegram/chats/{chatID}/messages", h.telegramSendMessage)
+	r.Get("/telegram/attachments/{attachmentID}/download", h.telegramDownloadAttachment)
+	r.Get("/viber/status", h.viberStatus)
+	r.Get("/viber/accounts", h.viberAccounts)
+	r.Post("/viber/auth/start", h.viberLoginStart)
+	r.Get("/viber/auth/{loginID}", h.viberLoginPoll)
+	r.Delete("/viber/session", h.viberDisconnect)
+	r.Post("/viber/sync", h.viberSync)
+	r.Get("/viber/chats", h.viberChats)
+	r.Post("/viber/chats/{chatID}/sync", h.viberChatSync)
+	r.Get("/viber/chats/{chatID}/messages", h.viberMessages)
+	r.Post("/viber/chats/{chatID}/messages", h.viberSendMessage)
+	return r
+}
+
+func (h *Handlers) AdminRoutes() http.Handler {
+	r := chi.NewRouter()
+	r.Get("/accounts", h.adminMessengerAccounts)
+	r.Get("/accounts/{accountID}/access", h.adminMessengerAccountAccess)
+	r.Post("/accounts/{accountID}/access", h.adminGrantMessengerAccountAccess)
+	r.Delete("/accounts/{accountID}/access/{userID}", h.adminRevokeMessengerAccountAccess)
 	return r
 }
 
@@ -97,12 +123,47 @@ type telegramAccount struct {
 	ID             uuid.UUID  `json:"id,omitempty"`
 	ProviderUserID string     `json:"provider_user_id,omitempty"`
 	DisplayName    string     `json:"display_name"`
+	AccountLabel   string     `json:"account_label,omitempty"`
 	Username       string     `json:"username"`
 	PhoneMasked    string     `json:"phone_masked"`
 	Status         string     `json:"status"`
 	ErrorMessage   string     `json:"error_message,omitempty"`
 	ConnectedAt    *time.Time `json:"connected_at,omitempty"`
 	LastSyncAt     *time.Time `json:"last_sync_at,omitempty"`
+}
+
+type accountsResponse struct {
+	Items []telegramAccount `json:"items"`
+}
+
+type adminMessengerAccount struct {
+	ID             uuid.UUID  `json:"id"`
+	Provider       string     `json:"provider"`
+	ProviderUserID string     `json:"provider_user_id,omitempty"`
+	DisplayName    string     `json:"display_name"`
+	AccountLabel   string     `json:"account_label,omitempty"`
+	Username       string     `json:"username,omitempty"`
+	PhoneMasked    string     `json:"phone_masked,omitempty"`
+	Status         string     `json:"status"`
+	ErrorMessage   string     `json:"error_message,omitempty"`
+	OwnerUserID    uuid.UUID  `json:"owner_user_id"`
+	OwnerName      string     `json:"owner_name"`
+	OwnerEmail     string     `json:"owner_email"`
+	AccessCount    int        `json:"access_count"`
+	ConnectedAt    *time.Time `json:"connected_at,omitempty"`
+	LastSyncAt     *time.Time `json:"last_sync_at,omitempty"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+}
+
+type adminMessengerAccessUser struct {
+	ID         uuid.UUID `json:"id"`
+	FullName   string    `json:"full_name"`
+	Email      string    `json:"email"`
+	Role       string    `json:"role"`
+	GrantedAt  time.Time `json:"granted_at"`
+	GrantedBy  string    `json:"granted_by,omitempty"`
+	Department string    `json:"department,omitempty"`
+	Position   string    `json:"position,omitempty"`
 }
 
 type chatItem struct {
@@ -122,6 +183,38 @@ type telegramSyncResponse struct {
 	SyncedAt time.Time  `json:"synced_at"`
 }
 
+type viberStatusResponse struct {
+	Configured bool                `json:"configured"`
+	Connected  bool                `json:"connected"`
+	Mode       string              `json:"mode"`
+	Account    *telegramAccount    `json:"account,omitempty"`
+	Session    *viberSessionStatus `json:"session,omitempty"`
+	Error      string              `json:"error,omitempty"`
+}
+
+type viberSessionStatus struct {
+	Connected  bool       `json:"connected"`
+	Status     string     `json:"status"`
+	AccountID  string     `json:"account_id,omitempty"`
+	ProfileKey string     `json:"profile_key,omitempty"`
+	Title      string     `json:"title,omitempty"`
+	URL        string     `json:"url,omitempty"`
+	Mode       string     `json:"mode,omitempty"`
+	StartedAt  *time.Time `json:"started_at,omitempty"`
+}
+
+type viberLogin struct {
+	LoginID    string `json:"login_id"`
+	Status     string `json:"status"`
+	AccountID  string `json:"account_id"`
+	ProfileKey string `json:"profile_key"`
+	EntryURL   string `json:"entry_url"`
+	QRImage    string `json:"qr_image,omitempty"`
+	Screenshot string `json:"screenshot,omitempty"`
+	ExpiresAt  string `json:"expires_at"`
+	Error      string `json:"error,omitempty"`
+}
+
 type workerSyncChat struct {
 	ProviderChatID     string     `json:"provider_chat_id"`
 	Type               string     `json:"type"`
@@ -138,18 +231,46 @@ type workerSyncResponse struct {
 }
 
 type workerMessage struct {
-	ProviderMessageID string          `json:"provider_message_id"`
-	Direction         string          `json:"direction"`
-	SenderProviderID  string          `json:"sender_provider_id"`
-	SenderName        string          `json:"sender_name"`
-	Text              string          `json:"text"`
-	Status            string          `json:"status"`
-	SentAt            time.Time       `json:"sent_at"`
-	Raw               json.RawMessage `json:"raw,omitempty"`
+	ProviderMessageID string             `json:"provider_message_id"`
+	Direction         string             `json:"direction"`
+	SenderProviderID  string             `json:"sender_provider_id"`
+	SenderName        string             `json:"sender_name"`
+	Text              string             `json:"text"`
+	Status            string             `json:"status"`
+	SentAt            time.Time          `json:"sent_at"`
+	Attachments       []workerAttachment `json:"attachments"`
+	Raw               json.RawMessage    `json:"raw,omitempty"`
 }
 
 type workerMessagesResponse struct {
 	Items []workerMessage `json:"items"`
+}
+
+type workerAttachment struct {
+	ProviderFileID string `json:"provider_file_id"`
+	Kind           string `json:"kind"`
+	FileName       string `json:"file_name"`
+	MimeType       string `json:"mime_type"`
+	SizeBytes      *int64 `json:"size_bytes,omitempty"`
+	Width          *int   `json:"width,omitempty"`
+	Height         *int   `json:"height,omitempty"`
+	DurationSec    *int   `json:"duration_sec,omitempty"`
+}
+
+type workerUploadFile struct {
+	FileName string `json:"file_name"`
+	MimeType string `json:"mime_type"`
+	Data     string `json:"data"`
+}
+
+type workerSendResponse struct {
+	Items []workerMessage `json:"items"`
+}
+
+type workerMediaDownloadResponse struct {
+	FileName string `json:"file_name"`
+	MimeType string `json:"mime_type"`
+	Data     string `json:"data"`
 }
 
 type workerUpdateRequest struct {
@@ -159,7 +280,8 @@ type workerUpdateRequest struct {
 }
 
 type sendMessageRequest struct {
-	Text string `json:"text"`
+	Text  string             `json:"text"`
+	Files []workerUploadFile `json:"files,omitempty"`
 }
 
 type messageItem struct {
@@ -173,11 +295,15 @@ type messageItem struct {
 }
 
 type attachmentItem struct {
-	ID        uuid.UUID `json:"id"`
-	Kind      string    `json:"kind"`
-	FileName  string    `json:"file_name"`
-	MimeType  string    `json:"mime_type"`
-	SizeBytes *int64    `json:"size_bytes,omitempty"`
+	ID          uuid.UUID `json:"id"`
+	Kind        string    `json:"kind"`
+	FileName    string    `json:"file_name"`
+	MimeType    string    `json:"mime_type"`
+	SizeBytes   *int64    `json:"size_bytes,omitempty"`
+	Width       *int      `json:"width,omitempty"`
+	Height      *int      `json:"height,omitempty"`
+	DurationSec *int      `json:"duration_sec,omitempty"`
+	DownloadURL string    `json:"download_url"`
 }
 
 type telegramQRLogin struct {
@@ -232,6 +358,163 @@ func (h *Handlers) telegramStatus(w http.ResponseWriter, r *http.Request) {
 		Policy:      h.policy(cfg),
 		Account:     account,
 	})
+}
+
+func (h *Handlers) adminMessengerAccounts(w http.ResponseWriter, r *http.Request) {
+	provider := strings.TrimSpace(r.URL.Query().Get("provider"))
+	if provider != "" && provider != providerTelegram && provider != providerViber {
+		writeErr(w, http.StatusBadRequest, "bad_provider", "provider must be telegram or viber")
+		return
+	}
+
+	args := []any{}
+	where := ""
+	if provider != "" {
+		args = append(args, provider)
+		where = "WHERE ma.provider=$1"
+	}
+	rows, err := h.db.Query(r.Context(), `
+		SELECT ma.id, ma.provider, ma.provider_user_id, ma.display_name, ma.account_label,
+		       ma.username, ma.phone_masked, ma.status, COALESCE(ma.error_message, ''),
+		       ma.user_id, COALESCE(u.full_name, ''), u.email,
+		       COUNT(maa.user_id)::int AS access_count,
+		       ma.connected_at, ma.last_sync_at, ma.updated_at
+		FROM messenger_account ma
+		JOIN "user" u ON u.id=ma.user_id
+		LEFT JOIN messenger_account_access maa ON maa.account_id=ma.id
+		`+where+`
+		GROUP BY ma.id, u.full_name, u.email
+		ORDER BY ma.provider, ma.updated_at DESC
+	`, args...)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "messenger_accounts_failed", err.Error())
+		return
+	}
+	defer rows.Close()
+
+	items := []adminMessengerAccount{}
+	for rows.Next() {
+		var item adminMessengerAccount
+		if err := rows.Scan(
+			&item.ID, &item.Provider, &item.ProviderUserID, &item.DisplayName, &item.AccountLabel,
+			&item.Username, &item.PhoneMasked, &item.Status, &item.ErrorMessage,
+			&item.OwnerUserID, &item.OwnerName, &item.OwnerEmail, &item.AccessCount,
+			&item.ConnectedAt, &item.LastSyncAt, &item.UpdatedAt,
+		); err != nil {
+			writeErr(w, http.StatusInternalServerError, "messenger_accounts_failed", err.Error())
+			return
+		}
+		items = append(items, item)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (h *Handlers) adminMessengerAccountAccess(w http.ResponseWriter, r *http.Request) {
+	accountID, err := uuid.Parse(chi.URLParam(r, "accountID"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_account_id", "invalid account id")
+		return
+	}
+	items, err := h.listMessengerAccountAccess(r.Context(), accountID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "messenger_access_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (h *Handlers) adminGrantMessengerAccountAccess(w http.ResponseWriter, r *http.Request) {
+	subj := auth.MustSubject(r.Context())
+	accountID, err := uuid.Parse(chi.URLParam(r, "accountID"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_account_id", "invalid account id")
+		return
+	}
+	var in struct {
+		UserID string `json:"user_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	userID, err := uuid.Parse(strings.TrimSpace(in.UserID))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_user_id", "invalid user id")
+		return
+	}
+	if _, err := h.db.Exec(r.Context(), `
+		INSERT INTO messenger_account_access (account_id, user_id, role, granted_by)
+		VALUES ($1, $2, 'member', $3)
+		ON CONFLICT (account_id, user_id)
+		DO UPDATE SET role=CASE WHEN messenger_account_access.role='owner' THEN 'owner' ELSE 'member' END,
+		              granted_by=EXCLUDED.granted_by
+	`, accountID, userID, subj.UserID); err != nil {
+		writeErr(w, http.StatusInternalServerError, "messenger_access_grant_failed", err.Error())
+		return
+	}
+	items, err := h.listMessengerAccountAccess(r.Context(), accountID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "messenger_access_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (h *Handlers) adminRevokeMessengerAccountAccess(w http.ResponseWriter, r *http.Request) {
+	accountID, err := uuid.Parse(chi.URLParam(r, "accountID"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_account_id", "invalid account id")
+		return
+	}
+	userID, err := uuid.Parse(chi.URLParam(r, "userID"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_user_id", "invalid user id")
+		return
+	}
+	if _, err := h.db.Exec(r.Context(), `
+		DELETE FROM messenger_account_access
+		WHERE account_id=$1 AND user_id=$2 AND role <> 'owner'
+	`, accountID, userID); err != nil {
+		writeErr(w, http.StatusInternalServerError, "messenger_access_revoke_failed", err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handlers) listMessengerAccountAccess(ctx context.Context, accountID uuid.UUID) ([]adminMessengerAccessUser, error) {
+	rows, err := h.db.Query(ctx, `
+		SELECT u.id, u.full_name, u.email, maa.role, maa.created_at,
+		       COALESCE(granter.full_name, ''), COALESCE(u.department, ''), COALESCE(u.position, '')
+		FROM messenger_account_access maa
+		JOIN "user" u ON u.id=maa.user_id
+		LEFT JOIN "user" granter ON granter.id=maa.granted_by
+		WHERE maa.account_id=$1
+		ORDER BY (maa.role='owner') DESC, u.full_name, u.email
+	`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := []adminMessengerAccessUser{}
+	for rows.Next() {
+		var item adminMessengerAccessUser
+		if err := rows.Scan(&item.ID, &item.FullName, &item.Email, &item.Role, &item.GrantedAt, &item.GrantedBy, &item.Department, &item.Position); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (h *Handlers) telegramAccounts(w http.ResponseWriter, r *http.Request) {
+	subj := auth.MustSubject(r.Context())
+	items, err := h.listMessengerAccounts(r.Context(), subj.UserID, providerTelegram)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "telegram_accounts_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, accountsResponse{Items: items})
 }
 
 func (h *Handlers) telegramQRStart(w http.ResponseWriter, r *http.Request) {
@@ -292,16 +575,306 @@ func (h *Handlers) telegramQRPoll(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) telegramDisconnect(w http.ResponseWriter, r *http.Request) {
 	subj := auth.MustSubject(r.Context())
-	_, err := h.db.Exec(r.Context(), `
+	account, err := h.loadTelegramAccount(r, subj.UserID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "telegram_disconnect_failed", err.Error())
+		return
+	}
+	if account == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	_, err = h.db.Exec(r.Context(), `
 		UPDATE messenger_account
 		SET status='revoked', error_message=NULL, updated_at=NOW()
-		WHERE user_id=$1 AND provider=$2
-	`, subj.UserID, providerTelegram)
+		WHERE id=$1 AND user_id=$2 AND provider=$3
+	`, account.ID, subj.UserID, providerTelegram)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "telegram_disconnect_failed", err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handlers) viberStatus(w http.ResponseWriter, r *http.Request) {
+	subj := auth.MustSubject(r.Context())
+	account, err := h.loadMessengerAccount(r, subj.UserID, providerViber)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "viber_status_failed", err.Error())
+		return
+	}
+	if h.cfg.ViberWorkerURL == "" {
+		writeJSON(w, http.StatusOK, viberStatusResponse{Configured: false, Mode: "disabled", Account: account})
+		return
+	}
+	var out viberSessionStatus
+	accountID := subj.UserID.String()
+	if account != nil {
+		accountID = account.ID.String()
+	}
+	err = h.workerJSONAt(r.Context(), h.cfg.ViberWorkerURL, http.MethodPost, "/viber/session/status", map[string]any{
+		"account_id": accountID,
+	}, &out)
+	if err != nil {
+		writeJSON(w, http.StatusOK, viberStatusResponse{Configured: true, Connected: false, Mode: "worker", Account: account, Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, viberStatusResponse{
+		Configured: true,
+		Connected:  out.Connected,
+		Mode:       out.Mode,
+		Account:    account,
+		Session:    &out,
+	})
+}
+
+func (h *Handlers) viberAccounts(w http.ResponseWriter, r *http.Request) {
+	subj := auth.MustSubject(r.Context())
+	items, err := h.listMessengerAccounts(r.Context(), subj.UserID, providerViber)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "viber_accounts_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, accountsResponse{Items: items})
+}
+
+func (h *Handlers) viberLoginStart(w http.ResponseWriter, r *http.Request) {
+	subj := auth.MustSubject(r.Context())
+	if h.cfg.ViberWorkerURL == "" {
+		writeErr(w, http.StatusServiceUnavailable, "viber_not_configured", "Viber worker не настроен")
+		return
+	}
+	account, err := h.createViberAccount(r.Context(), subj.UserID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "viber_account_save_failed", err.Error())
+		return
+	}
+	var out viberLogin
+	if err := h.workerJSONAt(r.Context(), h.cfg.ViberWorkerURL, http.MethodPost, "/viber/login/start", map[string]any{
+		"account_id":  account.ID.String(),
+		"profile_key": account.ID.String(),
+	}, &out); err != nil {
+		_ = h.updateMessengerAccountStatus(r.Context(), account.ID, "error", err.Error())
+		writeErr(w, http.StatusBadGateway, "viber_worker_failed", err.Error())
+		return
+	}
+	nextStatus := "connecting"
+	if out.Status == "confirmed" {
+		nextStatus = "connected"
+	}
+	_ = h.updateMessengerAccountStatus(r.Context(), account.ID, nextStatus, "")
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *Handlers) viberLoginPoll(w http.ResponseWriter, r *http.Request) {
+	if h.cfg.ViberWorkerURL == "" {
+		writeErr(w, http.StatusServiceUnavailable, "viber_not_configured", "Viber worker не настроен")
+		return
+	}
+	loginID := chi.URLParam(r, "loginID")
+	if loginID == "" {
+		writeErr(w, http.StatusBadRequest, "bad_login_id", "login_id обязателен")
+		return
+	}
+	var out viberLogin
+	if err := h.workerJSONAt(r.Context(), h.cfg.ViberWorkerURL, http.MethodGet, "/viber/login/"+loginID, nil, &out); err != nil {
+		writeErr(w, http.StatusBadGateway, "viber_worker_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *Handlers) viberDisconnect(w http.ResponseWriter, r *http.Request) {
+	subj := auth.MustSubject(r.Context())
+	account, err := h.loadMessengerAccount(r, subj.UserID, providerViber)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "viber_disconnect_failed", err.Error())
+		return
+	}
+	if h.cfg.ViberWorkerURL == "" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if account == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	var out map[string]any
+	if err := h.workerJSONAt(r.Context(), h.cfg.ViberWorkerURL, http.MethodPost, "/viber/session/stop", map[string]any{
+		"account_id": account.ID.String(),
+	}, &out); err != nil {
+		writeErr(w, http.StatusBadGateway, "viber_worker_failed", err.Error())
+		return
+	}
+	_, _ = h.db.Exec(r.Context(), `
+		UPDATE messenger_account
+		SET status='revoked', error_message=NULL, updated_at=NOW()
+		WHERE id=$1 AND user_id=$2 AND provider=$3
+	`, account.ID, subj.UserID, providerViber)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handlers) viberSync(w http.ResponseWriter, r *http.Request) {
+	subj := auth.MustSubject(r.Context())
+	account, err := h.loadMessengerAccount(r, subj.UserID, providerViber)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "viber_sync_failed", err.Error())
+		return
+	}
+	if account == nil || account.Status == "revoked" {
+		writeErr(w, http.StatusPreconditionFailed, "viber_not_connected", "Сначала подключите Viber")
+		return
+	}
+	var out telegramSyncResponse
+	if err := h.workerJSONAt(r.Context(), h.cfg.ViberWorkerURL, http.MethodPost, "/viber/chats/sync", map[string]any{
+		"account_id": account.ID.String(),
+	}, &out); err != nil {
+		writeErr(w, http.StatusNotImplemented, "viber_desktop_gate_required", err.Error())
+		return
+	}
+	items, err := h.saveSyncedChats(r.Context(), account.ID, toWorkerChats(out.Items))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "viber_chats_save_failed", err.Error())
+		return
+	}
+	out.Items = items
+	out.SyncedAt = time.Now()
+	_, _ = h.db.Exec(r.Context(), `
+		UPDATE messenger_account
+		SET status='connected', error_message=NULL, last_sync_at=$3, updated_at=NOW()
+		WHERE id=$1 AND user_id=$2 AND provider=$4
+	`, account.ID, subj.UserID, out.SyncedAt, providerViber)
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *Handlers) viberChats(w http.ResponseWriter, r *http.Request) {
+	subj := auth.MustSubject(r.Context())
+	account, err := h.loadMessengerAccount(r, subj.UserID, providerViber)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "viber_chats_failed", err.Error())
+		return
+	}
+	if account == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"items": []chatItem{}, "next_cursor": ""})
+		return
+	}
+	items, err := h.listChats(r.Context(), account.ID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "viber_chats_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": ""})
+}
+
+func (h *Handlers) viberChatSync(w http.ResponseWriter, r *http.Request) {
+	subj := auth.MustSubject(r.Context())
+	chatID := chi.URLParam(r, "chatID")
+	account, err := h.loadMessengerAccount(r, subj.UserID, providerViber)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "viber_chat_sync_failed", err.Error())
+		return
+	}
+	if account == nil || account.Status == "revoked" {
+		writeErr(w, http.StatusPreconditionFailed, "viber_not_connected", "Сначала подключите Viber")
+		return
+	}
+	chatUUID, err := uuid.Parse(chatID)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_chat_id", "chat_id должен быть UUID")
+		return
+	}
+	chat, err := h.loadChat(r.Context(), account.ID, chatUUID)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "chat_not_found", "Чат не найден")
+		return
+	}
+	var workerOut workerMessagesResponse
+	if err := h.workerJSONAt(r.Context(), h.cfg.ViberWorkerURL, http.MethodPost, "/viber/messages/sync", map[string]any{
+		"account_id":       subj.UserID.String(),
+		"chat_id":          chatID,
+		"provider_chat_id": chat.ProviderChatID,
+	}, &workerOut); err != nil {
+		writeErr(w, http.StatusNotImplemented, "viber_desktop_gate_required", err.Error())
+		return
+	}
+	items, err := h.saveSyncedMessages(r.Context(), chat.ID, workerOut.Items)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "viber_messages_save_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": ""})
+}
+
+func (h *Handlers) viberMessages(w http.ResponseWriter, r *http.Request) {
+	subj := auth.MustSubject(r.Context())
+	account, err := h.loadMessengerAccount(r, subj.UserID, providerViber)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "viber_messages_failed", err.Error())
+		return
+	}
+	if account == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"items": []messageItem{}, "next_cursor": ""})
+		return
+	}
+	chatID, err := uuid.Parse(chi.URLParam(r, "chatID"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_chat_id", "chat_id должен быть UUID")
+		return
+	}
+	if _, err := h.loadChat(r.Context(), account.ID, chatID); err != nil {
+		writeErr(w, http.StatusNotFound, "chat_not_found", "Чат не найден")
+		return
+	}
+	items, err := h.listMessages(r.Context(), chatID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "viber_messages_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": ""})
+}
+
+func (h *Handlers) viberSendMessage(w http.ResponseWriter, r *http.Request) {
+	subj := auth.MustSubject(r.Context())
+	chatID := chi.URLParam(r, "chatID")
+	account, err := h.loadMessengerAccount(r, subj.UserID, providerViber)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "viber_send_failed", err.Error())
+		return
+	}
+	if account == nil || account.Status == "revoked" {
+		writeErr(w, http.StatusPreconditionFailed, "viber_not_connected", "Сначала подключите Viber")
+		return
+	}
+	chatUUID, err := uuid.Parse(chatID)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_chat_id", "chat_id должен быть UUID")
+		return
+	}
+	chat, err := h.loadChat(r.Context(), account.ID, chatUUID)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "chat_not_found", "Чат не найден")
+		return
+	}
+	var in struct {
+		Text string `json:"text"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&in)
+	var workerOut workerSendResponse
+	if err := h.workerJSONAt(r.Context(), h.cfg.ViberWorkerURL, http.MethodPost, "/viber/messages/send", map[string]any{
+		"account_id":       subj.UserID.String(),
+		"chat_id":          chatID,
+		"provider_chat_id": chat.ProviderChatID,
+		"text":             in.Text,
+	}, &workerOut); err != nil {
+		writeErr(w, http.StatusNotImplemented, "viber_desktop_gate_required", err.Error())
+		return
+	}
+	items, err := h.saveSyncedMessages(r.Context(), chat.ID, workerOut.Items)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "viber_messages_save_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 func (h *Handlers) telegramSync(w http.ResponseWriter, r *http.Request) {
@@ -510,10 +1083,13 @@ func (h *Handlers) telegramMessages(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusInternalServerError, "telegram_messages_failed", err.Error())
 			return
 		}
-		item.Attachments = []attachmentItem{}
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
+		writeErr(w, http.StatusInternalServerError, "telegram_messages_failed", err.Error())
+		return
+	}
+	if err := h.hydrateAttachments(r.Context(), items); err != nil {
 		writeErr(w, http.StatusInternalServerError, "telegram_messages_failed", err.Error())
 		return
 	}
@@ -530,14 +1106,14 @@ func (h *Handlers) telegramSendMessage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, "telegram_not_configured", "Telegram API ID/API Hash/encryption key не настроены")
 		return
 	}
-	var in sendMessageRequest
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		writeErr(w, http.StatusBadRequest, "bad_json", err.Error())
+	in, err := parseSendMessageRequest(w, r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_message", err.Error())
 		return
 	}
 	in.Text = strings.TrimSpace(in.Text)
-	if in.Text == "" {
-		writeErr(w, http.StatusBadRequest, "empty_message", "текст сообщения обязателен")
+	if in.Text == "" && len(in.Files) == 0 {
+		writeErr(w, http.StatusBadRequest, "empty_message", "текст или вложение обязательны")
 		return
 	}
 	if len([]rune(in.Text)) > 4096 {
@@ -572,18 +1148,19 @@ func (h *Handlers) telegramSendMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	h.startTelegramUpdates(r.Context(), cfg, subj.UserID, account.ID, session)
 
-	var workerOut workerMessage
+	var workerOut workerSendResponse
 	if err := h.workerJSON(r.Context(), cfg, http.MethodPost, "/telegram/messages/send", map[string]any{
 		"api_id":           cfg.APIID,
 		"api_hash":         cfg.APIHash,
 		"session":          session,
 		"provider_chat_id": chat.ProviderChatID,
 		"text":             in.Text,
+		"files":            in.Files,
 	}, &workerOut); err != nil {
 		writeErr(w, http.StatusBadGateway, "telegram_worker_failed", err.Error())
 		return
 	}
-	items, err := h.saveSyncedMessages(r.Context(), chatID, []workerMessage{workerOut})
+	items, err := h.saveSyncedMessages(r.Context(), chatID, workerOut.Items)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "telegram_message_save_failed", err.Error())
 		return
@@ -592,7 +1169,91 @@ func (h *Handlers) telegramSendMessage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, "telegram_send_failed", "Telegram не вернул отправленное сообщение")
 		return
 	}
-	writeJSON(w, http.StatusOK, items[0])
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (h *Handlers) telegramDownloadAttachment(w http.ResponseWriter, r *http.Request) {
+	cfg, err := h.telegramConfig(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "telegram_config_failed", err.Error())
+		return
+	}
+	if !telegramConfigured(cfg) {
+		writeErr(w, http.StatusServiceUnavailable, "telegram_not_configured", "Telegram API ID/API Hash/encryption key не настроены")
+		return
+	}
+	attachmentID, err := uuid.Parse(chi.URLParam(r, "attachmentID"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_attachment_id", err.Error())
+		return
+	}
+	subj := auth.MustSubject(r.Context())
+	account, err := h.loadTelegramAccount(r, subj.UserID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "telegram_attachment_failed", err.Error())
+		return
+	}
+	if account == nil || account.Status != "connected" {
+		writeErr(w, http.StatusConflict, "telegram_not_connected", "Telegram не подключён")
+		return
+	}
+
+	var providerChatID, providerMessageID, fileName, mimeType string
+	err = h.db.QueryRow(r.Context(), `
+		SELECT mc.provider_chat_id, mm.provider_message_id, ma.file_name, ma.mime_type
+		FROM messenger_attachment ma
+		JOIN messenger_message mm ON mm.id=ma.message_id
+		JOIN messenger_chat mc ON mc.id=mm.chat_id
+		WHERE ma.id=$1 AND mc.account_id=$2
+	`, attachmentID, account.ID).Scan(&providerChatID, &providerMessageID, &fileName, &mimeType)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			writeErr(w, http.StatusNotFound, "attachment_not_found", "вложение не найдено")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "telegram_attachment_failed", err.Error())
+		return
+	}
+	session, err := h.loadTelegramSession(r.Context(), cfg, account.ID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "telegram_session_load_failed", err.Error())
+		return
+	}
+	var workerOut workerMediaDownloadResponse
+	if err := h.workerJSON(r.Context(), cfg, http.MethodPost, "/telegram/media/download", map[string]any{
+		"api_id":              cfg.APIID,
+		"api_hash":            cfg.APIHash,
+		"session":             session,
+		"provider_chat_id":    providerChatID,
+		"provider_message_id": providerMessageID,
+	}, &workerOut); err != nil {
+		writeErr(w, http.StatusBadGateway, "telegram_worker_failed", err.Error())
+		return
+	}
+	data, err := base64.StdEncoding.DecodeString(workerOut.Data)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "telegram_media_decode_failed", err.Error())
+		return
+	}
+	if workerOut.FileName != "" {
+		fileName = workerOut.FileName
+	}
+	if workerOut.MimeType != "" {
+		mimeType = workerOut.MimeType
+	}
+	if fileName == "" {
+		fileName = "telegram-attachment"
+	}
+	if mimeType == "" {
+		mimeType = http.DetectContentType(data)
+	}
+	w.Header().Set("Content-Type", mimeType)
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	if disposition := r.URL.Query().Get("disposition"); disposition == "attachment" {
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": fileName}))
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
 }
 
 func (h *Handlers) telegramWorkerUpdate(w http.ResponseWriter, r *http.Request) {
@@ -609,12 +1270,13 @@ func (h *Handlers) telegramWorkerUpdate(w http.ResponseWriter, r *http.Request) 
 
 	var userID uuid.UUID
 	var chatID uuid.UUID
+	var chatTitle string
 	err := h.db.QueryRow(r.Context(), `
-		SELECT ma.user_id, mc.id
+		SELECT ma.user_id, mc.id, mc.title
 		FROM messenger_account ma
 		JOIN messenger_chat mc ON mc.account_id=ma.id
 		WHERE ma.id=$1 AND mc.provider_chat_id=$2 AND ma.provider=$3
-	`, in.AccountID, in.ProviderChatID, providerTelegram).Scan(&userID, &chatID)
+	`, in.AccountID, in.ProviderChatID, providerTelegram).Scan(&userID, &chatID, &chatTitle)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			w.WriteHeader(http.StatusNoContent)
@@ -631,7 +1293,9 @@ func (h *Handlers) telegramWorkerUpdate(w http.ResponseWriter, r *http.Request) 
 	}
 	if len(items) > 0 && h.hub != nil {
 		payload, _ := json.Marshal(map[string]any{
+			"provider":         providerTelegram,
 			"chat_id":          chatID,
+			"chat_title":       chatTitle,
 			"account_id":       in.AccountID,
 			"provider_chat_id": in.ProviderChatID,
 			"message":          items[0],
@@ -642,14 +1306,57 @@ func (h *Handlers) telegramWorkerUpdate(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *Handlers) loadTelegramAccount(r *http.Request, userID uuid.UUID) (*telegramAccount, error) {
+	return h.loadMessengerAccount(r, userID, providerTelegram)
+}
+
+func (h *Handlers) loadMessengerAccount(r *http.Request, userID uuid.UUID, provider string) (*telegramAccount, error) {
+	if accountIDRaw := strings.TrimSpace(r.URL.Query().Get("account_id")); accountIDRaw != "" {
+		accountID, err := uuid.Parse(accountIDRaw)
+		if err != nil {
+			return nil, fmt.Errorf("bad account_id")
+		}
+		var account telegramAccount
+		err = h.db.QueryRow(r.Context(), `
+			SELECT id, provider_user_id, display_name, account_label, username, phone_masked, status, COALESCE(error_message, ''), connected_at, last_sync_at
+			FROM messenger_account
+			WHERE id=$1
+			  AND provider=$3
+			  AND (
+			      user_id=$2 OR EXISTS (
+			          SELECT 1 FROM messenger_account_access maa
+			          WHERE maa.account_id=messenger_account.id AND maa.user_id=$2
+			      )
+			  )
+		`, accountID, userID, provider).Scan(
+			&account.ID, &account.ProviderUserID, &account.DisplayName, &account.AccountLabel,
+			&account.Username, &account.PhoneMasked, &account.Status, &account.ErrorMessage, &account.ConnectedAt, &account.LastSyncAt,
+		)
+		if err != nil {
+			if err == pgx.ErrNoRows {
+				return nil, nil
+			}
+			return nil, err
+		}
+		return &account, nil
+	}
+
 	var account telegramAccount
 	err := h.db.QueryRow(r.Context(), `
-		SELECT id, display_name, username, phone_masked, status, COALESCE(error_message, ''), connected_at, last_sync_at
+		SELECT id, provider_user_id, display_name, account_label, username, phone_masked, status, COALESCE(error_message, ''), connected_at, last_sync_at
 		FROM messenger_account
-		WHERE user_id=$1 AND provider=$2
-	`, userID, providerTelegram).Scan(
-		&account.ID, &account.DisplayName, &account.Username, &account.PhoneMasked,
-		&account.Status, &account.ErrorMessage, &account.ConnectedAt, &account.LastSyncAt,
+		WHERE provider=$2
+		  AND status <> 'revoked'
+		  AND (
+		      user_id=$1 OR EXISTS (
+		          SELECT 1 FROM messenger_account_access maa
+		          WHERE maa.account_id=messenger_account.id AND maa.user_id=$1
+		      )
+		  )
+		ORDER BY connected_at DESC NULLS LAST, updated_at DESC
+		LIMIT 1
+	`, userID, provider).Scan(
+		&account.ID, &account.ProviderUserID, &account.DisplayName, &account.AccountLabel,
+		&account.Username, &account.PhoneMasked, &account.Status, &account.ErrorMessage, &account.ConnectedAt, &account.LastSyncAt,
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -658,6 +1365,92 @@ func (h *Handlers) loadTelegramAccount(r *http.Request, userID uuid.UUID) (*tele
 		return nil, err
 	}
 	return &account, nil
+}
+
+func (h *Handlers) listMessengerAccounts(ctx context.Context, userID uuid.UUID, provider string) ([]telegramAccount, error) {
+	rows, err := h.db.Query(ctx, `
+		SELECT id, provider_user_id, display_name, account_label, username, phone_masked, status, COALESCE(error_message, ''), connected_at, last_sync_at
+		FROM messenger_account
+		WHERE provider=$2 AND status <> 'revoked'
+		  AND (
+		      user_id=$1 OR EXISTS (
+		          SELECT 1 FROM messenger_account_access maa
+		          WHERE maa.account_id=messenger_account.id AND maa.user_id=$1
+		      )
+		  )
+		ORDER BY connected_at DESC NULLS LAST, updated_at DESC
+	`, userID, provider)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := []telegramAccount{}
+	for rows.Next() {
+		var account telegramAccount
+		if err := rows.Scan(
+			&account.ID, &account.ProviderUserID, &account.DisplayName, &account.AccountLabel,
+			&account.Username, &account.PhoneMasked, &account.Status, &account.ErrorMessage, &account.ConnectedAt, &account.LastSyncAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, account)
+	}
+	return items, rows.Err()
+}
+
+func (h *Handlers) listChats(ctx context.Context, accountID uuid.UUID) ([]chatItem, error) {
+	rows, err := h.db.Query(ctx, `
+		SELECT id, provider_chat_id, type, title, unread_count, last_message_preview, last_message_at, muted, pinned
+		FROM messenger_chat
+		WHERE account_id=$1
+		ORDER BY pinned DESC, last_message_at DESC NULLS LAST, updated_at DESC
+		LIMIT 100
+	`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []chatItem{}
+	for rows.Next() {
+		var item chatItem
+		if err := rows.Scan(&item.ID, &item.ProviderChatID, &item.Type, &item.Title, &item.UnreadCount, &item.LastMessagePreview, &item.LastMessageAt, &item.Muted, &item.Pinned); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (h *Handlers) listMessages(ctx context.Context, chatID uuid.UUID) ([]messageItem, error) {
+	rows, err := h.db.Query(ctx, `
+		SELECT id, direction, sender_name, text, status, sent_at
+		FROM messenger_message
+		WHERE chat_id=$1
+		ORDER BY sent_at DESC
+		LIMIT 100
+	`, chatID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	reversed := []messageItem{}
+	for rows.Next() {
+		var item messageItem
+		if err := rows.Scan(&item.ID, &item.Direction, &item.SenderName, &item.Text, &item.Status, &item.SentAt); err != nil {
+			return nil, err
+		}
+		item.Attachments = []attachmentItem{}
+		reversed = append(reversed, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	items := make([]messageItem, 0, len(reversed))
+	for i := len(reversed) - 1; i >= 0; i-- {
+		items = append(items, reversed[i])
+	}
+	return items, nil
 }
 
 func (h *Handlers) loadChat(ctx context.Context, accountID, chatID uuid.UUID) (*chatItem, error) {
@@ -777,6 +1570,29 @@ func (h *Handlers) saveSyncedMessages(ctx context.Context, chatID uuid.UUID, mes
 			return nil, err
 		}
 		item.Attachments = []attachmentItem{}
+		if _, err := tx.Exec(ctx, `DELETE FROM messenger_attachment WHERE message_id=$1`, item.ID); err != nil {
+			return nil, err
+		}
+		for _, att := range msg.Attachments {
+			if att.ProviderFileID == "" && att.FileName == "" && att.MimeType == "" {
+				continue
+			}
+			kind := normalizeAttachmentKind(att.Kind)
+			var saved attachmentItem
+			err := tx.QueryRow(ctx, `
+				INSERT INTO messenger_attachment
+					(message_id, provider_file_id, kind, file_name, mime_type, size_bytes, width, height, duration_sec)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+				RETURNING id, kind, file_name, mime_type, size_bytes, width, height, duration_sec
+			`, item.ID, att.ProviderFileID, kind, att.FileName, att.MimeType, att.SizeBytes, att.Width, att.Height, att.DurationSec).Scan(
+				&saved.ID, &saved.Kind, &saved.FileName, &saved.MimeType, &saved.SizeBytes, &saved.Width, &saved.Height, &saved.DurationSec,
+			)
+			if err != nil {
+				return nil, err
+			}
+			saved.DownloadURL = "/api/v1/messenger/telegram/attachments/" + saved.ID.String() + "/download"
+			item.Attachments = append(item.Attachments, saved)
+		}
 		out = append(out, item)
 	}
 
@@ -788,6 +1604,9 @@ func (h *Handlers) saveSyncedMessages(ctx context.Context, chatID uuid.UUID, mes
 			}
 		}
 		preview := last.Text
+		if preview == "" && len(last.Attachments) > 0 {
+			preview = attachmentPreview(last.Attachments[0])
+		}
 		if len([]rune(preview)) > 160 {
 			preview = string([]rune(preview)[:157]) + "..."
 		}
@@ -823,6 +1642,134 @@ func (h *Handlers) startTelegramUpdates(ctx context.Context, cfg sysset.Telegram
 		"callback_url":    "http://api:8080/api/v1/messenger-internal/telegram/updates",
 		"callback_secret": secret,
 	}, &out)
+}
+
+func parseSendMessageRequest(w http.ResponseWriter, r *http.Request) (sendMessageRequest, error) {
+	contentType := r.Header.Get("Content-Type")
+	if strings.HasPrefix(contentType, "multipart/form-data") {
+		r.Body = http.MaxBytesReader(w, r.Body, maxTelegramUploadBytes+8*1024*1024)
+		if err := r.ParseMultipartForm(maxTelegramUploadBytes); err != nil {
+			return sendMessageRequest{}, err
+		}
+		defer func() {
+			if r.MultipartForm != nil {
+				_ = r.MultipartForm.RemoveAll()
+			}
+		}()
+		out := sendMessageRequest{Text: r.FormValue("text")}
+		if r.MultipartForm == nil {
+			return out, nil
+		}
+		headers := r.MultipartForm.File["files"]
+		if len(headers) == 0 {
+			headers = r.MultipartForm.File["file"]
+		}
+		for _, header := range headers {
+			if header.Size > maxTelegramUploadBytes {
+				return sendMessageRequest{}, fmt.Errorf("файл %s больше лимита 50 МБ", header.Filename)
+			}
+			file, err := header.Open()
+			if err != nil {
+				return sendMessageRequest{}, err
+			}
+			data, err := io.ReadAll(io.LimitReader(file, maxTelegramUploadBytes+1))
+			_ = file.Close()
+			if err != nil {
+				return sendMessageRequest{}, err
+			}
+			if len(data) > maxTelegramUploadBytes {
+				return sendMessageRequest{}, fmt.Errorf("файл %s больше лимита 50 МБ", header.Filename)
+			}
+			mimeType := header.Header.Get("Content-Type")
+			if mimeType == "" {
+				mimeType = http.DetectContentType(data)
+			}
+			out.Files = append(out.Files, workerUploadFile{
+				FileName: safeFileName(header.Filename),
+				MimeType: mimeType,
+				Data:     base64.StdEncoding.EncodeToString(data),
+			})
+		}
+		return out, nil
+	}
+
+	var out sendMessageRequest
+	if err := json.NewDecoder(r.Body).Decode(&out); err != nil {
+		return sendMessageRequest{}, err
+	}
+	return out, nil
+}
+
+func (h *Handlers) hydrateAttachments(ctx context.Context, messages []messageItem) error {
+	if len(messages) == 0 {
+		return nil
+	}
+	ids := make([]uuid.UUID, 0, len(messages))
+	index := make(map[uuid.UUID]int, len(messages))
+	for i := range messages {
+		messages[i].Attachments = []attachmentItem{}
+		ids = append(ids, messages[i].ID)
+		index[messages[i].ID] = i
+	}
+	rows, err := h.db.Query(ctx, `
+		SELECT id, message_id, kind, file_name, mime_type, size_bytes, width, height, duration_sec
+		FROM messenger_attachment
+		WHERE message_id = ANY($1)
+		ORDER BY created_at ASC
+	`, ids)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var messageID uuid.UUID
+		var item attachmentItem
+		if err := rows.Scan(&item.ID, &messageID, &item.Kind, &item.FileName, &item.MimeType, &item.SizeBytes, &item.Width, &item.Height, &item.DurationSec); err != nil {
+			return err
+		}
+		item.DownloadURL = "/api/v1/messenger/telegram/attachments/" + item.ID.String() + "/download"
+		if pos, ok := index[messageID]; ok {
+			messages[pos].Attachments = append(messages[pos].Attachments, item)
+		}
+	}
+	return rows.Err()
+}
+
+func normalizeAttachmentKind(kind string) string {
+	switch kind {
+	case "photo", "document", "audio", "voice", "video", "sticker":
+		return kind
+	default:
+		return "unknown"
+	}
+}
+
+func attachmentPreview(att attachmentItem) string {
+	switch att.Kind {
+	case "photo":
+		return "Фото"
+	case "video":
+		return "Видео"
+	case "audio":
+		return "Аудио"
+	case "voice":
+		return "Голосовое сообщение"
+	case "sticker":
+		return "Стикер"
+	default:
+		if att.FileName != "" {
+			return "Файл: " + att.FileName
+		}
+		return "Вложение"
+	}
+}
+
+func safeFileName(name string) string {
+	name = filepath.Base(strings.TrimSpace(name))
+	if name == "." || name == "/" || name == "" {
+		return "attachment"
+	}
+	return name
 }
 
 func randomSecret() (string, error) {
@@ -871,23 +1818,30 @@ func (h *Handlers) saveConfirmedTelegramSession(ctx context.Context, cfg sysset.
 
 	var accountID uuid.UUID
 	err = h.db.QueryRow(ctx, `
-		INSERT INTO messenger_account
-			(user_id, provider, provider_user_id, display_name, username, phone_masked, status, error_message, connected_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, 'connected', NULL, NOW(), NOW())
-		ON CONFLICT (user_id, provider)
-		DO UPDATE SET
-			provider_user_id=EXCLUDED.provider_user_id,
-			display_name=EXCLUDED.display_name,
-			username=EXCLUDED.username,
-			phone_masked=EXCLUDED.phone_masked,
+		UPDATE messenger_account
+		SET display_name=$4,
+			username=$5,
+			phone_masked=$6,
 			status='connected',
 			error_message=NULL,
-			connected_at=COALESCE(messenger_account.connected_at, NOW()),
+			connected_at=COALESCE(connected_at, NOW()),
 			updated_at=NOW()
+		WHERE user_id=$1 AND provider=$2 AND provider_user_id=$3 AND status <> 'revoked'
 		RETURNING id
 	`, userID, providerTelegram, acc.ProviderUserID, acc.DisplayName, acc.Username, acc.PhoneMasked).Scan(&accountID)
-	if err != nil {
+	if err != nil && err != pgx.ErrNoRows {
 		return nil, err
+	}
+	if err == pgx.ErrNoRows {
+		err = h.db.QueryRow(ctx, `
+		INSERT INTO messenger_account
+			(user_id, provider, provider_user_id, display_name, account_label, username, phone_masked, status, error_message, connected_at, updated_at)
+		VALUES ($1, $2, $3, $4, $4, $5, $6, 'connected', NULL, NOW(), NOW())
+		RETURNING id
+		`, userID, providerTelegram, acc.ProviderUserID, acc.DisplayName, acc.Username, acc.PhoneMasked).Scan(&accountID)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	_, err = h.db.Exec(ctx, `
@@ -903,16 +1857,88 @@ func (h *Handlers) saveConfirmedTelegramSession(ctx context.Context, cfg sysset.
 	if err != nil {
 		return nil, err
 	}
+	if err := h.ensureAccountOwnerAccess(ctx, accountID, userID); err != nil {
+		return nil, err
+	}
 
 	acc.ID = accountID
+	acc.AccountLabel = acc.DisplayName
 	acc.Status = "connected"
 	now := time.Now()
 	acc.ConnectedAt = &now
 	return acc, nil
 }
 
+func (h *Handlers) createViberAccount(ctx context.Context, userID uuid.UUID) (*telegramAccount, error) {
+	var accountID uuid.UUID
+	err := h.db.QueryRow(ctx, `
+		INSERT INTO messenger_account
+			(user_id, provider, provider_user_id, display_name, account_label, username, phone_masked, status, error_message, updated_at)
+		VALUES ($1, $2, '', 'Viber', 'Viber', '', '', 'connecting', NULL, NOW())
+		RETURNING id
+	`, userID, providerViber).Scan(&accountID)
+	if err != nil {
+		return nil, err
+	}
+	if err := h.ensureAccountOwnerAccess(ctx, accountID, userID); err != nil {
+		return nil, err
+	}
+	return &telegramAccount{
+		ID:           accountID,
+		DisplayName:  "Viber",
+		AccountLabel: "Viber",
+		Status:       "connecting",
+	}, nil
+}
+
+func (h *Handlers) ensureAccountOwnerAccess(ctx context.Context, accountID, userID uuid.UUID) error {
+	_, err := h.db.Exec(ctx, `
+		INSERT INTO messenger_account_access (account_id, user_id, role, granted_by)
+		VALUES ($1, $2, 'owner', $2)
+		ON CONFLICT (account_id, user_id)
+		DO UPDATE SET role='owner'
+	`, accountID, userID)
+	return err
+}
+
+func (h *Handlers) updateMessengerAccountStatus(ctx context.Context, accountID uuid.UUID, status string, errorMessage string) error {
+	if status == "" {
+		status = "connected"
+	}
+	_, err := h.db.Exec(ctx, `
+		UPDATE messenger_account
+		SET status=$2,
+			error_message=NULLIF($3, ''),
+			connected_at=CASE WHEN $2='connected' THEN COALESCE(connected_at, NOW()) ELSE connected_at END,
+			updated_at=NOW()
+		WHERE id=$1
+	`, accountID, status, errorMessage)
+	return err
+}
+
+func toWorkerChats(items []chatItem) []workerSyncChat {
+	out := make([]workerSyncChat, 0, len(items))
+	for _, item := range items {
+		out = append(out, workerSyncChat{
+			ProviderChatID:     item.ProviderChatID,
+			Type:               item.Type,
+			Title:              item.Title,
+			UnreadCount:        item.UnreadCount,
+			LastMessagePreview: item.LastMessagePreview,
+			LastMessageAt:      item.LastMessageAt,
+			Pinned:             item.Pinned,
+			Muted:              item.Muted,
+		})
+	}
+	return out
+}
+
 func (h *Handlers) workerJSON(ctx context.Context, cfg sysset.TelegramConfig, method, path string, body any, out any) error {
-	url := strings.TrimRight(cfg.WorkerURL, "/") + path
+	return h.workerJSONAt(ctx, cfg.WorkerURL, method, path, body, out)
+}
+
+func (h *Handlers) workerJSONAt(ctx context.Context, baseURL, method, path string, body any, out any) error {
+	url := strings.TrimRight(baseURL, "/") + path
 	var reader io.Reader
 	if body != nil {
 		buf, err := json.Marshal(body)
@@ -929,7 +1955,7 @@ func (h *Handlers) workerJSON(ctx context.Context, cfg sysset.TelegramConfig, me
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	client := &http.Client{Timeout: 20 * time.Second}
+	client := &http.Client{Timeout: 2 * time.Minute}
 	res, err := client.Do(req)
 	if err != nil {
 		return err
@@ -947,6 +1973,9 @@ func (h *Handlers) workerJSON(ctx context.Context, cfg sysset.TelegramConfig, me
 			return fmt.Errorf("%s: %s", payload.Error.Code, payload.Error.Message)
 		}
 		return fmt.Errorf("worker returned HTTP %d", res.StatusCode)
+	}
+	if out == nil {
+		return nil
 	}
 	return json.NewDecoder(res.Body).Decode(out)
 }

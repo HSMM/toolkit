@@ -42,7 +42,7 @@ const (
 // GigaAM через ffmpeg). См. .env.example комментарий по форматам.
 var AllowedExt = map[string]struct{}{
 	".wav": {}, ".ogg": {}, ".mp3": {}, ".flac": {},
-	".m4a": {}, ".aac": {}, ".mp4": {}, ".wma": {},
+	".m4a": {}, ".aac": {}, ".mp4": {}, ".wma": {}, ".webm": {},
 }
 
 const MaxUploadBytes = 500 * 1024 * 1024 // 500 МБ — то же что в UI
@@ -196,25 +196,25 @@ func (s *Service) Upload(ctx context.Context, in UploadInput) (*UploadResult, er
 
 // View — данные для UI (один транскрипт).
 type View struct {
-	ID               uuid.UUID       `json:"id"`
-	RecordingID      uuid.UUID       `json:"recording_id"`
-	Filename         string          `json:"filename"`
-	SizeBytes        int64           `json:"size_bytes"`
-	MimeType         string          `json:"mime_type"`
-	UploadedBy       uuid.UUID       `json:"uploaded_by"`
-	UploadedAt       time.Time       `json:"uploaded_at"`
-	Status           Status          `json:"status"`
-	Engine           string          `json:"engine"`
-	EngineVersion    string          `json:"engine_version,omitempty"`
-	GigaAMTaskID     string          `json:"gigaam_task_id,omitempty"`
-	ExecutionTimeMs  int             `json:"execution_time_ms,omitempty"`
-	ErrorMessage     string          `json:"error_message,omitempty"`
-	Attempts         int             `json:"attempts"`
-	CompletedAt      *time.Time      `json:"completed_at,omitempty"`
-	Segments         []SegmentDTO    `json:"segments,omitempty"`
-	EngineMetadata   json.RawMessage `json:"-"` // не отдаём в /me list, читаем для analytics
-	S3Bucket         string          `json:"-"` // для StreamAudio
-	S3Key            string          `json:"-"`
+	ID              uuid.UUID       `json:"id"`
+	RecordingID     uuid.UUID       `json:"recording_id"`
+	Filename        string          `json:"filename"`
+	SizeBytes       int64           `json:"size_bytes"`
+	MimeType        string          `json:"mime_type"`
+	UploadedBy      uuid.UUID       `json:"uploaded_by"`
+	UploadedAt      time.Time       `json:"uploaded_at"`
+	Status          Status          `json:"status"`
+	Engine          string          `json:"engine"`
+	EngineVersion   string          `json:"engine_version,omitempty"`
+	GigaAMTaskID    string          `json:"gigaam_task_id,omitempty"`
+	ExecutionTimeMs int             `json:"execution_time_ms,omitempty"`
+	ErrorMessage    string          `json:"error_message,omitempty"`
+	Attempts        int             `json:"attempts"`
+	CompletedAt     *time.Time      `json:"completed_at,omitempty"`
+	Segments        []SegmentDTO    `json:"segments,omitempty"`
+	EngineMetadata  json.RawMessage `json:"-"` // не отдаём в /me list, читаем для analytics
+	S3Bucket        string          `json:"-"` // для StreamAudio
+	S3Key           string          `json:"-"`
 }
 
 // SegmentDTO — один сегмент для UI.
@@ -230,8 +230,9 @@ type SegmentDTO struct {
 }
 
 // ListByUser — транскрипции, доступные пользователю:
-//   • uploads: где он сам загружал файл (kind='upload', uploaded_by=user)
-//   • meeting per-track: где он создатель встречи или participant
+//   - uploads: где он сам загружал файл (kind='upload', uploaded_by=user)
+//   - meeting per-track: где он создатель встречи или participant
+//
 // Если meetingFilter != nil — фильтрует только по указанной встрече
 // (с тем же RBAC: user должен иметь доступ к встрече).
 func (s *Service) ListByUser(ctx context.Context, userID uuid.UUID, limit int, meetingFilter *uuid.UUID) ([]View, error) {
@@ -420,13 +421,22 @@ func contentTypeOr(ct, ext string) string {
 		return ct
 	}
 	switch ext {
-	case ".wav":  return "audio/wav"
-	case ".mp3":  return "audio/mpeg"
-	case ".ogg":  return "audio/ogg"
-	case ".flac": return "audio/flac"
-	case ".m4a", ".mp4": return "audio/mp4"
-	case ".aac":  return "audio/aac"
-	case ".wma":  return "audio/x-ms-wma"
+	case ".wav":
+		return "audio/wav"
+	case ".mp3":
+		return "audio/mpeg"
+	case ".ogg":
+		return "audio/ogg"
+	case ".flac":
+		return "audio/flac"
+	case ".m4a", ".mp4":
+		return "audio/mp4"
+	case ".aac":
+		return "audio/aac"
+	case ".wma":
+		return "audio/x-ms-wma"
+	case ".webm":
+		return "video/webm"
 	}
 	return "application/octet-stream"
 }
