@@ -64,6 +64,7 @@ func NewHandlers(db *pgxpool.Pool, cfg Config, hub ...*ws.Hub) *Handlers {
 func (h *Handlers) Routes() http.Handler {
 	r := chi.NewRouter()
 	r.Get("/telegram/status", h.telegramStatus)
+	r.Get("/telegram/accounts", h.telegramAccounts)
 	r.Post("/telegram/auth/qr/start", h.telegramQRStart)
 	r.Get("/telegram/auth/qr/{loginID}", h.telegramQRPoll)
 	r.Delete("/telegram/session", h.telegramDisconnect)
@@ -74,6 +75,7 @@ func (h *Handlers) Routes() http.Handler {
 	r.Post("/telegram/chats/{chatID}/messages", h.telegramSendMessage)
 	r.Get("/telegram/attachments/{attachmentID}/download", h.telegramDownloadAttachment)
 	r.Get("/viber/status", h.viberStatus)
+	r.Get("/viber/accounts", h.viberAccounts)
 	r.Post("/viber/auth/start", h.viberLoginStart)
 	r.Get("/viber/auth/{loginID}", h.viberLoginPoll)
 	r.Delete("/viber/session", h.viberDisconnect)
@@ -82,6 +84,15 @@ func (h *Handlers) Routes() http.Handler {
 	r.Post("/viber/chats/{chatID}/sync", h.viberChatSync)
 	r.Get("/viber/chats/{chatID}/messages", h.viberMessages)
 	r.Post("/viber/chats/{chatID}/messages", h.viberSendMessage)
+	return r
+}
+
+func (h *Handlers) AdminRoutes() http.Handler {
+	r := chi.NewRouter()
+	r.Get("/accounts", h.adminMessengerAccounts)
+	r.Get("/accounts/{accountID}/access", h.adminMessengerAccountAccess)
+	r.Post("/accounts/{accountID}/access", h.adminGrantMessengerAccountAccess)
+	r.Delete("/accounts/{accountID}/access/{userID}", h.adminRevokeMessengerAccountAccess)
 	return r
 }
 
@@ -112,12 +123,47 @@ type telegramAccount struct {
 	ID             uuid.UUID  `json:"id,omitempty"`
 	ProviderUserID string     `json:"provider_user_id,omitempty"`
 	DisplayName    string     `json:"display_name"`
+	AccountLabel   string     `json:"account_label,omitempty"`
 	Username       string     `json:"username"`
 	PhoneMasked    string     `json:"phone_masked"`
 	Status         string     `json:"status"`
 	ErrorMessage   string     `json:"error_message,omitempty"`
 	ConnectedAt    *time.Time `json:"connected_at,omitempty"`
 	LastSyncAt     *time.Time `json:"last_sync_at,omitempty"`
+}
+
+type accountsResponse struct {
+	Items []telegramAccount `json:"items"`
+}
+
+type adminMessengerAccount struct {
+	ID             uuid.UUID  `json:"id"`
+	Provider       string     `json:"provider"`
+	ProviderUserID string     `json:"provider_user_id,omitempty"`
+	DisplayName    string     `json:"display_name"`
+	AccountLabel   string     `json:"account_label,omitempty"`
+	Username       string     `json:"username,omitempty"`
+	PhoneMasked    string     `json:"phone_masked,omitempty"`
+	Status         string     `json:"status"`
+	ErrorMessage   string     `json:"error_message,omitempty"`
+	OwnerUserID    uuid.UUID  `json:"owner_user_id"`
+	OwnerName      string     `json:"owner_name"`
+	OwnerEmail     string     `json:"owner_email"`
+	AccessCount    int        `json:"access_count"`
+	ConnectedAt    *time.Time `json:"connected_at,omitempty"`
+	LastSyncAt     *time.Time `json:"last_sync_at,omitempty"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+}
+
+type adminMessengerAccessUser struct {
+	ID         uuid.UUID `json:"id"`
+	FullName   string    `json:"full_name"`
+	Email      string    `json:"email"`
+	Role       string    `json:"role"`
+	GrantedAt  time.Time `json:"granted_at"`
+	GrantedBy  string    `json:"granted_by,omitempty"`
+	Department string    `json:"department,omitempty"`
+	Position   string    `json:"position,omitempty"`
 }
 
 type chatItem struct {
@@ -314,6 +360,163 @@ func (h *Handlers) telegramStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handlers) adminMessengerAccounts(w http.ResponseWriter, r *http.Request) {
+	provider := strings.TrimSpace(r.URL.Query().Get("provider"))
+	if provider != "" && provider != providerTelegram && provider != providerViber {
+		writeErr(w, http.StatusBadRequest, "bad_provider", "provider must be telegram or viber")
+		return
+	}
+
+	args := []any{}
+	where := ""
+	if provider != "" {
+		args = append(args, provider)
+		where = "WHERE ma.provider=$1"
+	}
+	rows, err := h.db.Query(r.Context(), `
+		SELECT ma.id, ma.provider, ma.provider_user_id, ma.display_name, ma.account_label,
+		       ma.username, ma.phone_masked, ma.status, COALESCE(ma.error_message, ''),
+		       ma.user_id, COALESCE(u.full_name, ''), u.email,
+		       COUNT(maa.user_id)::int AS access_count,
+		       ma.connected_at, ma.last_sync_at, ma.updated_at
+		FROM messenger_account ma
+		JOIN "user" u ON u.id=ma.user_id
+		LEFT JOIN messenger_account_access maa ON maa.account_id=ma.id
+		`+where+`
+		GROUP BY ma.id, u.full_name, u.email
+		ORDER BY ma.provider, ma.updated_at DESC
+	`, args...)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "messenger_accounts_failed", err.Error())
+		return
+	}
+	defer rows.Close()
+
+	items := []adminMessengerAccount{}
+	for rows.Next() {
+		var item adminMessengerAccount
+		if err := rows.Scan(
+			&item.ID, &item.Provider, &item.ProviderUserID, &item.DisplayName, &item.AccountLabel,
+			&item.Username, &item.PhoneMasked, &item.Status, &item.ErrorMessage,
+			&item.OwnerUserID, &item.OwnerName, &item.OwnerEmail, &item.AccessCount,
+			&item.ConnectedAt, &item.LastSyncAt, &item.UpdatedAt,
+		); err != nil {
+			writeErr(w, http.StatusInternalServerError, "messenger_accounts_failed", err.Error())
+			return
+		}
+		items = append(items, item)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (h *Handlers) adminMessengerAccountAccess(w http.ResponseWriter, r *http.Request) {
+	accountID, err := uuid.Parse(chi.URLParam(r, "accountID"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_account_id", "invalid account id")
+		return
+	}
+	items, err := h.listMessengerAccountAccess(r.Context(), accountID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "messenger_access_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (h *Handlers) adminGrantMessengerAccountAccess(w http.ResponseWriter, r *http.Request) {
+	subj := auth.MustSubject(r.Context())
+	accountID, err := uuid.Parse(chi.URLParam(r, "accountID"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_account_id", "invalid account id")
+		return
+	}
+	var in struct {
+		UserID string `json:"user_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	userID, err := uuid.Parse(strings.TrimSpace(in.UserID))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_user_id", "invalid user id")
+		return
+	}
+	if _, err := h.db.Exec(r.Context(), `
+		INSERT INTO messenger_account_access (account_id, user_id, role, granted_by)
+		VALUES ($1, $2, 'member', $3)
+		ON CONFLICT (account_id, user_id)
+		DO UPDATE SET role=CASE WHEN messenger_account_access.role='owner' THEN 'owner' ELSE 'member' END,
+		              granted_by=EXCLUDED.granted_by
+	`, accountID, userID, subj.UserID); err != nil {
+		writeErr(w, http.StatusInternalServerError, "messenger_access_grant_failed", err.Error())
+		return
+	}
+	items, err := h.listMessengerAccountAccess(r.Context(), accountID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "messenger_access_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (h *Handlers) adminRevokeMessengerAccountAccess(w http.ResponseWriter, r *http.Request) {
+	accountID, err := uuid.Parse(chi.URLParam(r, "accountID"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_account_id", "invalid account id")
+		return
+	}
+	userID, err := uuid.Parse(chi.URLParam(r, "userID"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_user_id", "invalid user id")
+		return
+	}
+	if _, err := h.db.Exec(r.Context(), `
+		DELETE FROM messenger_account_access
+		WHERE account_id=$1 AND user_id=$2 AND role <> 'owner'
+	`, accountID, userID); err != nil {
+		writeErr(w, http.StatusInternalServerError, "messenger_access_revoke_failed", err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handlers) listMessengerAccountAccess(ctx context.Context, accountID uuid.UUID) ([]adminMessengerAccessUser, error) {
+	rows, err := h.db.Query(ctx, `
+		SELECT u.id, u.full_name, u.email, maa.role, maa.created_at,
+		       COALESCE(granter.full_name, ''), COALESCE(u.department, ''), COALESCE(u.position, '')
+		FROM messenger_account_access maa
+		JOIN "user" u ON u.id=maa.user_id
+		LEFT JOIN "user" granter ON granter.id=maa.granted_by
+		WHERE maa.account_id=$1
+		ORDER BY (maa.role='owner') DESC, u.full_name, u.email
+	`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := []adminMessengerAccessUser{}
+	for rows.Next() {
+		var item adminMessengerAccessUser
+		if err := rows.Scan(&item.ID, &item.FullName, &item.Email, &item.Role, &item.GrantedAt, &item.GrantedBy, &item.Department, &item.Position); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (h *Handlers) telegramAccounts(w http.ResponseWriter, r *http.Request) {
+	subj := auth.MustSubject(r.Context())
+	items, err := h.listMessengerAccounts(r.Context(), subj.UserID, providerTelegram)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "telegram_accounts_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, accountsResponse{Items: items})
+}
+
 func (h *Handlers) telegramQRStart(w http.ResponseWriter, r *http.Request) {
 	cfg, err := h.telegramConfig(r.Context())
 	if err != nil {
@@ -372,11 +575,20 @@ func (h *Handlers) telegramQRPoll(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) telegramDisconnect(w http.ResponseWriter, r *http.Request) {
 	subj := auth.MustSubject(r.Context())
-	_, err := h.db.Exec(r.Context(), `
+	account, err := h.loadTelegramAccount(r, subj.UserID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "telegram_disconnect_failed", err.Error())
+		return
+	}
+	if account == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	_, err = h.db.Exec(r.Context(), `
 		UPDATE messenger_account
 		SET status='revoked', error_message=NULL, updated_at=NOW()
-		WHERE user_id=$1 AND provider=$2
-	`, subj.UserID, providerTelegram)
+		WHERE id=$1 AND user_id=$2 AND provider=$3
+	`, account.ID, subj.UserID, providerTelegram)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "telegram_disconnect_failed", err.Error())
 		return
@@ -396,8 +608,12 @@ func (h *Handlers) viberStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var out viberSessionStatus
+	accountID := subj.UserID.String()
+	if account != nil {
+		accountID = account.ID.String()
+	}
 	err = h.workerJSONAt(r.Context(), h.cfg.ViberWorkerURL, http.MethodPost, "/viber/session/status", map[string]any{
-		"account_id": subj.UserID.String(),
+		"account_id": accountID,
 	}, &out)
 	if err != nil {
 		writeJSON(w, http.StatusOK, viberStatusResponse{Configured: true, Connected: false, Mode: "worker", Account: account, Error: err.Error()})
@@ -412,22 +628,33 @@ func (h *Handlers) viberStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handlers) viberAccounts(w http.ResponseWriter, r *http.Request) {
+	subj := auth.MustSubject(r.Context())
+	items, err := h.listMessengerAccounts(r.Context(), subj.UserID, providerViber)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "viber_accounts_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, accountsResponse{Items: items})
+}
+
 func (h *Handlers) viberLoginStart(w http.ResponseWriter, r *http.Request) {
 	subj := auth.MustSubject(r.Context())
 	if h.cfg.ViberWorkerURL == "" {
 		writeErr(w, http.StatusServiceUnavailable, "viber_not_configured", "Viber worker не настроен")
 		return
 	}
-	if _, err := h.upsertViberAccount(r.Context(), subj.UserID, "connecting", ""); err != nil {
+	account, err := h.createViberAccount(r.Context(), subj.UserID)
+	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "viber_account_save_failed", err.Error())
 		return
 	}
 	var out viberLogin
 	if err := h.workerJSONAt(r.Context(), h.cfg.ViberWorkerURL, http.MethodPost, "/viber/login/start", map[string]any{
-		"account_id":  subj.UserID.String(),
-		"profile_key": subj.UserID.String(),
+		"account_id":  account.ID.String(),
+		"profile_key": account.ID.String(),
 	}, &out); err != nil {
-		_, _ = h.upsertViberAccount(r.Context(), subj.UserID, "error", err.Error())
+		_ = h.updateMessengerAccountStatus(r.Context(), account.ID, "error", err.Error())
 		writeErr(w, http.StatusBadGateway, "viber_worker_failed", err.Error())
 		return
 	}
@@ -435,7 +662,7 @@ func (h *Handlers) viberLoginStart(w http.ResponseWriter, r *http.Request) {
 	if out.Status == "confirmed" {
 		nextStatus = "connected"
 	}
-	_, _ = h.upsertViberAccount(r.Context(), subj.UserID, nextStatus, "")
+	_ = h.updateMessengerAccountStatus(r.Context(), account.ID, nextStatus, "")
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -459,13 +686,22 @@ func (h *Handlers) viberLoginPoll(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) viberDisconnect(w http.ResponseWriter, r *http.Request) {
 	subj := auth.MustSubject(r.Context())
+	account, err := h.loadMessengerAccount(r, subj.UserID, providerViber)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "viber_disconnect_failed", err.Error())
+		return
+	}
 	if h.cfg.ViberWorkerURL == "" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if account == nil {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	var out map[string]any
 	if err := h.workerJSONAt(r.Context(), h.cfg.ViberWorkerURL, http.MethodPost, "/viber/session/stop", map[string]any{
-		"account_id": subj.UserID.String(),
+		"account_id": account.ID.String(),
 	}, &out); err != nil {
 		writeErr(w, http.StatusBadGateway, "viber_worker_failed", err.Error())
 		return
@@ -473,8 +709,8 @@ func (h *Handlers) viberDisconnect(w http.ResponseWriter, r *http.Request) {
 	_, _ = h.db.Exec(r.Context(), `
 		UPDATE messenger_account
 		SET status='revoked', error_message=NULL, updated_at=NOW()
-		WHERE user_id=$1 AND provider=$2
-	`, subj.UserID, providerViber)
+		WHERE id=$1 AND user_id=$2 AND provider=$3
+	`, account.ID, subj.UserID, providerViber)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -491,7 +727,7 @@ func (h *Handlers) viberSync(w http.ResponseWriter, r *http.Request) {
 	}
 	var out telegramSyncResponse
 	if err := h.workerJSONAt(r.Context(), h.cfg.ViberWorkerURL, http.MethodPost, "/viber/chats/sync", map[string]any{
-		"account_id": subj.UserID.String(),
+		"account_id": account.ID.String(),
 	}, &out); err != nil {
 		writeErr(w, http.StatusNotImplemented, "viber_desktop_gate_required", err.Error())
 		return
@@ -506,8 +742,8 @@ func (h *Handlers) viberSync(w http.ResponseWriter, r *http.Request) {
 	_, _ = h.db.Exec(r.Context(), `
 		UPDATE messenger_account
 		SET status='connected', error_message=NULL, last_sync_at=$3, updated_at=NOW()
-		WHERE user_id=$1 AND provider=$2
-	`, subj.UserID, providerViber, out.SyncedAt)
+		WHERE id=$1 AND user_id=$2 AND provider=$4
+	`, account.ID, subj.UserID, out.SyncedAt, providerViber)
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -1074,14 +1310,53 @@ func (h *Handlers) loadTelegramAccount(r *http.Request, userID uuid.UUID) (*tele
 }
 
 func (h *Handlers) loadMessengerAccount(r *http.Request, userID uuid.UUID, provider string) (*telegramAccount, error) {
+	if accountIDRaw := strings.TrimSpace(r.URL.Query().Get("account_id")); accountIDRaw != "" {
+		accountID, err := uuid.Parse(accountIDRaw)
+		if err != nil {
+			return nil, fmt.Errorf("bad account_id")
+		}
+		var account telegramAccount
+		err = h.db.QueryRow(r.Context(), `
+			SELECT id, provider_user_id, display_name, account_label, username, phone_masked, status, COALESCE(error_message, ''), connected_at, last_sync_at
+			FROM messenger_account
+			WHERE id=$1
+			  AND provider=$3
+			  AND (
+			      user_id=$2 OR EXISTS (
+			          SELECT 1 FROM messenger_account_access maa
+			          WHERE maa.account_id=messenger_account.id AND maa.user_id=$2
+			      )
+			  )
+		`, accountID, userID, provider).Scan(
+			&account.ID, &account.ProviderUserID, &account.DisplayName, &account.AccountLabel,
+			&account.Username, &account.PhoneMasked, &account.Status, &account.ErrorMessage, &account.ConnectedAt, &account.LastSyncAt,
+		)
+		if err != nil {
+			if err == pgx.ErrNoRows {
+				return nil, nil
+			}
+			return nil, err
+		}
+		return &account, nil
+	}
+
 	var account telegramAccount
 	err := h.db.QueryRow(r.Context(), `
-		SELECT id, display_name, username, phone_masked, status, COALESCE(error_message, ''), connected_at, last_sync_at
+		SELECT id, provider_user_id, display_name, account_label, username, phone_masked, status, COALESCE(error_message, ''), connected_at, last_sync_at
 		FROM messenger_account
-		WHERE user_id=$1 AND provider=$2
+		WHERE provider=$2
+		  AND status <> 'revoked'
+		  AND (
+		      user_id=$1 OR EXISTS (
+		          SELECT 1 FROM messenger_account_access maa
+		          WHERE maa.account_id=messenger_account.id AND maa.user_id=$1
+		      )
+		  )
+		ORDER BY connected_at DESC NULLS LAST, updated_at DESC
+		LIMIT 1
 	`, userID, provider).Scan(
-		&account.ID, &account.DisplayName, &account.Username, &account.PhoneMasked,
-		&account.Status, &account.ErrorMessage, &account.ConnectedAt, &account.LastSyncAt,
+		&account.ID, &account.ProviderUserID, &account.DisplayName, &account.AccountLabel,
+		&account.Username, &account.PhoneMasked, &account.Status, &account.ErrorMessage, &account.ConnectedAt, &account.LastSyncAt,
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -1090,6 +1365,38 @@ func (h *Handlers) loadMessengerAccount(r *http.Request, userID uuid.UUID, provi
 		return nil, err
 	}
 	return &account, nil
+}
+
+func (h *Handlers) listMessengerAccounts(ctx context.Context, userID uuid.UUID, provider string) ([]telegramAccount, error) {
+	rows, err := h.db.Query(ctx, `
+		SELECT id, provider_user_id, display_name, account_label, username, phone_masked, status, COALESCE(error_message, ''), connected_at, last_sync_at
+		FROM messenger_account
+		WHERE provider=$2 AND status <> 'revoked'
+		  AND (
+		      user_id=$1 OR EXISTS (
+		          SELECT 1 FROM messenger_account_access maa
+		          WHERE maa.account_id=messenger_account.id AND maa.user_id=$1
+		      )
+		  )
+		ORDER BY connected_at DESC NULLS LAST, updated_at DESC
+	`, userID, provider)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := []telegramAccount{}
+	for rows.Next() {
+		var account telegramAccount
+		if err := rows.Scan(
+			&account.ID, &account.ProviderUserID, &account.DisplayName, &account.AccountLabel,
+			&account.Username, &account.PhoneMasked, &account.Status, &account.ErrorMessage, &account.ConnectedAt, &account.LastSyncAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, account)
+	}
+	return items, rows.Err()
 }
 
 func (h *Handlers) listChats(ctx context.Context, accountID uuid.UUID) ([]chatItem, error) {
@@ -1511,23 +1818,30 @@ func (h *Handlers) saveConfirmedTelegramSession(ctx context.Context, cfg sysset.
 
 	var accountID uuid.UUID
 	err = h.db.QueryRow(ctx, `
-		INSERT INTO messenger_account
-			(user_id, provider, provider_user_id, display_name, username, phone_masked, status, error_message, connected_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, 'connected', NULL, NOW(), NOW())
-		ON CONFLICT (user_id, provider)
-		DO UPDATE SET
-			provider_user_id=EXCLUDED.provider_user_id,
-			display_name=EXCLUDED.display_name,
-			username=EXCLUDED.username,
-			phone_masked=EXCLUDED.phone_masked,
+		UPDATE messenger_account
+		SET display_name=$4,
+			username=$5,
+			phone_masked=$6,
 			status='connected',
 			error_message=NULL,
-			connected_at=COALESCE(messenger_account.connected_at, NOW()),
+			connected_at=COALESCE(connected_at, NOW()),
 			updated_at=NOW()
+		WHERE user_id=$1 AND provider=$2 AND provider_user_id=$3 AND status <> 'revoked'
 		RETURNING id
 	`, userID, providerTelegram, acc.ProviderUserID, acc.DisplayName, acc.Username, acc.PhoneMasked).Scan(&accountID)
-	if err != nil {
+	if err != nil && err != pgx.ErrNoRows {
 		return nil, err
+	}
+	if err == pgx.ErrNoRows {
+		err = h.db.QueryRow(ctx, `
+		INSERT INTO messenger_account
+			(user_id, provider, provider_user_id, display_name, account_label, username, phone_masked, status, error_message, connected_at, updated_at)
+		VALUES ($1, $2, $3, $4, $4, $5, $6, 'connected', NULL, NOW(), NOW())
+		RETURNING id
+		`, userID, providerTelegram, acc.ProviderUserID, acc.DisplayName, acc.Username, acc.PhoneMasked).Scan(&accountID)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	_, err = h.db.Exec(ctx, `
@@ -1543,44 +1857,63 @@ func (h *Handlers) saveConfirmedTelegramSession(ctx context.Context, cfg sysset.
 	if err != nil {
 		return nil, err
 	}
+	if err := h.ensureAccountOwnerAccess(ctx, accountID, userID); err != nil {
+		return nil, err
+	}
 
 	acc.ID = accountID
+	acc.AccountLabel = acc.DisplayName
 	acc.Status = "connected"
 	now := time.Now()
 	acc.ConnectedAt = &now
 	return acc, nil
 }
 
-func (h *Handlers) upsertViberAccount(ctx context.Context, userID uuid.UUID, status string, errorMessage string) (*telegramAccount, error) {
-	if status == "" {
-		status = "connected"
-	}
+func (h *Handlers) createViberAccount(ctx context.Context, userID uuid.UUID) (*telegramAccount, error) {
 	var accountID uuid.UUID
 	err := h.db.QueryRow(ctx, `
 		INSERT INTO messenger_account
-			(user_id, provider, provider_user_id, display_name, username, phone_masked, status, error_message, connected_at, updated_at)
-		VALUES ($1, $2, $3, 'Viber', '', '', $4, NULLIF($5, ''), CASE WHEN $4='connected' THEN NOW() ELSE NULL END, NOW())
-		ON CONFLICT (user_id, provider)
-		DO UPDATE SET
-			status=EXCLUDED.status,
-			error_message=EXCLUDED.error_message,
-			connected_at=CASE
-				WHEN EXCLUDED.status='connected' THEN COALESCE(messenger_account.connected_at, NOW())
-				ELSE messenger_account.connected_at
-			END,
-			updated_at=NOW()
+			(user_id, provider, provider_user_id, display_name, account_label, username, phone_masked, status, error_message, updated_at)
+		VALUES ($1, $2, '', 'Viber', 'Viber', '', '', 'connecting', NULL, NOW())
 		RETURNING id
-	`, userID, providerViber, userID.String(), status, errorMessage).Scan(&accountID)
+	`, userID, providerViber).Scan(&accountID)
 	if err != nil {
 		return nil, err
 	}
+	if err := h.ensureAccountOwnerAccess(ctx, accountID, userID); err != nil {
+		return nil, err
+	}
 	return &telegramAccount{
-		ID:             accountID,
-		ProviderUserID: userID.String(),
-		DisplayName:    "Viber",
-		Status:         status,
-		ErrorMessage:   errorMessage,
+		ID:           accountID,
+		DisplayName:  "Viber",
+		AccountLabel: "Viber",
+		Status:       "connecting",
 	}, nil
+}
+
+func (h *Handlers) ensureAccountOwnerAccess(ctx context.Context, accountID, userID uuid.UUID) error {
+	_, err := h.db.Exec(ctx, `
+		INSERT INTO messenger_account_access (account_id, user_id, role, granted_by)
+		VALUES ($1, $2, 'owner', $2)
+		ON CONFLICT (account_id, user_id)
+		DO UPDATE SET role='owner'
+	`, accountID, userID)
+	return err
+}
+
+func (h *Handlers) updateMessengerAccountStatus(ctx context.Context, accountID uuid.UUID, status string, errorMessage string) error {
+	if status == "" {
+		status = "connected"
+	}
+	_, err := h.db.Exec(ctx, `
+		UPDATE messenger_account
+		SET status=$2,
+			error_message=NULLIF($3, ''),
+			connected_at=CASE WHEN $2='connected' THEN COALESCE(connected_at, NOW()) ELSE connected_at END,
+			updated_at=NOW()
+		WHERE id=$1
+	`, accountID, status, errorMessage)
+	return err
 }
 
 func toWorkerChats(items []chatItem) []workerSyncChat {

@@ -223,6 +223,7 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 				r.Mount("/admin/users", adminUsers.Routes())
 				r.Mount("/admin/system-settings", sysHandlers.WriteRoutes())
 				r.Mount("/admin/phone/extension-requests", phoneReqHandlers.AdminRoutes())
+				r.Mount("/admin/messenger", messengerHandlers.AdminRoutes())
 			})
 		})
 	})
@@ -241,6 +242,7 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 			ClientSecret: cfg.BitrixClientSecret,
 		})
 		r.Mount("/users", legacyAdminUsers.Routes())
+		r.Mount("/messenger", messengerHandlers.AdminRoutes())
 	})
 
 	srv := &http.Server{

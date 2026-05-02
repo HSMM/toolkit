@@ -65,3 +65,82 @@ export function useSyncBitrixUsers() {
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ["admin-users"] }); },
   });
 }
+
+export type MessengerProvider = "telegram" | "viber";
+
+export type AdminMessengerAccount = {
+  id: string;
+  provider: MessengerProvider;
+  provider_user_id?: string;
+  display_name: string;
+  account_label?: string;
+  username?: string;
+  phone_masked?: string;
+  status: "connecting" | "connected" | "error" | "revoked";
+  error_message?: string;
+  owner_user_id: string;
+  owner_name: string;
+  owner_email: string;
+  access_count: number;
+  connected_at?: string;
+  last_sync_at?: string;
+  updated_at: string;
+};
+
+export type AdminMessengerAccessUser = {
+  id: string;
+  full_name: string;
+  email: string;
+  role: "owner" | "member";
+  granted_at: string;
+  granted_by?: string;
+  department?: string;
+  position?: string;
+};
+
+export function useAdminMessengerAccounts(provider?: MessengerProvider) {
+  return useQuery({
+    queryKey: ["admin-messenger-accounts", provider ?? "all"],
+    queryFn: ({ signal }) =>
+      api<{ items: AdminMessengerAccount[] }>(`/api/v1/admin/messenger/accounts${provider ? `?provider=${provider}` : ""}`, { signal }).then((r) => r.items),
+    staleTime: 20_000,
+  });
+}
+
+export function useAdminMessengerAccess(accountId?: string) {
+  return useQuery({
+    queryKey: ["admin-messenger-access", accountId],
+    queryFn: ({ signal }) =>
+      api<{ items: AdminMessengerAccessUser[] }>(`/api/v1/admin/messenger/accounts/${accountId}/access`, { signal }).then((r) => r.items),
+    enabled: Boolean(accountId),
+    staleTime: 10_000,
+    placeholderData: [],
+  });
+}
+
+export function useGrantMessengerAccess() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { accountId: string; userId: string }) =>
+      api<{ items: AdminMessengerAccessUser[] }>(`/api/v1/admin/messenger/accounts/${args.accountId}/access`, {
+        method: "POST",
+        body: { user_id: args.userId },
+      }),
+    onSuccess: (_data, args) => {
+      void qc.invalidateQueries({ queryKey: ["admin-messenger-access", args.accountId] });
+      void qc.invalidateQueries({ queryKey: ["admin-messenger-accounts"] });
+    },
+  });
+}
+
+export function useRevokeMessengerAccess() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { accountId: string; userId: string }) =>
+      api<void>(`/api/v1/admin/messenger/accounts/${args.accountId}/access/${args.userId}`, { method: "DELETE" }),
+    onSuccess: (_data, args) => {
+      void qc.invalidateQueries({ queryKey: ["admin-messenger-access", args.accountId] });
+      void qc.invalidateQueries({ queryKey: ["admin-messenger-accounts"] });
+    },
+  });
+}

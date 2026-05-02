@@ -11,6 +11,7 @@
 - API работает только через `/api/v1/messenger/viber/*`; браузер не обращается к worker напрямую.
 - Provider `viber` разрешён в `messenger_account`.
 - Состояние подключения хранится в `messenger_account`.
+- Доступ пользователей к аккаунту хранится в `messenger_account_access`; владелец аккаунта получает роль `owner`, администратор может выдавать и отзывать роль `member` в `Настройки системы -> Мессенджеры -> Аккаунты и доступ`.
 - Чаты и сообщения Viber используют общие таблицы `messenger_chat`, `messenger_message`, `messenger_attachment`.
 - Если worker недоступен или Desktop target ещё не готов, Telegram и остальной Toolkit продолжают работать.
 

@@ -39,7 +39,15 @@ import {
   type Meeting as ApiMeeting, type RecordingFile,
 } from "@/api/meetings";
 import { MeetingRoom } from "@/MeetingRoom";
-import { useAdminUsers } from "@/api/admin";
+import {
+  useAdminUsers,
+  useAdminMessengerAccounts,
+  useAdminMessengerAccess,
+  useGrantMessengerAccess,
+  useRevokeMessengerAccess,
+  type AdminMessengerAccount,
+  type MessengerProvider,
+} from "@/api/admin";
 import { useColleagues, type Colleague } from "@/api/colleagues";
 import {
   useModuleAccess, useUpdateModuleAccess,
@@ -3411,6 +3419,8 @@ function MessengerSettingsPage({ hideHeader }: { hideHeader?: boolean } = {}) {
           </div>
         </SettingsSection>
 
+        <MessengerAccountAccessSettings />
+
         <SettingsSection title="Viber user-client" sub="Изолированный worker, отдельно от Telegram">
           <div style={{ marginBottom: 14, padding: "10px 12px", background: C.warnBg, border: `1px solid ${C.warnBrd}`, borderRadius: 8, color: C.warnTx, fontSize: 12, lineHeight: 1.5 }}>
             Toolkit API и БД готовы для provider Viber: состояние аккаунта, cache чатов и сообщений. Browser mode остаётся диагностическим; реальные чаты требуют production Desktop runtime.
@@ -3434,6 +3444,123 @@ function MessengerSettingsPage({ hideHeader }: { hideHeader?: boolean } = {}) {
       </div>
     </div>
   );
+}
+
+function MessengerAccountAccessSettings() {
+  const [provider, setProvider] = useState<MessengerProvider>("telegram");
+  const accounts = useAdminMessengerAccounts(provider);
+  const users = useAdminUsers();
+  const [selectedAccountId, setSelectedAccountId] = useState<string>("");
+  const access = useAdminMessengerAccess(selectedAccountId);
+  const grant = useGrantMessengerAccess();
+  const revoke = useRevokeMessengerAccess();
+  const [userId, setUserId] = useState("");
+
+  useEffect(() => {
+    const items = accounts.data ?? [];
+    if (!items.length) {
+      setSelectedAccountId("");
+      return;
+    }
+    if (!items.some((a) => a.id === selectedAccountId)) {
+      setSelectedAccountId(items[0]!.id);
+    }
+  }, [accounts.data, selectedAccountId]);
+
+  const selected = (accounts.data ?? []).find((a) => a.id === selectedAccountId);
+  const grantedIds = new Set((access.data ?? []).map((u) => u.id));
+  const availableUsers = (users.data ?? []).filter((u) => u.status === "active" && !grantedIds.has(u.id));
+
+  return (
+    <SettingsSection title="Аккаунты и доступ" sub="Администратор выдаёт пользователям доступ к Telegram/Viber аккаунтам">
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+        {(["telegram", "viber"] as MessengerProvider[]).map((p) => (
+          <button key={p} onClick={() => { setProvider(p); setSelectedAccountId(""); }}
+            style={{ padding: "7px 12px", borderRadius: 8, border: `1px solid ${provider === p ? C.acc : C.border}`, background: provider === p ? C.accBg : C.card, color: provider === p ? C.acc : C.text2, fontSize: 13, fontWeight: 650, cursor: "pointer", fontFamily: "inherit" }}>
+            {p === "telegram" ? "Telegram" : "Viber"}
+          </button>
+        ))}
+      </div>
+
+      {accounts.isLoading ? (
+        <div style={{ color: C.text3, fontSize: 13 }}>Загрузка аккаунтов…</div>
+      ) : accounts.isError ? (
+        <div style={{ color: C.err, fontSize: 13 }}>Не удалось загрузить аккаунты: {String(accounts.error)}</div>
+      ) : (accounts.data ?? []).length === 0 ? (
+        <div style={{ color: C.text2, fontSize: 13, lineHeight: 1.5 }}>
+          Аккаунтов {provider === "telegram" ? "Telegram" : "Viber"} пока нет. Сначала подключите аккаунт в разделе «Мессенджеры», затем здесь можно будет выдать доступ другим пользователям.
+        </div>
+      ) : (
+        <div style={{ display: "grid", gap: 14 }}>
+          <Field label="Аккаунт">
+            <select value={selectedAccountId} onChange={(e) => setSelectedAccountId(e.target.value)}
+              style={{ ...inp(), fontFamily: "inherit" }}>
+              {(accounts.data ?? []).map((account) => (
+                <option key={account.id} value={account.id}>
+                  {messengerAccountTitle(account)} · {account.status} · доступов: {account.access_count}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          {selected && (
+            <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, background: C.bg2, padding: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
+                <div>
+                  <div style={{ fontSize: 13.5, fontWeight: 700, color: C.text }}>{messengerAccountTitle(selected)}</div>
+                  <div style={{ fontSize: 12, color: C.text3, marginTop: 2 }}>
+                    Владелец: {selected.owner_name || selected.owner_email} · {selected.provider}
+                  </div>
+                </div>
+                <Bdg v={selected.status === "connected" ? "ok" : selected.status === "error" ? "err" : "def"}>{selected.status}</Bdg>
+              </div>
+
+              <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12 }}>
+                <select value={userId} onChange={(e) => setUserId(e.target.value)}
+                  style={{ ...inp(), flex: 1, fontFamily: "inherit" }}>
+                  <option value="">Выберите пользователя…</option>
+                  {availableUsers.map((u) => (
+                    <option key={u.id} value={u.id}>{u.full_name || u.email} · {u.email}</option>
+                  ))}
+                </select>
+                <button disabled={!userId || grant.isPending} onClick={() => {
+                  if (!selectedAccountId || !userId) return;
+                  grant.mutate({ accountId: selectedAccountId, userId }, { onSuccess: () => setUserId("") });
+                }} style={{ padding: "10px 13px", borderRadius: 8, border: "none", background: userId ? C.acc : C.bg3, color: userId ? "white" : C.text3, fontSize: 13, fontWeight: 650, cursor: userId ? "pointer" : "default", fontFamily: "inherit", whiteSpace: "nowrap" }}>
+                  Выдать доступ
+                </button>
+              </div>
+
+              <div style={{ borderTop: `1px solid ${C.border}` }}>
+                {(access.data ?? []).length === 0 ? (
+                  <div style={{ paddingTop: 12, color: C.text3, fontSize: 13 }}>Доступ пока никому не выдан.</div>
+                ) : (access.data ?? []).map((u) => (
+                  <div key={u.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
+                    <Av i={initialsOf(u.full_name || u.email)} sz={30} />
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontSize: 13, fontWeight: 650, color: C.text, overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>{u.full_name || u.email}</div>
+                      <div style={{ fontSize: 11.5, color: C.text3, marginTop: 2, overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>{u.email}{u.department ? ` · ${u.department}` : ""}</div>
+                    </div>
+                    <Bdg v={u.role === "owner" ? "adm" : "def"}>{u.role === "owner" ? "Владелец" : "Доступ"}</Bdg>
+                    <button disabled={u.role === "owner" || revoke.isPending} onClick={() => {
+                      if (!confirm(`Отозвать доступ у ${u.full_name || u.email}?`)) return;
+                      revoke.mutate({ accountId: selectedAccountId, userId: u.id });
+                    }} style={{ padding: "7px 10px", borderRadius: 7, border: `1px solid ${C.errBrd}`, background: C.card, color: u.role === "owner" ? C.text3 : C.err, fontSize: 12, fontWeight: 650, cursor: u.role === "owner" ? "default" : "pointer", fontFamily: "inherit" }}>
+                      Отозвать
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </SettingsSection>
+  );
+}
+
+function messengerAccountTitle(account: AdminMessengerAccount) {
+  return account.account_label || account.display_name || account.username || account.phone_masked || `${account.provider} ${account.id.slice(0, 8)}`;
 }
 
 // ──────────────────────────────────────────────────────────────────────────
