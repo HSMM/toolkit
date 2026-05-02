@@ -431,7 +431,11 @@ func (h *Handlers) viberLoginStart(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, "viber_worker_failed", err.Error())
 		return
 	}
-	_, _ = h.upsertViberAccount(r.Context(), subj.UserID, "connected", "")
+	nextStatus := "connecting"
+	if out.Status == "confirmed" {
+		nextStatus = "connected"
+	}
+	_, _ = h.upsertViberAccount(r.Context(), subj.UserID, nextStatus, "")
 	writeJSON(w, http.StatusOK, out)
 }
 
