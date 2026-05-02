@@ -95,7 +95,13 @@ func (h *Handlers) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID, email, err := h.upsertUser(r.Context(), bxUser)
+	departments, err := h.bitrix.ListDepartments(r.Context(), token.AccessToken)
+	if err != nil {
+		h.logger.Warn("bitrix departments load failed", "err", err)
+		departments = nil
+	}
+
+	userID, email, err := h.upsertUser(r.Context(), bxUser, departments)
 	if err != nil {
 		h.logger.Error("toolkit user upsert failed", "err", err, "bitrix_id", bxUser.ID)
 		writeJSONError(w, http.StatusInternalServerError, "user_upsert_failed", "Cannot create Toolkit user")
@@ -162,7 +168,7 @@ func (h *Handlers) Install(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-func (h *Handlers) upsertUser(ctx context.Context, u *bitrix.User) (uuid.UUID, string, error) {
+func (h *Handlers) upsertUser(ctx context.Context, u *bitrix.User, departments map[string]string) (uuid.UUID, string, error) {
 	email := strings.TrimSpace(strings.ToLower(u.Email))
 	if email == "" {
 		return uuid.Nil, "", fmt.Errorf("bitrix user %s has empty email", u.ID)
@@ -187,7 +193,7 @@ func (h *Handlers) upsertUser(ctx context.Context, u *bitrix.User) (uuid.UUID, s
 		RETURNING id, email
 	`
 	var id uuid.UUID
-	if err := h.pool.QueryRow(ctx, q, u.ID, email, fullName, u.Phone(), u.Department(), u.WorkPosition, u.PersonalPhoto).Scan(&id, &email); err != nil {
+	if err := h.pool.QueryRow(ctx, q, u.ID, email, fullName, u.Phone(), u.DepartmentName(departments), u.WorkPosition, u.PersonalPhoto).Scan(&id, &email); err != nil {
 		return uuid.Nil, "", err
 	}
 	return id, email, nil
