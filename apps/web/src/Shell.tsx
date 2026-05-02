@@ -3351,7 +3351,7 @@ function MessengerSettingsPage({ hideHeader }: { hideHeader?: boolean } = {}) {
   return (
     <div style={{ minHeight: "100%", background: C.bg2 }}>
       {!hideHeader && (
-        <PgHdr title="Настройки мессенджеров" sub="Telegram MTProto · Viber user-client PoC · cache retention" action={saveBtn} />
+        <PgHdr title="Настройки мессенджеров" sub="Telegram MTProto · Viber user-client · cache retention" action={saveBtn} />
       )}
       <div style={{ padding: 24, maxWidth: 720 }}>
         {hideHeader && <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 14 }}>{saveBtn}</div>}
@@ -3411,24 +3411,24 @@ function MessengerSettingsPage({ hideHeader }: { hideHeader?: boolean } = {}) {
           </div>
         </SettingsSection>
 
-        <SettingsSection title="Viber user-client PoC" sub="Экспериментальная неофициальная интеграция, отдельно от Telegram">
+        <SettingsSection title="Viber user-client" sub="Изолированный worker, отдельно от Telegram">
           <div style={{ marginBottom: 14, padding: "10px 12px", background: C.warnBg, border: `1px solid ${C.warnBrd}`, borderRadius: 8, color: C.warnTx, fontSize: 12, lineHeight: 1.5 }}>
-            Viber worker уже выделен в отдельный сервис. Browser PoC показал, что `account.viber.com` открывает Viber Out, поэтому для реальных чатов следующий шаг — Viber Desktop Linux/AppImage под Xvfb или Wine.
+            Toolkit API и БД готовы для provider Viber: состояние аккаунта, cache чатов и сообщений. Browser mode остаётся диагностическим; реальные чаты требуют production Desktop runtime.
           </div>
           <Field label="Worker URL">
             <input value="http://viber-worker:8091" readOnly style={{ ...inp(), fontFamily: "'DM Mono', monospace", background: C.bg3, color: C.text2 }} />
           </Field>
           <Field label="Compose profile">
-            <input value="viber-experimental" readOnly style={{ ...inp(), fontFamily: "'DM Mono', monospace", background: C.bg3, color: C.text2 }} />
+            <input value="viber-production" readOnly style={{ ...inp(), fontFamily: "'DM Mono', monospace", background: C.bg3, color: C.text2 }} />
           </Field>
           <Field label="Текущий entrypoint">
             <input value="https://account.viber.com/" readOnly style={{ ...inp(), fontFamily: "'DM Mono', monospace", background: C.bg3, color: C.text2 }} />
           </Field>
-          <Field label="Следующий режим">
+          <Field label="Production runtime">
             <input value="Viber Desktop Linux/AppImage + Xvfb/Wine automation" readOnly style={{ ...inp(), fontFamily: "'DM Mono', monospace", background: C.bg3, color: C.text2 }} />
           </Field>
           <div style={{ fontSize: 12, color: C.text3, lineHeight: 1.5 }}>
-            Документация: <span style={{ fontFamily: "'DM Mono', monospace" }}>docs/engineering/MESSENGER_VIBER_USER_CLIENT_TZ.md</span> и <span style={{ fontFamily: "'DM Mono', monospace" }}>docs/worklog/VIBER_USER_CLIENT_POC.md</span>.
+            Документация: <span style={{ fontFamily: "'DM Mono', monospace" }}>docs/engineering/MESSENGER_VIBER_PRODUCTION_RUNBOOK.md</span>.
           </div>
         </SettingsSection>
       </div>

@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, Download, FileText, FlaskConical, Image as ImageIcon, Loader2, MessageSquare, Monitor, Paperclip, RefreshCw, Search, Send, ShieldCheck, Smartphone, Trash2, Unplug, X } from "lucide-react";
+import { AlertTriangle, Check, Download, FileText, Image as ImageIcon, Loader2, MessageSquare, Monitor, Paperclip, RefreshCw, Search, Send, ShieldCheck, Smartphone, Trash2, Unplug, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import { ApiError, apiFetch } from "@/api/client";
@@ -107,11 +107,11 @@ export function MessengerPage() {
             <MessageSquare size={20} color="#229ed9" />
             <h1 style={{ margin: 0, fontSize: 20, fontWeight: 650, color: C.text }}>Мессенджеры</h1>
           </div>
-          <div style={{ fontSize: 13, color: C.text2 }}>Telegram MTProto и экспериментальный Viber user-client внутри Toolkit</div>
+          <div style={{ fontSize: 13, color: C.text2 }}>Telegram MTProto и Viber user-client внутри Toolkit</div>
         </div>
         <div style={{ display: "inline-flex", padding: 3, borderRadius: 9, background: "#edf3f7", border: "1px solid #dbe3ea" }}>
           <ProviderTab active={provider === "telegram"} onClick={() => setProvider("telegram")}>Telegram</ProviderTab>
-          <ProviderTab active={provider === "viber"} onClick={() => setProvider("viber")}>Viber PoC</ProviderTab>
+          <ProviderTab active={provider === "viber"} onClick={() => setProvider("viber")}>Viber</ProviderTab>
         </div>
       </div>
 
@@ -280,22 +280,22 @@ function ViberPocPanel() {
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
             <div>
               <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 5 }}>
-                <FlaskConical size={20} color={C.warn} />
-                <h2 style={{ margin: 0, fontSize: 18, color: C.text }}>Viber · Desktop PoC</h2>
+                <Smartphone size={20} color={C.acc} />
+                <h2 style={{ margin: 0, fontSize: 18, color: C.text }}>Viber</h2>
               </div>
               <div style={{ color: C.text2, fontSize: 13, lineHeight: 1.55 }}>
-                Пользовательский Viber-клиент запускается через отдельный worker. Telegram при этом не затрагивается.
+                Пользовательский Viber-клиент работает через отдельный worker. Telegram при этом не затрагивается.
               </div>
             </div>
-            <span style={{ padding: "6px 10px", borderRadius: 999, background: C.warnBg, border: `1px solid ${C.warnBrd}`, color: C.warnTx, fontSize: 12, fontWeight: 750 }}>
-              {status.data?.connected ? "сессия запущена" : "experimental"}
+            <span style={{ padding: "6px 10px", borderRadius: 999, background: status.data?.connected ? C.okBg : C.warnBg, border: `1px solid ${status.data?.connected ? C.ok : C.warnBrd}`, color: status.data?.connected ? C.ok : C.warnTx, fontSize: 12, fontWeight: 750 }}>
+              {status.data?.connected ? "сессия запущена" : "ожидает подключения"}
             </span>
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 12 }}>
             <ViberStatusCard icon={<Check size={18} />} title="Worker" text={status.isLoading ? "Проверяем доступность..." : status.data?.configured ? "Доступен через API Toolkit." : "Не настроен."} tone={status.data?.configured ? "ok" : "warn"} />
             <ViberStatusCard icon={<Monitor size={18} />} title="Режим" text={status.data?.session?.mode || status.data?.mode || "desktop/browser gate"} tone="info" />
-            <ViberStatusCard icon={<FlaskConical size={18} />} title="Чаты" text="Sync/send endpoints готовы, но чтение DOM ждёт стабильный Desktop target." tone="warn" />
+            <ViberStatusCard icon={<MessageSquare size={18} />} title="Чаты" text={status.data?.account?.status === "connected" ? "Кэш чатов хранится в Toolkit; чтение из Desktop-клиента выполняет worker." : "Подключите Viber, чтобы заполнить кэш чатов."} tone={status.data?.account?.status === "connected" ? "info" : "warn"} />
           </div>
 
           <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
@@ -335,8 +335,9 @@ function ViberPocPanel() {
             <ViberMilestone done label="Кнопка подключения" detail="Frontend вызывает /api/v1/messenger/viber/auth/start от имени текущего пользователя." />
             <ViberMilestone done label="Прокси через API" detail="Browser не ходит в worker напрямую; Toolkit API прокидывает account_id = user_id." />
             <ViberMilestone done={Boolean(status.data?.connected)} label="Сессия worker" detail={status.data?.session?.title || status.data?.session?.url || "После подключения здесь появится статус runtime."} />
-            <ViberMilestone label="Список чатов" detail="Endpoint уже есть; фактическое наполнение зависит от Desktop selectors/noVNC bridge." />
-            <ViberMilestone label="Сообщения и отправка" detail="Контракты готовы, реализация включается после чтения списка чатов." />
+            <ViberMilestone done={Boolean(status.data?.account)} label="Учётная запись" detail={status.data?.account?.status ? `Статус в Toolkit: ${status.data.account.status}` : "После подключения состояние сохраняется в messenger_account."} />
+            <ViberMilestone label="Список чатов" detail="Toolkit API и БД готовы; фактическое наполнение зависит от production Desktop-адаптера worker." />
+            <ViberMilestone label="Сообщения и отправка" detail="Сообщения сохраняются в общий messenger cache после ответа Viber worker." />
           </div>
         </section>
 

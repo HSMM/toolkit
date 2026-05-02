@@ -13,4 +13,4 @@ rsync -az --delete \
   --exclude data \
   "$ROOT_DIR/" "$REMOTE:$REMOTE_DIR/"
 
-ssh "$REMOTE" "cd '$REMOTE_DIR' && docker compose --env-file .env --profile viber-experimental -f docker-compose.yml -f docker-compose.prod.yml up -d --build --force-recreate --no-deps web-build api worker viber-worker && docker compose --env-file .env --profile viber-experimental -f docker-compose.yml -f docker-compose.prod.yml up -d --no-deps web"
+ssh "$REMOTE" "cd '$REMOTE_DIR' && docker compose --env-file .env --profile viber-production -f docker-compose.yml -f docker-compose.prod.yml run --rm migrate && docker compose --env-file .env --profile viber-production -f docker-compose.yml -f docker-compose.prod.yml up -d --build --force-recreate --no-deps web-build api worker viber-worker && docker compose --env-file .env --profile viber-production -f docker-compose.yml -f docker-compose.prod.yml up -d --no-deps web"

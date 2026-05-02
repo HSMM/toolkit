@@ -79,6 +79,7 @@ export type ViberStatus = {
   connected: boolean;
   mode: string;
   error?: string;
+  account?: TelegramStatus["account"];
   session?: {
     connected: boolean;
     status: string;

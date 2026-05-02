@@ -2,7 +2,7 @@
 
 **Единый портал коммуникаций для сотрудников.**
 
-Софтфон, видеоконференции, Telegram-мессенджер, экспериментальный Viber user-client PoC и автоматическая транскрибация — в одной вкладке браузера, под одним логином корпоративного Bitrix24, с историей и поиском по всему, что произошло.
+Софтфон, видеоконференции, Telegram-мессенджер, Viber user-client runtime и автоматическая транскрибация — в одной вкладке браузера, под одним логином корпоративного Bitrix24, с историей и поиском по всему, что произошло.
 
 ---
 
@@ -16,7 +16,7 @@ Toolkit собирает это в один портал так, чтобы:
 - **Звонить и принимать звонки** прямо из браузера, без установки SIP-клиентов и без привязки к рабочему месту.
 - **Подключаться к видеовстречам в один клик** — гостю достаточно ссылки и PIN из письма, ничего ставить не нужно.
 - **Писать в Telegram из Toolkit** — пользовательский MTProto-клиент в браузере, без Bot API, с личными чатами и группами.
-- **Проверять Viber user-client** — отдельный experimental worker для R&D-сценария, где нужен обычный Viber-клиент, а не Bot/Business API.
+- **Подключать Viber user-client** — отдельный изолированный worker для сценария, где нужен обычный Viber-клиент, а не Bot/Business API.
 - **Не записывать вручную** что говорилось: запись и расшифровка происходят автоматически, по политике, согласованной со службой безопасности.
 - **Найти за секунды** любую беседу — по дате, контрагенту, теме разговора (полнотекстовый поиск по транскриптам).
 
@@ -32,7 +32,7 @@ Toolkit собирает это в один портал так, чтобы:
 |---|---|
 | **Софтфон** | Браузерный WebRTC-клиент к корпоративной АТС на отдельной странице `https://toolkit.softservice.by/softphone`: исходящие, приём входящих с карточкой контакта, журнал звонков по связке user + extension, переводы, сопровождение, объединение в конференцию, статусы присутствия. На главной странице `https://toolkit.softservice.by` отображается только неоновая иконка телефона: зелёная, если пользователь онлайн в телефонии, красная, если софтфон выключен или не зарегистрирован |
 | **Видеоконференции** | Разовые и запланированные встречи, гостевой доступ по ссылке с lobby (host подтверждает вход), запись композитная (видео MP4 + отдельная аудио-дорожка OGG) с управлением start/stop из комнаты, автоматическая транскрибация аудио-дорожки и скачивание готовых записей |
-| **Мессенджеры** | Telegram как пользовательский MTProto-клиент внутри Toolkit: QR-подключение аккаунта, личные чаты и группы, поиск по списку чатов, чтение и отправка сообщений, просмотр и отправка фото/видео/аудио/файлов, realtime-обновления через worker + WebSocket, локальный cache с retention 180 дней. Viber показан как experimental user-client PoC: отдельный worker поднят, browser entrypoint проверен, следующий gate — Viber Desktop Linux/AppImage под Xvfb/Wine |
+| **Мессенджеры** | Telegram как пользовательский MTProto-клиент внутри Toolkit: QR-подключение аккаунта, личные чаты и группы, поиск по списку чатов, чтение и отправка сообщений, просмотр и отправка фото/видео/аудио/файлов, realtime-обновления через worker + WebSocket, локальный cache с retention 180 дней. Viber вынесен в отдельный user-client worker: Toolkit сохраняет состояние аккаунта, общий cache чатов/сообщений и production API-контур; фактическое чтение Viber Desktop зависит от worker-адаптера |
 | **Транскрибация** | Расшифровка звонков и встреч (русский язык), разделение по говорящим, синхронизация с записью, ручная правка с историей версий |
 | **Поиск** | Полнотекстовый поиск по всем доступным транскриптам с фильтрами по дате, участникам, типу события |
 
@@ -40,7 +40,7 @@ Toolkit собирает это в один портал так, чтобы:
 
 - Управление пользователями, ролями и внутренними номерами (синхронизация с Bitrix24).
 - Настройки Telegram MTProto: API ID/API Hash, ключ шифрования сессий, URL worker, включение синхронизации и retention.
-- Статус Viber user-client PoC: worker URL, compose profile, проверенный browser entrypoint и следующий Desktop-gate.
+- Статус Viber user-client: worker URL, режим runtime, health/readiness, состояние аккаунта и Desktop gate.
 - Политики записи и хранения: глобально, по отделу, по типу вызова — с подтверждением требований 152-ФЗ.
 - Запросы субъектов ПДн на удаление — с поиском связанных данных и автоматическим отчётом.
 - Audit-log всех чувствительных действий с обоснованием доступа.
@@ -139,7 +139,7 @@ https://toolkit.softservice.by/softphone
 | **coturn** | `coturn/coturn:latest` | STUN/TURN для прохождения NAT в WebRTC |
 | **Nginx 1.27** | `nginx:1.27-alpine` | Внутренний reverse-proxy: SPA-статика + `/api`, `/oauth`, `/rtc` |
 | **Telegram Worker** | `apps/telegram-worker` (Node.js 20 + GramJS) | Постоянная MTProto-сессия, QR-login, синхронизация личных чатов и групп, отправка сообщений, push новых сообщений в API |
-| **Viber Worker PoC** | `apps/viber-worker` (Node.js + Playwright) | Изолированный experimental worker для проверки user-client подхода; текущий browser target открывает Viber Out, не полноценный messenger |
+| **Viber Worker** | `apps/viber-worker` (Node.js + Playwright / Desktop runtime hook) | Изолированный worker для Viber user-client. API/DB-контур production-ready; browser target остаётся диагностическим, реальные чаты требуют Desktop runtime/adapter |
 
 ### Мониторинг
 
@@ -165,7 +165,7 @@ https://toolkit.softservice.by/softphone
 | **Bitrix24** | OAuth 2.0 + REST API (локальное приложение, скопы `user`, `department`, `crm`) | Авторизация, профили, резолв номеров |
 | **FreePBX** | WSS (сигнализация) + SRTP (медиа) + REST (CDR/recordings) | WebRTC-клиент, импорт записей и истории |
 | **Telegram** | MTProto через GramJS user-client | QR-подключение аккаунта, личные чаты и группы, cache сообщений, realtime updates; не используется Bot API |
-| **Viber** | Experimental user-client PoC | Неофициальный R&D-адаптер. Browser PoC поднят отдельно от Telegram; для реальных чатов нужен следующий PoC через Viber Desktop Linux/AppImage под Xvfb/Wine |
+| **Viber** | User-client runtime | Неофициальный изолированный адаптер. Toolkit хранит аккаунт и cache в общих messenger-таблицах; browser mode используется для диагностики, production-чаты требуют Desktop runtime |
 | **GigaAM ASR** | REST polling (`POST /stt/transcribe` → `GET /stt/result/{task_id}`) | Транскрибация записей звонков и встреч (русский) |
 | **SMTP** | STARTTLS | Уведомления, приглашения, алерты |
 
@@ -300,7 +300,7 @@ firewall после DNAT.
 | **E6** Софтфон | Браузерный JsSIP-клиент к FreePBX (WSS) на отдельном маршруте `/softphone`: input/output, mute/hold/dial, transfer, attended transfer, join, журнал звонков. Креды подтягиваются с бэкенда (`/system-settings/phone/me`) — extension, привязанный админом к user'у. На главной странице `toolkit.softservice.by` отображается только неоновая статус-иконка телефона: зелёная online, красная выключен/не зарегистрирован | Готово (требуется боевое тестирование с реальным extension) |
 | **E7** Транскрибация | GigaAM ASR через polling, viewer с диалогом по каналам, аналитика, экспорт TXT, ручная загрузка файлов | Готово |
 | **E8** Админ | Разделы «Настройки системы»: Пользователи (роли/блокировка/Bitrix-синк), Доступ к модулям, Телефония (WebRTC + AMI), SMTP, Мессенджеры. SMTP-сендер реально отправляет email-приглашения. Политики записи и GDPR-запросы | Частично (settings + sync + email-pipeline + messenger settings — да; политики/GDPR/audit-log UI — запланированы) |
-| **E9** Мессенджеры | Telegram user-client: GramJS worker, QR-login, хранение зашифрованной MTProto-сессии, sync личных чатов и групп, cache 500 сообщений на чат с retention 180 дней, отправка текста и вложений, просмотр/скачивание фото/видео/аудио/документов, WebSocket realtime, Telegram-like UI и поиск по чатам | Готово для MVP |
+| **E9** Мессенджеры | Telegram user-client: GramJS worker, QR-login, хранение зашифрованной MTProto-сессии, sync личных чатов и групп, cache 500 сообщений на чат с retention 180 дней, отправка текста и вложений, просмотр/скачивание фото/видео/аудио/документов, WebSocket realtime, Telegram-like UI и поиск по чатам. Viber: отдельный worker, provider `viber` в БД, account/status/cache API, Desktop runtime gate | Telegram готово для MVP; Viber production-контур готов, Desktop-adapter в работе |
 
 ## Лицензия
 

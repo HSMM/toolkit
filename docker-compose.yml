@@ -237,13 +237,14 @@ services:
       VIBER_QR_SELECTOR: ${VIBER_QR_SELECTOR:-}
       VIBER_HEADLESS: ${VIBER_HEADLESS:-true}
       VIBER_LOGIN_TTL_MS: ${VIBER_LOGIN_TTL_MS:-300000}
+      VIBER_STAGE: ${VIBER_STAGE:-production}
       NODE_ENV: production
     volumes:
       - viber_profiles:/data/profiles
     depends_on:
       migrate:
         condition: service_completed_successfully
-    profiles: ["viber-experimental"]
+    profiles: ["viber-production", "viber-experimental"]
     networks: [internal]
     restart: unless-stopped
 

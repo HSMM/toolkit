@@ -13,6 +13,8 @@ const qrSelector = process.env.VIBER_QR_SELECTOR || "";
 const headless = String(process.env.VIBER_HEADLESS || "true") !== "false";
 const clientMode = process.env.VIBER_CLIENT_MODE || "browser";
 const desktopCommand = process.env.VIBER_DESKTOP_COMMAND || "";
+const stage = process.env.VIBER_STAGE || "production";
+const startedAt = new Date();
 const app = express();
 
 app.use(express.json({ limit: "2mb" }));
@@ -23,16 +25,28 @@ const sessions = new Map();
 app.get("/healthz", (_req, res) => {
   res.json({
     status: "ok",
-    experimental: true,
+    stage,
     mode: clientMode,
     entry_url: entryUrl,
     desktop_configured: Boolean(desktopCommand),
     active_logins: logins.size,
     active_sessions: sessions.size,
+    uptime_seconds: Math.floor((Date.now() - startedAt.getTime()) / 1000),
+  });
+});
+
+app.get("/readyz", (_req, res) => {
+  const desktopReady = clientMode !== "desktop" || Boolean(desktopCommand);
+  res.status(desktopReady ? 200 : 503).json({
+    status: desktopReady ? "ready" : "not_ready",
+    stage,
+    mode: clientMode,
+    desktop_configured: Boolean(desktopCommand),
   });
 });
 
 app.post("/viber/login/start", async (req, res) => {
+  cleanupExpiredLogins();
   const accountId = cleanID(req.body?.account_id) || crypto.randomUUID();
   const profileKey = cleanID(req.body?.profile_key) || accountId;
   const loginId = crypto.randomUUID();
@@ -70,6 +84,7 @@ app.post("/viber/login/start", async (req, res) => {
 });
 
 app.get("/viber/login/:id", async (req, res) => {
+  cleanupExpiredLogins();
   const login = logins.get(req.params.id);
   if (!login) {
     res.status(404).json({ error: { code: "viber_login_not_found", message: "Login not found" } });
@@ -206,8 +221,19 @@ function publicLogin(login) {
 
 function notImplemented(code, message) {
   return (_req, res) => {
-    res.status(501).json({ error: { code, message } });
+    res.status(501).json({ error: { code, message, stage, mode: clientMode } });
   };
+}
+
+function cleanupExpiredLogins() {
+  const now = Date.now();
+  for (const [id, login] of logins.entries()) {
+    if (now > login.expiresAt.getTime() + 60_000) {
+      logins.delete(id);
+    } else if (now > login.expiresAt.getTime() && login.status === "pending") {
+      login.status = "expired";
+    }
+  }
 }
 
 function cleanID(value) {
@@ -228,5 +254,5 @@ process.on("SIGTERM", async () => {
 });
 
 app.listen(port, "0.0.0.0", () => {
-  console.log(JSON.stringify({ level: "info", msg: "viber-worker listening", port, entry_url: entryUrl, headless, mode: clientMode }));
+  console.log(JSON.stringify({ level: "info", msg: "viber-worker listening", port, entry_url: entryUrl, headless, mode: clientMode, stage }));
 });

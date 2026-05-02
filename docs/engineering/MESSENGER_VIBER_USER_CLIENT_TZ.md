@@ -625,24 +625,30 @@ MVP считается готовым, если на тестовом Viber acco
 
 ## 21. Рекомендация
 
-Делать только через PoC-флаг:
+Viber user-client держать только в изолированном worker. API, БД и UI могут быть production-ready, но фактическое чтение/отправка Viber-сообщений считается production messaging только после успешного Desktop gate:
 
-```text
-VIBER_USER_CLIENT_EXPERIMENTAL=true
-```
+- стабильный login;
+- стабильный `provider_chat_id`;
+- sync сообщений;
+- отправка текста;
+- восстановление session после restart;
+- отсутствие влияния на Telegram и основной API.
 
-До успешного PoC не смешивать Viber worker с основным production path. Если нужна стабильная коммерческая интеграция, официальный Viber Bot/Business API остаётся предпочтительным вариантом.
+Если Desktop gate не проходит, стабильная коммерческая интеграция должна идти через официальный Viber Bot/Business API.
 
-## 22. Текущий PoC В Toolkit
+## 22. Текущий Production-Контур В Toolkit
 
-Добавлен первый изолированный PoC worker:
+Добавлен изолированный Viber worker и production API-контур:
 
 - `apps/viber-worker`;
-- Docker Compose profile: `viber-experimental`;
+- Docker Compose profiles: `viber-production`, `viber-experimental`;
 - Node.js 20 + Playwright persistent context;
 - profile volume: `viber_profiles`;
+- provider `viber` в `messenger_account`;
+- состояние аккаунта, cache чатов и сообщений в общей messenger-схеме;
 - базовые endpoints:
   - `GET /healthz`;
+  - `GET /readyz`;
   - `POST /viber/login/start`;
   - `GET /viber/login/{login_id}`;
   - `POST /viber/session/status`;
@@ -651,7 +657,7 @@ VIBER_USER_CLIENT_EXPERIMENTAL=true
 Запуск:
 
 ```bash
-docker compose --profile viber-experimental up --build viber-worker
+docker compose --profile viber-production up --build viber-worker
 ```
 
-Подробный worklog: `docs/worklog/VIBER_USER_CLIENT_POC.md`.
+Подробный runbook: `docs/engineering/MESSENGER_VIBER_PRODUCTION_RUNBOOK.md`.
