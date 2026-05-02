@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/HSMM/toolkit/internal/auth"
 	"github.com/HSMM/toolkit/internal/bitrix"
@@ -67,6 +68,83 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, authURL, http.StatusFound)
+}
+
+func (h *Handlers) PasswordLogin(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Login    string `json:"login"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	login := strings.TrimSpace(strings.ToLower(in.Login))
+	if login == "" || in.Password == "" {
+		writeJSONError(w, http.StatusBadRequest, "credentials_required", "Login and password are required")
+		return
+	}
+
+	var (
+		userID       uuid.UUID
+		email        string
+		status       string
+		deletedInBx  bool
+		passwordHash string
+	)
+	const q = `
+		SELECT id, email, status, deleted_in_bx24, COALESCE(password_hash, '')
+		FROM "user"
+		WHERE LOWER(email)=LOWER($1)
+	`
+	err := h.pool.QueryRow(r.Context(), q, login).Scan(&userID, &email, &status, &deletedInBx, &passwordHash)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			writeJSONError(w, http.StatusUnauthorized, "bad_credentials", "Invalid login or password")
+			return
+		}
+		h.logger.Error("password login user lookup failed", "err", err, "login", login)
+		writeJSONError(w, http.StatusInternalServerError, "login_failed", "Cannot log in")
+		return
+	}
+	if status == "blocked" {
+		writeJSONError(w, http.StatusForbidden, "user_blocked", "User is blocked")
+		return
+	}
+	if status == "deactivated_in_bitrix" || deletedInBx {
+		writeJSONError(w, http.StatusForbidden, "user_deactivated", "User is deactivated")
+		return
+	}
+	if passwordHash == "" || bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(in.Password)) != nil {
+		writeJSONError(w, http.StatusUnauthorized, "bad_credentials", "Invalid login or password")
+		return
+	}
+
+	refreshToken, sessionID, err := h.sessions.Create(r.Context(), userID, clientIP(r), r.UserAgent(), "")
+	if err != nil {
+		h.logger.Error("password session create failed", "err", err, "user_id", userID)
+		writeJSONError(w, http.StatusInternalServerError, "session_create_failed", "Cannot create session")
+		return
+	}
+	if _, err := h.pool.Exec(r.Context(), `UPDATE "user" SET last_login_at=NOW() WHERE id=$1`, userID); err != nil {
+		h.logger.Warn("password login last_login update failed", "err", err, "user_id", userID)
+	}
+
+	claims := &auth.AccessClaims{UserID: userID, SessionID: sessionID, Email: email}
+	subj, err := auth.NewSubjectLoader(h.pool).LoadFromClaims(r.Context(), claims)
+	if err != nil {
+		_ = h.sessions.Revoke(r.Context(), sessionID)
+		writeJSONError(w, http.StatusUnauthorized, "subject_load_failed", "Cannot log in")
+		return
+	}
+	access, err := h.jwt.Issue(subj.UserID, subj.SessionID, subj.Email, subj.Role)
+	if err != nil {
+		_ = h.sessions.Revoke(r.Context(), sessionID)
+		writeJSONError(w, http.StatusInternalServerError, "jwt_issue_failed", "Cannot issue access token")
+		return
+	}
+	http.SetCookie(w, h.refreshCookie(refreshToken, int(auth.RefreshTokenInactivityTTL.Seconds())))
+	writeJSON(w, http.StatusOK, map[string]string{"access_token": access})
 }
 
 func (h *Handlers) Callback(w http.ResponseWriter, r *http.Request) {

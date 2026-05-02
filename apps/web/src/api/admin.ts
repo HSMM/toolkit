@@ -14,6 +14,7 @@ export type AdminUser = {
   extension?: string;
   status: "active" | "blocked";
   is_admin: boolean;
+  has_password: boolean;
   last_login_at?: string;
   created_at: string;
 };
@@ -41,6 +42,15 @@ export function useSetUserStatus() {
   return useMutation({
     mutationFn: (args: { id: string; status: "active" | "blocked" }) =>
       api<void>(`/api/v1/admin/users/${args.id}/status`, { method: "PUT", body: { status: args.status } }),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ["admin-users"] }); },
+  });
+}
+
+export function useSetUserPassword() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { id: string; password: string }) =>
+      api<void>(`/api/v1/admin/users/${args.id}/password`, { method: "PUT", body: { password: args.password } }),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ["admin-users"] }); },
   });
 }

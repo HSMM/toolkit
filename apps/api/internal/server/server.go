@@ -156,6 +156,7 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 
 	r.Route("/oauth", func(r chi.Router) {
 		r.Get("/login", oauthHandlers.Login)
+		r.Post("/password/login", oauthHandlers.PasswordLogin)
 		r.Get("/callback", oauthHandlers.Callback)
 		r.Post("/refresh", oauthHandlers.Refresh)
 		r.Post("/install", oauthHandlers.Install)

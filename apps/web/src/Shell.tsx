@@ -58,7 +58,7 @@ import {
   useTelegramConfig, useUpdateTelegramConfig,
 } from "@/api/system-settings";
 import { useSoftphone, loadSoftphoneConfig, saveSoftphoneConfig } from "@/softphone/useSoftphone";
-import { useSetUserRole, useSetUserStatus, useSyncBitrixUsers } from "@/api/admin";
+import { useSetUserRole, useSetUserStatus, useSetUserPassword, useSyncBitrixUsers } from "@/api/admin";
 import {
   useMyExtensionRequest, useCreateExtensionRequest, useCancelMyExtensionRequest,
   useAdminExtensionRequests, useApproveExtensionRequest, useRejectExtensionRequest,
@@ -2401,6 +2401,7 @@ function UsersPage({ hideHeader }: { hideHeader?: boolean }) {
   const list = useAdminUsers();
   const setRole = useSetUserRole();
   const setStatus = useSetUserStatus();
+  const setPassword = useSetUserPassword();
   const sync = useSyncBitrixUsers();
   const [q, setQ] = useState("");
   const all = list.data ?? [];
@@ -2468,7 +2469,7 @@ function UsersPage({ hideHeader }: { hideHeader?: boolean }) {
               <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 720 }}>
                 <thead>
                   <tr style={{ background: C.bg2 }}>
-                    {["Сотрудник", "Email", "Отдел", "Должность", "Номер", "Роль", "Статус", "Последний вход"].map((h) => (
+                    {["Сотрудник", "Email", "Отдел", "Должность", "Номер", "Роль", "Статус", "Пароль", "Последний вход"].map((h) => (
                       <th key={h} style={{ padding: "9px 16px", textAlign: "left", fontSize: 11, fontWeight: 600, color: C.text2, textTransform: "uppercase", letterSpacing: "0.06em", whiteSpace: "nowrap" }}>{h}</th>
                     ))}
                   </tr>
@@ -2512,6 +2513,17 @@ function UsersPage({ hideHeader }: { hideHeader?: boolean }) {
                             setStatus.mutate({ id: u.id, status: next });
                           }} style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }} title="Сменить статус">
                             <Bdg v={u.status === "active" ? "ok" : "err"}>{u.status === "active" ? "Активен" : "Заблокирован"}</Bdg>
+                          </button>
+                        </td>
+                        <td style={{ padding: "11px 16px" }}>
+                          <button onClick={() => {
+                            const password = prompt(`Новый пароль для ${u.full_name || u.email}. Минимум 8 символов.`);
+                            if (password == null) return;
+                            setPassword.mutate({ id: u.id, password }, {
+                              onError: (e) => alert("Не удалось сохранить пароль: " + (e instanceof Error ? e.message : String(e))),
+                            });
+                          }} style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }} title="Задать пароль для входа">
+                            <Bdg v={u.has_password ? "ok" : "def"}>{u.has_password ? "Задан" : "Задать"}</Bdg>
                           </button>
                         </td>
                         <td style={{ padding: "11px 16px", fontSize: 12, color: C.text3 }}>{fmtLogin(u.last_login_at)}</td>

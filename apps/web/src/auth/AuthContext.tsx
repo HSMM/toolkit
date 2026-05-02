@@ -18,6 +18,8 @@ type AuthCtx = {
   state: AuthState;
   /** Запускает OAuth-flow: window.location → /oauth/login. */
   login: (returnTo?: string) => void;
+  /** Локальный вход по email + паролю. Bitrix24 OAuth остаётся доступным отдельно. */
+  loginPassword: (login: string, password: string) => Promise<void>;
   /** Удаляет сессию на сервере и сбрасывает состояние. */
   logout: () => Promise<void>;
 };
@@ -70,6 +72,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     window.location.assign(url);
   }, []);
 
+  const loginPassword = useCallback(async (loginValue: string, password: string) => {
+    const res = await fetch("/oauth/password/login", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ login: loginValue, password }),
+    });
+    if (!res.ok) {
+      let message = "Не удалось войти";
+      try {
+        const payload = await res.json() as { error?: { message?: string } };
+        message = payload.error?.message || message;
+      } catch { /* noop */ }
+      throw new Error(message);
+    }
+    const { access_token } = (await res.json()) as { access_token: string };
+    setAuth(access_token);
+  }, [setAuth]);
+
   const logout = useCallback(async () => {
     try {
       await fetch("/oauth/logout", { method: "POST", credentials: "include" });
@@ -78,7 +99,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [setAnon]);
 
-  const value = useMemo<AuthCtx>(() => ({ state, login, logout }), [state, login, logout]);
+  const value = useMemo<AuthCtx>(() => ({ state, login, loginPassword, logout }), [state, login, loginPassword, logout]);
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 

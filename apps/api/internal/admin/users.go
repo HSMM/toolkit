@@ -4,13 +4,16 @@ package admin
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/HSMM/toolkit/internal/auth"
 	"github.com/HSMM/toolkit/internal/bitrix"
 	"github.com/HSMM/toolkit/internal/usersync"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/crypto/bcrypt"
 )
 
 type UsersHandlers struct {
@@ -32,6 +35,7 @@ func (h *UsersHandlers) Routes() http.Handler {
 	r.Get("/", h.list)
 	r.Put("/{id}/role", h.setRole)         // body: {"role":"admin"|"user"}
 	r.Put("/{id}/status", h.setStatus)     // body: {"status":"active"|"blocked"}
+	r.Put("/{id}/password", h.setPassword) // body: {"password":"..."}
 	r.Post("/sync/bitrix", h.syncBitrix)   // body: {} → {fetched, added, updated, ...}
 	return r
 }
@@ -55,6 +59,9 @@ type roleReq struct {
 }
 type statusReq struct {
 	Status string `json:"status"`
+}
+type passwordReq struct {
+	Password string `json:"password"`
 }
 
 func (h *UsersHandlers) setRole(w http.ResponseWriter, r *http.Request) {
@@ -121,6 +128,43 @@ func (h *UsersHandlers) setStatus(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (h *UsersHandlers) setPassword(w http.ResponseWriter, r *http.Request) {
+	subj := auth.MustSubject(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_id", "invalid user id")
+		return
+	}
+	var req passwordReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	password := strings.TrimSpace(req.Password)
+	if len(password) < 8 {
+		writeErr(w, http.StatusBadRequest, "weak_password", "password must be at least 8 characters")
+		return
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "hash_failed", err.Error())
+		return
+	}
+	if _, err := h.db.Exec(r.Context(), `
+		UPDATE "user"
+		SET password_hash=$2, password_changed_at=NOW()
+		WHERE id=$1
+	`, id, string(hash)); err != nil {
+		writeErr(w, http.StatusInternalServerError, "save_failed", err.Error())
+		return
+	}
+	_, _ = h.db.Exec(r.Context(), `
+		INSERT INTO audit_log (actor_id, action, target_kind, target_id, details)
+		VALUES ($1, 'user.password.set', 'user', $2, '{}'::jsonb)
+	`, subj.UserID, id.String())
+	w.WriteHeader(http.StatusNoContent)
+}
+
 type userRow struct {
 	ID          uuid.UUID  `json:"id"`
 	BitrixID    string     `json:"bitrix_id"`
@@ -131,8 +175,9 @@ type userRow struct {
 	Position    string     `json:"position,omitempty"`
 	AvatarURL   string     `json:"avatar_url,omitempty"`
 	Extension   string     `json:"extension,omitempty"`
-	Status      string     `json:"status"`        // active | blocked
-	IsAdmin     bool       `json:"is_admin"`      // есть запись в role_assignment
+	Status      string     `json:"status"`   // active | blocked
+	IsAdmin     bool       `json:"is_admin"` // есть запись в role_assignment
+	HasPassword bool       `json:"has_password"`
 	LastLoginAt *time.Time `json:"last_login_at,omitempty"`
 	CreatedAt   time.Time  `json:"created_at"`
 }
@@ -144,6 +189,7 @@ func (h *UsersHandlers) list(w http.ResponseWriter, r *http.Request) {
 		       COALESCE(u.position, ''), COALESCE(u.avatar_url, ''),
 		       COALESCE(u.extension, ''), u.status,
 		       EXISTS (SELECT 1 FROM role_assignment ra WHERE ra.user_id = u.id AND ra.role = 'admin') AS is_admin,
+		       COALESCE(u.password_hash, '') <> '' AS has_password,
 		       u.last_login_at, u.created_at
 		FROM "user" u
 		ORDER BY (u.status = 'active') DESC, u.full_name
@@ -159,7 +205,7 @@ func (h *UsersHandlers) list(w http.ResponseWriter, r *http.Request) {
 		var u userRow
 		if err := rows.Scan(&u.ID, &u.BitrixID, &u.Email, &u.FullName,
 			&u.Phone, &u.Department, &u.Position, &u.AvatarURL,
-			&u.Extension, &u.Status, &u.IsAdmin, &u.LastLoginAt, &u.CreatedAt,
+			&u.Extension, &u.Status, &u.IsAdmin, &u.HasPassword, &u.LastLoginAt, &u.CreatedAt,
 		); err != nil {
 			writeErr(w, http.StatusInternalServerError, "scan_failed", err.Error())
 			return
