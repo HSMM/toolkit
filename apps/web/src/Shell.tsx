@@ -26,6 +26,7 @@ import {
   Copy, Upload, FileAudio, Trash2, Send, ChevronRight, Inbox,
   Bell, Activity, BarChart3, Headphones, ArrowRightLeft, Minus,
   Sparkles, MessageCircle, Smile, Frown, Meh, AlertTriangle, AlertCircle,
+  Building2,
   type LucideIcon,
 } from "lucide-react";
 
@@ -1480,7 +1481,7 @@ function InviteParticipantsField({
 // TRANSCRIPTION — viewer с плеером, диалог-бабблами, аналитикой и AI
 // ──────────────────────────────────────────────────────────────────────────
 
-const ALLOWED_AUDIO = [".wav", ".ogg", ".mp3", ".m4a", ".mp4", ".wma", ".flac", ".aac"];
+const ALLOWED_AUDIO = [".wav", ".ogg", ".mp3", ".m4a", ".mp4", ".webm", ".wma", ".flac", ".aac"];
 const MAX_UPLOAD_MB = 500;
 
 // Палитра для каналов / спикеров (8 цветов, повтор по hash).
@@ -1589,9 +1590,9 @@ function TranscriptionPage({ meetingFilter }: { meetingFilter?: string } = {}) {
               <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 3 }}>
                 {upload.isPending ? "Загружаем…" : drag ? "Отпустите файл" : "Загрузить аудио"}
               </div>
-              <div style={{ fontSize: 10.5, color: C.text3, lineHeight: 1.55 }}>WAV, OGG, MP3, M4A, MP4, WMA, FLAC, AAC<br />до {MAX_UPLOAD_MB} МБ · моно / стерео</div>
+              <div style={{ fontSize: 10.5, color: C.text3, lineHeight: 1.55 }}>WAV, OGG, MP3, M4A, MP4, WEBM, WMA, FLAC, AAC<br />до {MAX_UPLOAD_MB} МБ · моно / стерео</div>
             </div>
-            <input ref={fileRef} type="file" accept={ALLOWED_AUDIO.join(",") + ",audio/*,video/mp4"} style={{ display: "none" }}
+            <input ref={fileRef} type="file" accept={ALLOWED_AUDIO.join(",") + ",audio/*,video/mp4,video/webm"} style={{ display: "none" }}
               onChange={(e) => { handleFile(e.target.files?.[0]); e.target.value = ""; }} />
           </div>
           {list.isLoading ? (
@@ -2196,7 +2197,7 @@ function AnalyticsPage() {
   return (
     <div style={{ minHeight: "100%", background: C.bg2 }}>
       <style>{`@keyframes anPulse{0%,100%{box-shadow:0 0 0 0 rgba(245,158,11,.45)}70%{box-shadow:0 0 0 7px rgba(245,158,11,0)}}`}</style>
-      <PgHdr title="Мониторинг АТС" sub="FreePBX через AMI · оперативные метрики, регистрации, активные каналы" />
+      <PgHdr title="Мониторинг АТС" />
 
       <div style={{ padding: "0 24px", background: C.card, borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 4 }}>
         {([{ id: "monitoring" as const, label: "Мониторинг", Icon: Activity },
@@ -3192,7 +3193,7 @@ function SystemSettingsPage(_: { users?: MockUser[] }) {
 
   return (
     <div style={{ minHeight: "100%", background: C.bg2, display: "flex", flexDirection: "column" }}>
-      <PgHdr title="Настройки системы" sub="Пользователи · Доступ к модулям · Телефония · Мессенджеры · SMTP · AI" />
+      <PgHdr title="Настройки системы" />
       <div style={{ padding: "0 24px", background: C.card, borderBottom: `1px solid ${C.border}`, display: "flex", gap: 4, flexShrink: 0 }}>
         {tabs.map((x) => (
           <button key={x.id} onClick={() => setTab(x.id)}
@@ -3236,6 +3237,7 @@ function ModuleAccessPage() {
     { key: "vcs",           label: "Видеоконференции", desc: "Создание и проведение встреч (LiveKit)", Icon: Video },
     { key: "transcription", label: "Транскрибация",    desc: "Расшифровка звонков и встреч (GigaAM)",  Icon: FileText },
     { key: "messengers",    label: "Мессенджеры",      desc: "WhatsApp / Telegram / внутренний чат",   Icon: MessageSquare },
+    { key: "crm",           label: "CRM",              desc: "Компании и контакты, дальше лиды и сделки", Icon: Building2 },
     { key: "contacts",      label: "Коллеги",          desc: "Пользователи, которые входили в Toolkit", Icon: Users },
     { key: "helpdesk",      label: "Хелпдэск",         desc: "Тикеты для ИТ / АХО / HR",               Icon: HelpCircle },
   ];
@@ -3359,7 +3361,7 @@ function MessengerSettingsPage({ hideHeader }: { hideHeader?: boolean } = {}) {
   return (
     <div style={{ minHeight: "100%", background: C.bg2 }}>
       {!hideHeader && (
-        <PgHdr title="Настройки мессенджеров" sub="Telegram MTProto · Viber user-client · cache retention" action={saveBtn} />
+        <PgHdr title="Настройки мессенджеров" action={saveBtn} />
       )}
       <div style={{ padding: 24, maxWidth: 720 }}>
         {hideHeader && <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 14 }}>{saveBtn}</div>}
@@ -3421,7 +3423,7 @@ function MessengerSettingsPage({ hideHeader }: { hideHeader?: boolean } = {}) {
 
         <MessengerAccountAccessSettings />
 
-        <SettingsSection title="Viber user-client" sub="Изолированный worker, отдельно от Telegram">
+        <SettingsSection title="Viber" sub="Изолированный worker, отдельно от Telegram">
           <div style={{ marginBottom: 14, padding: "10px 12px", background: C.warnBg, border: `1px solid ${C.warnBrd}`, borderRadius: 8, color: C.warnTx, fontSize: 12, lineHeight: 1.5 }}>
             Toolkit API и БД готовы для provider Viber: состояние аккаунта, cache чатов и сообщений. Browser mode остаётся диагностическим; реальные чаты требуют production Desktop runtime.
           </div>
@@ -4102,6 +4104,60 @@ function fmtIsoRel(iso?: string) {
   return date.toLocaleDateString("ru-RU");
 }
 
+function CrmPage() {
+  const [tab, setTab] = useState<"companies" | "contacts">("companies");
+  const tabs = [
+    { id: "companies" as const, label: "Компании", Icon: Building2 },
+    { id: "contacts" as const, label: "Контакты", Icon: Users },
+  ];
+  return (
+    <div style={{ minHeight: "100%", background: C.bg2, display: "flex", flexDirection: "column" }}>
+      <PgHdr title="CRM" action={
+        <button style={{ height: 36, padding: "0 13px", borderRadius: 8, background: C.acc, color: "white", fontSize: 13, fontWeight: 650, display: "inline-flex", alignItems: "center", gap: 7 }}>
+          <Plus size={15} /> {tab === "companies" ? "Создать компанию" : "Создать контакт"}
+        </button>
+      } />
+      <div style={{ padding: 24, maxWidth: 980, width: "100%" }}>
+        <div style={{ display: "inline-flex", padding: 3, border: `1px solid ${C.border}`, borderRadius: 10, background: C.card, marginBottom: 18 }}>
+          {tabs.map(({ id, label, Icon }) => (
+            <button key={id} onClick={() => setTab(id)}
+              style={{ height: 34, padding: "0 13px", borderRadius: 8, background: tab === id ? C.accBg : "transparent", color: tab === id ? C.acc : C.text2, fontSize: 13, fontWeight: 650, display: "inline-flex", alignItems: "center", gap: 7 }}>
+              <Icon size={15} /> {label}
+            </button>
+          ))}
+        </div>
+
+        <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, background: C.card, overflow: "hidden" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr 1fr 130px", gap: 12, padding: "11px 14px", background: C.bg2, borderBottom: `1px solid ${C.border}`, color: C.text3, fontSize: 11.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+            {tab === "companies" ? (
+              <>
+                <div>Компания</div><div>Телефон</div><div>Email</div><div>Статус</div>
+              </>
+            ) : (
+              <>
+                <div>Контакт</div><div>Компания</div><div>Телефон</div><div>Статус</div>
+              </>
+            )}
+          </div>
+          <div style={{ minHeight: 280, display: "flex", alignItems: "center", justifyContent: "center", padding: 28, textAlign: "center" }}>
+            <div>
+              <div style={{ width: 58, height: 58, borderRadius: 16, background: C.accBg, color: C.acc, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 14px" }}>
+                {tab === "companies" ? <Building2 size={26} /> : <Users size={26} />}
+              </div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 5 }}>
+                {tab === "companies" ? "Компаний пока нет" : "Контактов пока нет"}
+              </div>
+              <div style={{ fontSize: 13, color: C.text2, lineHeight: 1.55, maxWidth: 420 }}>
+                Сначала в CRM появятся компании и контакты. Лиды и сделки добавим следующим этапом, когда зафиксируем поля и связи.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function StubPage({ page }: { page: "messengers" | "contacts" | "helpdesk" }) {
   const M = {
     messengers: { Icon: MessageSquare, col: C.ok,   bg: C.okBg,   title: "Мессенджеры", desc: "Омниканальный inbox: WhatsApp, Telegram и другие каналы. Также внутренний чат сотрудников.", stage: "В разработке" },
@@ -4131,12 +4187,11 @@ const NAV: NavItemDef[] = [
   { id: "vcs",           label: "Конференции",   Icon: Video },
   { id: "transcription", label: "Транскрибация", Icon: FileText },
   { id: "messengers",    label: "Мессенджеры",   Icon: MessageSquare },
+  { id: "crm",           label: "CRM",           Icon: Building2 },
   { id: "contacts",      label: "Коллеги",       Icon: Users },
   { id: "helpdesk",      label: "Хелпдэск",      Icon: HelpCircle,    stub: true },
 ];
-// Админ-меню: только пользователям с role=admin. Мониторинг АТС переехал
-// сюда из основного меню — он показывает оперативные метрики FreePBX и
-// нужен только дежурному админу.
+// Админ-меню: только пользователям с role=admin.
 const ADM: NavItemDef[] = [
   { id: "monitoring", label: "Мониторинг АТС",    Icon: BarChart3 },
   { id: "settings",   label: "Настройки системы", Icon: Settings },
@@ -4249,6 +4304,7 @@ function ShellInner({ me }: { me: Me }) {
         {allowedPage === "vcs"             && <VcsPage me={me} />}
         {allowedPage === "transcription"   && <TranscriptionPage meetingFilter={transcriptMeetingFilter} />}
         {allowedPage === "messengers"      && <MessengerPage />}
+        {allowedPage === "crm"             && <CrmPage />}
         {allowedPage === "contacts"        && <ColleaguesPage />}
         {isAdmin && allowedPage === "monitoring" && <AnalyticsPage />}
         {isAdmin && allowedPage === "settings"   && <SystemSettingsPage />}

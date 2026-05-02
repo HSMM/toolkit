@@ -107,7 +107,6 @@ export function MessengerPage() {
             <MessageSquare size={20} color="#229ed9" />
             <h1 style={{ margin: 0, fontSize: 20, fontWeight: 650, color: C.text }}>Мессенджеры</h1>
           </div>
-          <div style={{ fontSize: 13, color: C.text2 }}>Telegram MTProto и Viber user-client внутри Toolkit</div>
         </div>
         <div style={{ display: "inline-flex", padding: 3, borderRadius: 9, background: "#edf3f7", border: "1px solid #dbe3ea" }}>
           <ProviderTab active={provider === "telegram"} onClick={() => setProvider("telegram")}>Telegram</ProviderTab>
